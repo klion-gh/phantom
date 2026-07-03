@@ -1,0 +1,8 @@
+listen: ":8443"
+domain: "your-domain.example"
+acme_email: ""
+acme_cache_dir: "/var/lib/phantom/acme"
+private_key: "REPLACE_WITH_SERVER_PRIVATE_KEY_FROM_KEYGEN"
+psk: "REPLACE_WITH_PSK_FROM_KEYGEN"
+decoy_site_dir: ""
+log_level: "info"

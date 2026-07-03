@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="ic_launcher_background">#0A0A12</color>
+
+    <color name="bg_deep">#07070C</color>
+    <color name="bg_surface">#141225</color>
+    <color name="bg_surface_alt">#1C1934</color>
+
+    <color name="accent_lavender">#A78BFA</color>
+    <color name="accent_lavender_bright">#C9B8FF</color>
+    <color name="accent_purple_deep">#4A3B8C</color>
+
+    <color name="status_connected">#4ADE80</color>
+    <color name="status_error">#F87171</color>
+    <color name="text_primary">#F5F3FF</color>
+    <color name="text_secondary">#9C97B8</color>
+</resources>

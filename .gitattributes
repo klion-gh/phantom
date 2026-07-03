@@ -1,0 +1,9 @@
+# Shell scripts must keep LF endings - a CRLF in a POSIX sh script run via
+# `curl | sh` on Linux breaks it outright (stray \r inside commands/comments).
+*.sh text eol=lf
+
+# Keep everything else consistent too, regardless of the committer's OS.
+*.go  text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+*.md  text eol=lf

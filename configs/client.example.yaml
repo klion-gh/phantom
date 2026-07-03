@@ -1,0 +1,9 @@
+server: "your-domain.example:8443"
+domain: "your-domain.example"
+fingerprint: "chrome120"
+psk: "REPLACE_WITH_PSK_FROM_KEYGEN"
+server_public_key: "REPLACE_WITH_SERVER_PUBLIC_KEY_FROM_KEYGEN"
+listen: "127.0.0.1:1080"
+listen_http: "127.0.0.1:1081"
+pool_size: 4
+log_level: "info"

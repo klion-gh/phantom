@@ -1,0 +1,57 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        arch: [amd64, arm64]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26"
+
+      - name: Build phantom-server
+        env:
+          GOOS: linux
+          GOARCH: ${{ matrix.arch }}
+        run: go build -o "phantom-server-linux-${{ matrix.arch }}" ./cmd/server
+
+      - name: Build phantom-keygen
+        env:
+          GOOS: linux
+          GOARCH: ${{ matrix.arch }}
+        run: go build -o "phantom-keygen-linux-${{ matrix.arch }}" ./cmd/keygen
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: binaries-${{ matrix.arch }}
+          path: |
+            phantom-server-linux-${{ matrix.arch }}
+            phantom-keygen-linux-${{ matrix.arch }}
+          retention-days: 1
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          generate_release_notes: true

@@ -1,0 +1,27 @@
+# Real deployed secrets - never commit these. Use configs/*.example.yaml instead.
+configs/server.yaml
+configs/client.yaml
+
+# Build artifacts
+bin/
+*.apk
+*.aar
+*.jar
+
+# Go
+*.exe
+*.test
+
+# Android
+android/.gradle/
+android/app/build/
+android/build/
+android/local.properties
+android/app/libs/*.aar
+android/app/libs/*.jar
+*.iml
+.idea/
+
+# OS/editor cruft
+.DS_Store
+Thumbs.db
