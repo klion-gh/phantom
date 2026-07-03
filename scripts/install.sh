@@ -129,9 +129,14 @@ chmod 755 /tmp/phantom-keygen
 KEYGEN_OUT=$(/tmp/phantom-keygen)
 rm -f /tmp/phantom-keygen
 
-SERVER_PRIV=$(echo "$KEYGEN_OUT" | awk -F': ' '/^Server Private Key/ {print $2}')
-SERVER_PUB=$(echo "$KEYGEN_OUT" | awk -F': ' '/^Server Public Key/ {print $2}')
-PSK=$(echo "$KEYGEN_OUT" | awk -F': ' '/^PSK/ {print $2}')
+# The three key/PSK lines are printf-aligned with a variable run of spaces
+# after the colon (e.g. "Server Public Key:  <hex>" - two spaces - vs
+# "Server Private Key: <hex>" - one space), so splitting on ": " left a stray
+# leading space on the shorter labels' values. Extracting the hex run itself
+# instead of relying on a fixed separator sidesteps that entirely.
+SERVER_PRIV=$(echo "$KEYGEN_OUT" | grep '^Server Private Key:' | grep -oE '[0-9a-f]{64}')
+SERVER_PUB=$(echo "$KEYGEN_OUT" | grep '^Server Public Key:' | grep -oE '[0-9a-f]{64}')
+PSK=$(echo "$KEYGEN_OUT" | grep '^PSK:' | grep -oE '[0-9a-f]{64}')
 
 [ -n "$SERVER_PRIV" ] && [ -n "$SERVER_PUB" ] && [ -n "$PSK" ] || die "failed to parse keygen output"
 
