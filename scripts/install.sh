@@ -30,10 +30,15 @@ require_root() {
     [ "$(id -u)" = "0" ] || die "must be run as root (try: curl ... | sudo sh)"
 }
 
+# Sets the global ARCH var directly rather than echoing it back through a
+# `$(...)` command substitution - substitutions run in a subshell, so a
+# `die` (exit 1) on an unsupported architecture would only terminate that
+# subshell and silently leave ARCH empty instead of actually stopping the
+# script.
 detect_arch() {
     case "$(uname -m)" in
-        x86_64|amd64)  echo amd64 ;;
-        aarch64|arm64) echo arm64 ;;
+        x86_64|amd64)  ARCH=amd64 ;;
+        aarch64|arm64) ARCH=arm64 ;;
         *) die "unsupported architecture: $(uname -m)" ;;
     esac
 }
@@ -91,7 +96,7 @@ require_root
 command -v curl >/dev/null 2>&1 || die "curl is required"
 command -v systemctl >/dev/null 2>&1 || die "systemd is required (systemctl not found)"
 
-ARCH=$(detect_arch)
+detect_arch
 BASE_URL="https://github.com/$REPO/releases/latest/download"
 
 mkdir -p "$INSTALL_DIR" "$DATA_DIR"
