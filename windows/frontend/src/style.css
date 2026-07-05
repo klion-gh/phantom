@@ -1,0 +1,215 @@
+:root {
+    --bg-deep: #07070C;
+    --bg-surface: #141225;
+    --bg-surface-alt: #1C1934;
+    --accent-lavender: #A78BFA;
+    --accent-lavender-bright: #C9B8FF;
+    --accent-purple-deep: #4A3B8C;
+    --status-connected: #4ADE80;
+    --status-error: #F87171;
+    --text-primary: #F5F3FF;
+    --text-secondary: #9C97B8;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+    margin: 0;
+    height: 100%;
+    background: var(--bg-deep);
+    color: var(--text-primary);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    -webkit-user-select: none;
+    user-select: none;
+}
+
+#app { height: 100vh; }
+
+.screen {
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+}
+
+.hidden { display: none !important; }
+
+.header {
+    display: flex;
+    align-items: center;
+    padding: 20px 24px;
+    gap: 10px;
+}
+
+.emblem {
+    width: 32px;
+    height: 32px;
+}
+
+.title {
+    font-size: 19px;
+    font-weight: 600;
+}
+
+.spacer { flex: 1; }
+
+.icon-btn {
+    background: transparent;
+    border: none;
+    color: var(--text-secondary);
+    font-size: 20px;
+    cursor: pointer;
+    padding: 6px 10px;
+    border-radius: 8px;
+    line-height: 1;
+}
+.icon-btn:hover { background: var(--bg-surface); color: var(--text-primary); }
+
+.center {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 22px;
+    padding: 0 24px;
+}
+
+/* --- Big circular connect button, mirrors android ConnectButton.kt --- */
+.power-btn {
+    position: relative;
+    width: 168px;
+    height: 168px;
+    border-radius: 50%;
+    border: none;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--bg-surface);
+    transition: box-shadow 0.25s ease, background 0.25s ease;
+}
+
+.power-btn.idle,
+.power-btn.error {
+    background: var(--bg-surface);
+}
+.power-btn.error { box-shadow: 0 0 0 2px var(--status-error) inset; }
+
+.power-btn.connecting {
+    background: var(--bg-surface-alt);
+    cursor: default;
+}
+
+.power-btn.connected {
+    background: linear-gradient(135deg, var(--accent-lavender-bright), var(--accent-purple-deep));
+    box-shadow: 0 0 0 16px rgba(167, 139, 250, 0.15), 0 0 40px 4px rgba(167, 139, 250, 0.35);
+}
+
+.power-icon {
+    width: 60px;
+    height: 60px;
+    fill: none;
+    stroke: var(--text-secondary);
+    stroke-width: 2.4;
+    z-index: 1;
+}
+.power-btn.connected .power-icon { stroke: var(--bg-deep); }
+.power-btn.error .power-icon { stroke: var(--status-error); }
+
+.spinner {
+    display: none;
+    position: absolute;
+    width: 168px;
+    height: 168px;
+    animation: rotate 1.1s linear infinite;
+}
+.power-btn.connecting .spinner { display: block; }
+.power-btn.connecting .power-icon { stroke: var(--text-secondary); opacity: 0.5; }
+.spinner circle {
+    stroke: var(--accent-lavender-bright);
+    stroke-linecap: round;
+    stroke-dasharray: 110;
+    stroke-dashoffset: 60;
+}
+@keyframes rotate {
+    100% { transform: rotate(360deg); }
+}
+
+.status-text {
+    font-size: 18px;
+    font-weight: 500;
+    color: var(--text-secondary);
+}
+.status-text.connected { color: var(--status-connected); }
+.status-text.error { color: var(--status-error); }
+.status-text.connecting { color: var(--accent-lavender-bright); }
+
+.hint-text {
+    font-size: 13px;
+    color: var(--text-secondary);
+    max-width: 320px;
+}
+
+/* --- Config / Log screens --- */
+.content {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    padding: 0 20px 20px;
+    overflow: auto;
+}
+
+.label {
+    font-size: 13px;
+    color: var(--text-secondary);
+}
+
+textarea, .log-text {
+    background: var(--bg-surface);
+    border: 1px solid rgba(156, 151, 184, 0.4);
+    border-radius: 8px;
+    color: var(--text-primary);
+    font-family: "Consolas", "Cascadia Code", monospace;
+    font-size: 13px;
+    padding: 12px;
+}
+
+textarea {
+    flex: 1;
+    min-height: 220px;
+    resize: none;
+}
+textarea:focus { outline: none; border-color: var(--accent-lavender); }
+textarea::placeholder { color: var(--text-secondary); }
+
+.log-text {
+    flex: 1;
+    margin: 0;
+    overflow: auto;
+    white-space: pre-wrap;
+    word-break: break-all;
+    text-align: left;
+}
+
+.row { display: flex; gap: 10px; }
+
+.btn {
+    font-size: 14px;
+    font-weight: 600;
+    padding: 12px 18px;
+    border-radius: 24px;
+    border: none;
+    cursor: pointer;
+}
+.btn-primary {
+    background: var(--accent-lavender);
+    color: var(--bg-deep);
+}
+.btn-primary:hover { background: var(--accent-lavender-bright); }
+.btn-outline {
+    background: transparent;
+    color: var(--accent-lavender);
+    border: 1px solid var(--accent-lavender);
+}
+.btn-outline:hover { background: rgba(167, 139, 250, 0.1); }
