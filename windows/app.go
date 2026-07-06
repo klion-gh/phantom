@@ -137,18 +137,37 @@ func (a *App) ListConfigs() string {
 }
 
 // AddConfig saves configYAML as a brand new tile (never overwrites an
-// existing one - that's UpdateConfig's job). Returns "" on success or an
-// error message.
+// existing one - that's UpdateConfig's job). Returns the new config's ID on
+// success (unlike most other methods here, which return "" for success -
+// the frontend needs the ID to attach a one-time geo lookup via
+// SetConfigGeo right after saving) or "" on failure.
 func (a *App) AddConfig(configYAML string) string {
-	if _, err := addConfig(configYAML); err != nil {
+	cfg, err := addConfig(configYAML)
+	if err != nil {
+		log.Printf("AddConfig failed: %v", err)
+		return ""
+	}
+	return cfg.ID
+}
+
+// UpdateConfig overwrites the yaml of an existing saved config in place,
+// clearing any previously cached geo data (see updateConfig) since the
+// edited yaml may point at a different server. Returns "" on success or an
+// error message.
+func (a *App) UpdateConfig(id string, configYAML string) string {
+	if err := updateConfig(id, configYAML); err != nil {
 		return err.Error()
 	}
 	return ""
 }
 
-// UpdateConfig overwrites the yaml of an existing saved config in place.
-func (a *App) UpdateConfig(id string, configYAML string) string {
-	if err := updateConfig(id, configYAML); err != nil {
+// SetConfigGeo persists the one-time-resolved server IP/country/flag for a
+// saved config. Called by the frontend right after Add/UpdateConfig, once a
+// Ping and a geo-IP lookup (both done client-side in JS) have completed -
+// see internal/pingcheck and the "why once, not on a timer" note on
+// SavedConfig for the reasoning.
+func (a *App) SetConfigGeo(id string, ip string, country string, countryCode string) string {
+	if err := setConfigGeo(id, ip, country, countryCode); err != nil {
 		return err.Error()
 	}
 	return ""

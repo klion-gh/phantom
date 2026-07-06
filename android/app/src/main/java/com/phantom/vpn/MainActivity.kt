@@ -28,6 +28,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
+import kotlinx.coroutines.launch
 
 private enum class Screen { MAIN, ADD_CONFIG, SETTINGS, LOG }
 
@@ -121,6 +122,7 @@ private fun PhantomApp(
     onDisconnect: () -> Unit,
 ) {
     val context = LocalContext.current
+    val coroutineScope = rememberCoroutineScope()
     var configs by remember { mutableStateOf(ConfigStore.loadAll(context)) }
     var screen by remember { mutableStateOf(Screen.MAIN) }
     var editingId by remember { mutableStateOf<String?>(null) }
@@ -129,6 +131,24 @@ private fun PhantomApp(
 
     fun refreshConfigs() {
         configs = ConfigStore.loadAll(context)
+    }
+
+    // Resolves and persists a config's server IP/country/flag exactly once (via
+    // ConfigStore.setGeo), then refreshes so the tile picks it up - see the "why once,
+    // not on a timer" note on SavedConfig.
+    fun resolveGeoInBackground(id: String, yaml: String) {
+        coroutineScope.launch {
+            val (ip, _) = fetchPing(yaml) ?: return@launch
+            val geo = fetchGeo(ip)
+            ConfigStore.setGeo(context, id, ip, geo?.first, geo?.second)
+            refreshConfigs()
+        }
+    }
+
+    // Configs saved before this per-config geo cache existed have no country/flag yet -
+    // backfill them once on launch rather than leaving those tiles blank forever.
+    LaunchedEffect(Unit) {
+        configs.filter { it.countryCode == null }.forEach { resolveGeoInBackground(it.id, it.yaml) }
     }
 
     when (screen) {
@@ -143,9 +163,15 @@ private fun PhantomApp(
             onYamlChange = { editingYaml = it },
             onSave = {
                 val id = editingId
-                if (id != null) ConfigStore.update(context, id, editingYaml) else ConfigStore.add(context, editingYaml)
+                val targetId = if (id != null) {
+                    ConfigStore.update(context, id, editingYaml)
+                    id
+                } else {
+                    ConfigStore.add(context, editingYaml).id
+                }
                 refreshConfigs()
                 screen = Screen.MAIN
+                resolveGeoInBackground(targetId, editingYaml)
             },
             onDelete = {
                 val id = editingId

@@ -8,8 +8,23 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.util.UUID
 
-/** One saved client.yaml, shown as its own tile on the main screen. */
-data class SavedConfig(val id: String, val yaml: String)
+/**
+ * One saved client.yaml, shown as its own tile on the main screen.
+ *
+ * [ip]/[country]/[countryCode] are resolved once (a Ping + a geo-IP lookup)
+ * right after the config is added or edited, not on every ping cycle - the
+ * server behind a saved config essentially never moves, so re-resolving its
+ * location every few seconds on a timer was just wasted third-party calls
+ * (and is what rate-limited the geo-IP provider into 429s during
+ * development). They're null until [ConfigStore.setGeo] is called once.
+ */
+data class SavedConfig(
+    val id: String,
+    val yaml: String,
+    val ip: String? = null,
+    val country: String? = null,
+    val countryCode: String? = null,
+)
 
 /**
  * Single place that knows how to open (and gracefully degrade) the app's saved
@@ -62,7 +77,13 @@ object ConfigStore {
             val arr = JSONArray(raw)
             (0 until arr.length()).map { i ->
                 val obj = arr.getJSONObject(i)
-                SavedConfig(obj.getString("id"), obj.getString("yaml"))
+                SavedConfig(
+                    id = obj.getString("id"),
+                    yaml = obj.getString("yaml"),
+                    ip = obj.optString("ip").takeIf { it.isNotBlank() },
+                    country = obj.optString("country").takeIf { it.isNotBlank() },
+                    countryCode = obj.optString("countryCode").takeIf { it.isNotBlank() },
+                )
             }
         }.getOrDefault(emptyList())
     }
@@ -70,7 +91,13 @@ object ConfigStore {
     fun saveAll(context: Context, configs: List<SavedConfig>) {
         val arr = JSONArray()
         configs.forEach { cfg ->
-            arr.put(JSONObject().apply { put("id", cfg.id); put("yaml", cfg.yaml) })
+            arr.put(JSONObject().apply {
+                put("id", cfg.id)
+                put("yaml", cfg.yaml)
+                cfg.ip?.let { put("ip", it) }
+                cfg.country?.let { put("country", it) }
+                cfg.countryCode?.let { put("countryCode", it) }
+            })
         }
         prefs(context).edit().putString(CONFIGS_KEY, arr.toString()).apply()
     }
@@ -81,12 +108,24 @@ object ConfigStore {
         return cfg
     }
 
+    /** Clears any previously cached geo data - the edited yaml may point at a different
+     * server entirely, so the old ip/country would be stale until [setGeo] re-resolves it. */
     fun update(context: Context, id: String, yaml: String) {
-        saveAll(context, loadAll(context).map { if (it.id == id) it.copy(yaml = yaml) else it })
+        saveAll(context, loadAll(context).map {
+            if (it.id == id) it.copy(yaml = yaml, ip = null, country = null, countryCode = null) else it
+        })
     }
 
     fun delete(context: Context, id: String) {
         saveAll(context, loadAll(context).filterNot { it.id == id })
+    }
+
+    /** Persists the one-time-resolved IP/country/flag for a saved config - called right
+     * after add/update, once a Ping and a geo-IP lookup have completed. */
+    fun setGeo(context: Context, id: String, ip: String, country: String?, countryCode: String?) {
+        saveAll(context, loadAll(context).map {
+            if (it.id == id) it.copy(ip = ip, country = country, countryCode = countryCode) else it
+        })
     }
 
     fun loadLastActiveId(context: Context): String? = prefs(context).getString(LAST_ACTIVE_KEY, null)

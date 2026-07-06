@@ -42,12 +42,11 @@ import org.json.JSONObject
 import java.net.HttpURLConnection
 import java.net.URL
 
-/** Snapshot of what a config tile shows about its server: live latency + geo. */
+/** Snapshot of what a config tile shows about its server: live latency only - country/flag
+ * are resolved once and cached on the SavedConfig itself, not polled on a timer. */
 data class PingInfo(
     val ip: String? = null,
     val latencyMs: Long? = null,
-    val country: String? = null,
-    val countryCode: String? = null,
 )
 
 /**
@@ -104,6 +103,8 @@ suspend fun fetchPing(yaml: String): Pair<String, Long>? = withContext(Dispatche
  * Best-effort: any failure (offline, rate limit) just leaves the location blank. Uses
  * ipwho.is rather than ipapi.co - the latter's free tier rate-limited itself into 429s
  * during development from repeated polling across both this app and the Windows one.
+ * Only called once, right after a config is added/edited (see MainActivity's Save
+ * handler) - not on a timer, since a saved server's location essentially never changes.
  */
 suspend fun fetchGeo(ip: String): Pair<String, String>? = withContext(Dispatchers.IO) {
     runCatching {
@@ -135,26 +136,13 @@ fun ConfigInfoCard(
     onLongPress: () -> Unit,
 ) {
     var pingInfo by remember(config.id) { mutableStateOf<PingInfo?>(null) }
-    // Retrying a failed geo lookup on every 6s ping cycle is what rate-limited ipapi.co
-    // into 429s during development - only retry a failure every couple of minutes, but
-    // always look up immediately when the resolved IP actually changes.
-    var lastGeoAttemptAt by remember(config.id) { mutableStateOf(0L) }
 
     LaunchedEffectPing(config.yaml) { result ->
-        val previous = pingInfo
         pingInfo = if (result != null) {
             val (ip, latency) = result
-            var country = previous?.country
-            var countryCode = previous?.countryCode
-            val ipChanged = ip != previous?.ip
-            val now = System.currentTimeMillis()
-            if (ipChanged || (countryCode == null && now - lastGeoAttemptAt > 120_000)) {
-                lastGeoAttemptAt = now
-                fetchGeo(ip)?.let { (name, code) -> country = name; countryCode = code }
-            }
-            PingInfo(ip, latency, country, countryCode)
+            PingInfo(ip, latency)
         } else {
-            previous?.copy(latencyMs = null)
+            pingInfo?.copy(latencyMs = null)
         }
     }
 
@@ -163,8 +151,8 @@ fun ConfigInfoCard(
     val info = pingInfo
 
     var flagBitmap by remember(config.id) { mutableStateOf<ImageBitmap?>(null) }
-    LaunchedEffect(info?.countryCode) {
-        flagBitmap = info?.countryCode?.takeIf { it.isNotBlank() }?.let { fetchFlagBitmap(it) }
+    LaunchedEffect(config.countryCode) {
+        flagBitmap = config.countryCode?.takeIf { it.isNotBlank() }?.let { fetchFlagBitmap(it) }
     }
 
     val cardShape = RoundedCornerShape(20.dp)
@@ -198,7 +186,7 @@ fun ConfigInfoCard(
                 )
                 Spacer(modifier = Modifier.height(2.dp))
                 Text(
-                    text = info?.ip ?: server,
+                    text = info?.ip ?: config.ip ?: server,
                     color = TextSecondary,
                     fontSize = 13.sp,
                     fontFamily = FontFamily.Monospace,
@@ -210,8 +198,7 @@ fun ConfigInfoCard(
                         color = TextSecondary,
                         fontSize = 13.sp,
                     )
-                    val code = info?.countryCode
-                    if (!code.isNullOrBlank()) {
+                    if (!config.countryCode.isNullOrBlank()) {
                         Spacer(modifier = Modifier.width(12.dp))
                         flagBitmap?.let { bitmap ->
                             Image(
@@ -225,7 +212,7 @@ fun ConfigInfoCard(
                             Spacer(modifier = Modifier.width(6.dp))
                         }
                         Text(
-                            text = info?.country ?: "",
+                            text = config.country ?: "",
                             color = TextSecondary,
                             fontSize = 13.sp,
                         )

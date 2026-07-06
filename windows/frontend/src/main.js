@@ -1,5 +1,5 @@
 import './style.css';
-import { Connect, Disconnect, Status, ReadLog, ListConfigs, AddConfig, UpdateConfig, DeleteConfig, Ping } from '../wailsjs/go/main/App';
+import { Connect, Disconnect, Status, ReadLog, ListConfigs, AddConfig, UpdateConfig, DeleteConfig, SetConfigGeo, Ping } from '../wailsjs/go/main/App';
 
 const screens = {
   main: document.getElementById('screen-main'),
@@ -28,7 +28,8 @@ let editingId = null;
 let pendingConnectId = null; // id currently mid-Connect() call - drives the spinner state
 let currentStatus = { connected: false, alive: false, stats: '{}', activeConfigId: '' };
 
-const pingData = new Map(); // id -> { ip, latencyMs, country, countryCode }
+const pingData = new Map(); // id -> { ip, latencyMs } - just live latency; country/flag
+                             // come from the config's own cached fields (see SetConfigGeo)
 const pingTimers = new Map(); // id -> interval handle
 
 function escapeHtml(text) {
@@ -46,6 +47,8 @@ function parseYamlField(yaml, key) {
 
 // ipwho.is rather than ipapi.co - the latter's free tier rate-limited itself into 429s
 // during development from repeated polling across both this app and the Android one.
+// Only called once, right after a config is added/edited (see resolveConfigGeo) - not
+// on every ping cycle, since a saved server's location essentially never changes.
 async function fetchGeo(ip) {
   try {
     const resp = await fetch(`https://ipwho.is/${ip}`);
@@ -59,32 +62,27 @@ async function fetchGeo(ip) {
   return null;
 }
 
-const lastGeoAttempt = new Map(); // id -> epoch ms of the last (possibly failed) geo lookup
+// Resolves and persists a config's server IP/country/flag exactly once (via
+// SetConfigGeo), then re-renders so the tile picks it up. Called after every
+// Add/UpdateConfig - Update clears the old cached geo first (see
+// windows/configstore.go) since the edited yaml may point at a new server.
+async function resolveConfigGeo(id, yaml) {
+  try {
+    const ping = JSON.parse(await Ping(yaml));
+    if (!ping.ip) return;
+    const geo = await fetchGeo(ping.ip);
+    await SetConfigGeo(id, ping.ip, geo?.country || '', geo?.countryCode || '');
+    await reloadConfigs();
+  } catch (e) {
+    console.error(e);
+  }
+}
 
 async function pollPing(config) {
   const prev = pingData.get(config.id) || {};
   try {
     const json = JSON.parse(await Ping(config.yaml));
-    if (json.ip) {
-      let country = prev.country;
-      let countryCode = prev.countryCode;
-      const ipChanged = json.ip !== prev.ip;
-      const now = Date.now();
-      // Retrying a failed lookup on every 6s ping cycle is what rate-limited ipapi.co -
-      // only retry a failure every couple of minutes, but always retry immediately if
-      // the resolved IP actually changed.
-      if (ipChanged || (!countryCode && now - (lastGeoAttempt.get(config.id) || 0) > 120000)) {
-        lastGeoAttempt.set(config.id, now);
-        const geo = await fetchGeo(json.ip);
-        if (geo) {
-          country = geo.country;
-          countryCode = geo.countryCode;
-        }
-      }
-      pingData.set(config.id, { ip: json.ip, latencyMs: json.latency_ms, country, countryCode });
-    } else {
-      pingData.set(config.id, { ...prev, latencyMs: null });
-    }
+    pingData.set(config.id, json.ip ? { ip: json.ip, latencyMs: json.latency_ms } : { ...prev, latencyMs: null });
   } catch (e) {
     pingData.set(config.id, { ...prev, latencyMs: null });
   }
@@ -108,17 +106,19 @@ function updateTileMeta(id) {
   if (!card || !config) return;
 
   const info = pingData.get(id) || {};
-  card.querySelector('.config-ip').textContent = info.ip || parseYamlField(config.yaml, 'server') || '—';
+  card.querySelector('.config-ip').textContent = info.ip || config.ip || parseYamlField(config.yaml, 'server') || '—';
   card.querySelector('.ping-text').textContent = info.latencyMs != null ? `Пинг: ${info.latencyMs} мс` : 'Пинг: —';
 
+  // Country/flag come from the config's own cached fields (resolved once at
+  // save time via resolveConfigGeo/SetConfigGeo), not from the live ping.
   const flagImg = card.querySelector('.geo-flag');
   const geoText = card.querySelector('.geo-text');
-  if (info.countryCode) {
+  if (config.countryCode) {
     // Windows' Segoe UI Emoji has no flag glyphs (shows the bare letter pair
     // instead) - a real flag image is the only reliable way to show one.
-    flagImg.src = `https://flagcdn.com/24x18/${info.countryCode.toLowerCase()}.png`;
+    flagImg.src = `https://flagcdn.com/24x18/${config.countryCode.toLowerCase()}.png`;
     flagImg.classList.remove('hidden');
-    geoText.textContent = info.country || '';
+    geoText.textContent = config.country || '';
   } else {
     flagImg.classList.add('hidden');
     geoText.textContent = '';
@@ -254,13 +254,20 @@ document.getElementById('btn-back-config').addEventListener('click', () => showS
 
 document.getElementById('btn-save').addEventListener('click', async () => {
   const yaml = configTextarea.value;
+  let targetId = editingId;
   if (editingId) {
     await UpdateConfig(editingId, yaml);
   } else {
-    await AddConfig(yaml);
+    targetId = await AddConfig(yaml);
   }
   await reloadConfigs();
   showScreen('main');
+
+  // Resolve IP/country once in the background - the tile shows "—" for
+  // location until this lands, then re-renders itself via reloadConfigs.
+  if (targetId) {
+    resolveConfigGeo(targetId, yaml);
+  }
 });
 
 btnDelete.addEventListener('click', () => deleteConfirm.classList.remove('hidden'));
@@ -295,4 +302,10 @@ setInterval(refreshStatus, 4000);
 (async () => {
   await reloadConfigs();
   await refreshStatus();
+
+  // Configs saved before this per-config geo cache existed have no country/flag yet -
+  // backfill them once on launch rather than leaving those tiles blank forever.
+  for (const config of configs) {
+    if (!config.countryCode) resolveConfigGeo(config.id, config.yaml);
+  }
 })();

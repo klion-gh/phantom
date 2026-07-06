@@ -30,6 +30,10 @@ export function ReadLog() {
   return window['go']['main']['App']['ReadLog']();
 }
 
+export function SetConfigGeo(arg1, arg2, arg3, arg4) {
+  return window['go']['main']['App']['SetConfigGeo'](arg1, arg2, arg3, arg4);
+}
+
 export function Status() {
   return window['go']['main']['App']['Status']();
 }

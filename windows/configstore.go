@@ -12,9 +12,19 @@ import (
 // mirrors the Android app's ConfigStore.SavedConfig exactly (same JSON shape
 // isn't required since the two apps don't share storage, but keeping the
 // model identical avoids re-deriving the design twice).
+//
+// IP/Country/CountryCode are resolved once (via a Ping + a geo-IP lookup)
+// right after the config is added or edited, not on every ping cycle - the
+// server behind a saved config essentially never moves, so re-resolving its
+// location every few seconds on a timer was just wasted third-party calls
+// (and is what rate-limited the geo-IP provider into 429s during
+// development). They're blank until the frontend calls SetConfigGeo once.
 type SavedConfig struct {
-	ID   string `json:"id"`
-	Yaml string `json:"yaml"`
+	ID          string `json:"id"`
+	Yaml        string `json:"yaml"`
+	IP          string `json:"ip,omitempty"`
+	Country     string `json:"country,omitempty"`
+	CountryCode string `json:"countryCode,omitempty"`
 }
 
 const (
@@ -106,7 +116,35 @@ func updateConfig(id, yaml string) error {
 	}
 	for i := range configs {
 		if configs[i].ID == id {
+			// Clear any previously cached geo data - the edited yaml may point at a
+			// different server entirely, so the old IP/country would be stale until
+			// SetConfigGeo re-resolves it.
 			configs[i].Yaml = yaml
+			configs[i].IP = ""
+			configs[i].Country = ""
+			configs[i].CountryCode = ""
+		}
+	}
+	return saveConfigs(dir, configs)
+}
+
+// setConfigGeo persists the one-time-resolved IP/country/flag for a saved
+// config - called by the frontend right after Add/UpdateConfig, once a Ping
+// and a geo-IP lookup have completed.
+func setConfigGeo(id, ip, country, countryCode string) error {
+	dir, err := configDir()
+	if err != nil {
+		return err
+	}
+	configs, err := loadConfigs()
+	if err != nil {
+		return err
+	}
+	for i := range configs {
+		if configs[i].ID == id {
+			configs[i].IP = ip
+			configs[i].Country = country
+			configs[i].CountryCode = countryCode
 		}
 	}
 	return saveConfigs(dir, configs)
