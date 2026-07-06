@@ -26,6 +26,10 @@ func main() {
 	// Create an instance of the app structure
 	app := NewApp()
 
+	// The tray icon runs its own native message loop on a locked OS thread,
+	// independent of Wails' own window loop below - see tray.go.
+	go runTray(app)
+
 	// Create application with options
 	err := wails.Run(&options.App{
 		Title:     "Phantom",
@@ -39,6 +43,7 @@ func main() {
 		BackgroundColour: &options.RGBA{R: 7, G: 7, B: 12, A: 255},
 		OnStartup:        app.startup,
 		OnShutdown:       app.shutdown,
+		OnBeforeClose:    app.beforeClose,
 		Bind: []interface{}{
 			app,
 		},

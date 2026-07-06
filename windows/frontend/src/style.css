@@ -23,7 +23,7 @@ html, body {
     user-select: none;
 }
 
-#app { height: 100vh; }
+#app { height: 100vh; position: relative; }
 
 .screen {
     height: 100%;
@@ -43,6 +43,8 @@ html, body {
 .emblem {
     width: 32px;
     height: 32px;
+    border-radius: 8px;
+    object-fit: cover;
 }
 
 .title {
@@ -64,50 +66,132 @@ html, body {
 }
 .icon-btn:hover { background: var(--bg-surface); color: var(--text-primary); }
 
-.center {
+/* --- Config tile list --- */
+.config-list {
+    flex: 1;
+    overflow: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    padding: 0 24px 20px;
+}
+
+.config-card {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    background: var(--bg-surface);
+    border-radius: 20px;
+    padding: 18px 20px;
+    cursor: default;
+    border: 2px solid transparent;
+    transition: border-color 0.25s ease;
+}
+
+/* Gradient outline for whichever tile currently has the active tunnel. */
+.config-card.connected {
+    background:
+        linear-gradient(var(--bg-surface), var(--bg-surface)) padding-box,
+        linear-gradient(120deg, #A78BFA, #F472B6, #7DD3FC) border-box;
+}
+
+.config-info { flex: 1; min-width: 0; }
+
+.config-domain {
+    font-size: 16px;
+    font-weight: 600;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.config-ip {
+    font-size: 12px;
+    color: var(--text-secondary);
+    font-family: "Consolas", "Cascadia Code", monospace;
+    margin-top: 3px;
+}
+
+.config-meta {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12px;
+    color: var(--text-secondary);
+    margin-top: 8px;
+}
+
+.geo-flag {
+    width: 18px;
+    height: 13px;
+    border-radius: 2px;
+    object-fit: cover;
+    margin-left: 4px;
+}
+
+.config-edit-btn {
+    background: transparent;
+    border: none;
+    color: var(--text-secondary);
+    font-size: 16px;
+    cursor: pointer;
+    padding: 6px 8px;
+    border-radius: 8px;
+    align-self: flex-start;
+}
+.config-edit-btn:hover { background: var(--bg-surface-alt); color: var(--text-primary); }
+
+.empty-state {
     flex: 1;
     display: flex;
     flex-direction: column;
     align-items: center;
     justify-content: center;
-    gap: 22px;
+    gap: 8px;
     padding: 0 24px;
+    text-align: center;
+}
+.empty-title { font-size: 16px; font-weight: 500; }
+.empty-hint { font-size: 13px; color: var(--text-secondary); }
+
+.error-text {
+    font-size: 13px;
+    color: var(--status-error);
+    padding: 0 24px 16px;
 }
 
-/* --- Big circular connect button, mirrors android ConnectButton.kt --- */
+/* --- Circular connect button, mirrors android ConnectButton.kt --- */
 .power-btn {
     position: relative;
-    width: 168px;
-    height: 168px;
+    width: 64px;
+    height: 64px;
+    flex-shrink: 0;
     border-radius: 50%;
     border: none;
     cursor: pointer;
     display: flex;
     align-items: center;
     justify-content: center;
-    background: var(--bg-surface);
+    background: var(--bg-surface-alt);
     transition: box-shadow 0.25s ease, background 0.25s ease;
 }
 
 .power-btn.idle,
 .power-btn.error {
-    background: var(--bg-surface);
+    background: var(--bg-surface-alt);
 }
 .power-btn.error { box-shadow: 0 0 0 2px var(--status-error) inset; }
 
-.power-btn.connecting {
-    background: var(--bg-surface-alt);
-    cursor: default;
-}
+.power-btn.connecting { cursor: default; }
 
 .power-btn.connected {
     background: linear-gradient(135deg, var(--accent-lavender-bright), var(--accent-purple-deep));
-    box-shadow: 0 0 0 16px rgba(167, 139, 250, 0.15), 0 0 40px 4px rgba(167, 139, 250, 0.35);
+    box-shadow: 0 0 0 6px rgba(167, 139, 250, 0.15), 0 0 16px 2px rgba(167, 139, 250, 0.35);
 }
 
 .power-icon {
-    width: 60px;
-    height: 60px;
+    width: 22px;
+    height: 22px;
     fill: none;
     stroke: var(--text-secondary);
     stroke-width: 2.4;
@@ -119,8 +203,8 @@ html, body {
 .spinner {
     display: none;
     position: absolute;
-    width: 168px;
-    height: 168px;
+    width: 64px;
+    height: 64px;
     animation: rotate 1.1s linear infinite;
 }
 .power-btn.connecting .spinner { display: block; }
@@ -135,22 +219,7 @@ html, body {
     100% { transform: rotate(360deg); }
 }
 
-.status-text {
-    font-size: 18px;
-    font-weight: 500;
-    color: var(--text-secondary);
-}
-.status-text.connected { color: var(--status-connected); }
-.status-text.error { color: var(--status-error); }
-.status-text.connecting { color: var(--accent-lavender-bright); }
-
-.hint-text {
-    font-size: 13px;
-    color: var(--text-secondary);
-    max-width: 320px;
-}
-
-/* --- Config / Log screens --- */
+/* --- Config / Settings / Log screens --- */
 .content {
     flex: 1;
     display: flex;
@@ -213,3 +282,33 @@ textarea::placeholder { color: var(--text-secondary); }
     border: 1px solid var(--accent-lavender);
 }
 .btn-outline:hover { background: rgba(167, 139, 250, 0.1); }
+.btn-danger {
+    background: transparent;
+    color: var(--status-error);
+    border: 1px solid var(--status-error);
+}
+.btn-danger:hover { background: rgba(248, 113, 113, 0.1); }
+
+/* --- Delete confirmation overlay --- */
+.overlay {
+    position: absolute;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.5);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 24px;
+}
+.dialog {
+    background: var(--bg-surface);
+    border-radius: 16px;
+    padding: 20px;
+    max-width: 320px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+.dialog-title { font-size: 16px; font-weight: 600; }
+.dialog-text { font-size: 13px; color: var(--text-secondary); }
+.dialog-row { display: flex; gap: 10px; justify-content: flex-end; margin-top: 6px; }
+.dialog-row .btn { padding: 10px 16px; }

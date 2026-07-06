@@ -1,13 +1,18 @@
 package com.phantom.vpn
 
+import android.Manifest
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.net.VpnService
+import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
@@ -15,64 +20,57 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.security.crypto.EncryptedSharedPreferences
-import androidx.security.crypto.MasterKey
+import androidx.core.content.ContextCompat
 
-private enum class Screen { MAIN, CONFIG, LOG }
+private enum class Screen { MAIN, ADD_CONFIG, SETTINGS, LOG }
 
 class MainActivity : ComponentActivity() {
 
-    private var prefs: android.content.SharedPreferences? = null
-    private var pendingYaml: String? = null
+    private var pendingConfig: SavedConfig? = null
 
     private val vpnPrepareLauncher = registerForActivityResult(
         ActivityResultContracts.StartActivityForResult()
     ) { result ->
-        val yaml = pendingYaml
-        pendingYaml = null
-        if (result.resultCode == RESULT_OK && yaml != null) {
-            startVpn(yaml)
+        val config = pendingConfig
+        pendingConfig = null
+        if (result.resultCode == RESULT_OK && config != null) {
+            startVpn(config)
         } else {
             VpnStateHolder.update(ConnectionStatus.ERROR, "VPN permission denied")
         }
     }
 
+    // Android 13+ requires runtime consent to post any notification at all - without
+    // this, the persistent connect/disconnect notification silently never appears.
+    private val notificationPermissionLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { showPersistentNotification() }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         FileLog.i("MainActivity.onCreate")
 
-        // EncryptedSharedPreferences touches the Android Keystore and can throw on some
-        // devices/ROMs; never let that take the whole app down - fall back to plain prefs
-        // and keep going so the user at least sees the UI (and the log button).
-        val securePrefs = try {
-            val masterKey = MasterKey.Builder(this)
-                .setKeyScheme(MasterKey.KeyScheme.AES256_GCM)
-                .build()
-            EncryptedSharedPreferences.create(
-                this, "phantom_secure_prefs", masterKey,
-                EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
-                EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
-            )
-        } catch (t: Throwable) {
-            FileLog.e("EncryptedSharedPreferences init failed, falling back to plain prefs", t)
-            null
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+            ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS)
+            != PackageManager.PERMISSION_GRANTED
+        ) {
+            notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+        } else {
+            showPersistentNotification()
         }
-        prefs = securePrefs ?: getSharedPreferences("phantom_plain_prefs", MODE_PRIVATE)
 
         setContent {
             PhantomTheme {
                 Surface(modifier = Modifier.fillMaxSize(), color = BgDeep) {
                     PhantomApp(
-                        initialYaml = prefs?.getString("client_yaml", "") ?: "",
-                        onSaveYaml = { yaml -> prefs?.edit()?.putString("client_yaml", yaml)?.apply() },
-                        onConnect = { yaml -> requestConnect(yaml) },
+                        onConnect = { config -> requestConnect(config) },
                         onDisconnect = { stopVpn() },
                     )
                 }
@@ -80,21 +78,23 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    private fun requestConnect(yaml: String) {
+    private fun requestConnect(config: SavedConfig) {
         FileLog.i("requestConnect")
         val prepareIntent = VpnService.prepare(this)
         if (prepareIntent != null) {
-            pendingYaml = yaml
+            pendingConfig = config
             vpnPrepareLauncher.launch(prepareIntent)
         } else {
-            startVpn(yaml)
+            startVpn(config)
         }
     }
 
-    private fun startVpn(yaml: String) {
+    private fun startVpn(config: SavedConfig) {
+        ConfigStore.saveLastActiveId(this, config.id)
         val intent = Intent(this, PhantomVpnService::class.java).apply {
             action = PhantomVpnService.ACTION_CONNECT
-            putExtra(PhantomVpnService.EXTRA_CONFIG_YAML, yaml)
+            putExtra(PhantomVpnService.EXTRA_CONFIG_ID, config.id)
+            putExtra(PhantomVpnService.EXTRA_CONFIG_YAML, config.yaml)
         }
         startService(intent)
     }
@@ -105,40 +105,82 @@ class MainActivity : ComponentActivity() {
         }
         startService(intent)
     }
+
+    // Posts the persistent connect/disconnect notification (a no-op if a connection is
+    // already up - PhantomVpnService only touches state for actions it doesn't know yet).
+    private fun showPersistentNotification() {
+        startService(Intent(this, PhantomVpnService::class.java).apply {
+            action = PhantomVpnService.ACTION_SHOW_STATUS
+        })
+    }
 }
 
 @Composable
 private fun PhantomApp(
-    initialYaml: String,
-    onSaveYaml: (String) -> Unit,
-    onConnect: (String) -> Unit,
+    onConnect: (SavedConfig) -> Unit,
     onDisconnect: () -> Unit,
 ) {
-    var yaml by remember { mutableStateOf(initialYaml) }
+    val context = LocalContext.current
+    var configs by remember { mutableStateOf(ConfigStore.loadAll(context)) }
     var screen by remember { mutableStateOf(Screen.MAIN) }
+    var editingId by remember { mutableStateOf<String?>(null) }
+    var editingYaml by remember { mutableStateOf("") }
     val state by VpnStateHolder.state.collectAsState()
 
+    fun refreshConfigs() {
+        configs = ConfigStore.loadAll(context)
+    }
+
     when (screen) {
-        Screen.LOG -> LogScreen(onClose = { screen = Screen.CONFIG })
-        Screen.CONFIG -> ConfigScreen(
-            yaml = yaml,
-            onYamlChange = { yaml = it },
-            onSave = { onSaveYaml(yaml) },
+        Screen.LOG -> LogScreen(onClose = { screen = Screen.SETTINGS })
+        Screen.SETTINGS -> SettingsScreen(
             onBack = { screen = Screen.MAIN },
             onViewLog = { screen = Screen.LOG },
+        )
+        Screen.ADD_CONFIG -> ConfigScreen(
+            yaml = editingYaml,
+            isEditing = editingId != null,
+            onYamlChange = { editingYaml = it },
+            onSave = {
+                val id = editingId
+                if (id != null) ConfigStore.update(context, id, editingYaml) else ConfigStore.add(context, editingYaml)
+                refreshConfigs()
+                screen = Screen.MAIN
+            },
+            onDelete = {
+                val id = editingId
+                if (id != null) {
+                    if (state.activeConfigId == id) onDisconnect()
+                    ConfigStore.delete(context, id)
+                    refreshConfigs()
+                }
+                screen = Screen.MAIN
+            },
+            onBack = { screen = Screen.MAIN },
         )
         Screen.MAIN -> MainScreen(
             status = state.status,
             message = state.message,
-            hasConfig = yaml.isNotBlank(),
-            onToggle = {
-                when (state.status) {
-                    ConnectionStatus.CONNECTED -> onDisconnect()
-                    ConnectionStatus.CONNECTING -> Unit
-                    else -> if (yaml.isNotBlank()) onConnect(yaml) else screen = Screen.CONFIG
+            activeConfigId = state.activeConfigId,
+            configs = configs,
+            onToggle = { config ->
+                when {
+                    state.activeConfigId == config.id && state.status == ConnectionStatus.CONNECTED -> onDisconnect()
+                    state.activeConfigId == config.id && state.status == ConnectionStatus.CONNECTING -> Unit
+                    else -> onConnect(config)
                 }
             },
-            onOpenConfig = { screen = Screen.CONFIG },
+            onEditConfig = { config ->
+                editingId = config.id
+                editingYaml = config.yaml
+                screen = Screen.ADD_CONFIG
+            },
+            onAddConfig = {
+                editingId = null
+                editingYaml = ""
+                screen = Screen.ADD_CONFIG
+            },
+            onOpenSettings = { screen = Screen.SETTINGS },
         )
     }
 }
@@ -147,11 +189,14 @@ private fun PhantomApp(
 private fun MainScreen(
     status: ConnectionStatus,
     message: String,
-    hasConfig: Boolean,
-    onToggle: () -> Unit,
-    onOpenConfig: () -> Unit,
+    activeConfigId: String?,
+    configs: List<SavedConfig>,
+    onToggle: (SavedConfig) -> Unit,
+    onEditConfig: (SavedConfig) -> Unit,
+    onAddConfig: () -> Unit,
+    onOpenSettings: () -> Unit,
 ) {
-    Column(modifier = Modifier.fillMaxSize().padding(24.dp)) {
+    Column(modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp, vertical = 24.dp)) {
         Row(
             verticalAlignment = Alignment.CenterVertically,
             modifier = Modifier.fillMaxWidth(),
@@ -169,39 +214,55 @@ private fun MainScreen(
                 fontWeight = FontWeight.SemiBold,
             )
             Spacer(modifier = Modifier.weight(1f))
-            IconButton(onClick = onOpenConfig) {
+            IconButton(onClick = onAddConfig) {
+                Text("+", fontSize = 24.sp, color = TextSecondary)
+            }
+            IconButton(onClick = onOpenSettings) {
                 Text("⚙", fontSize = 22.sp, color = TextSecondary)
             }
         }
 
-        Column(
-            modifier = Modifier.weight(1f).fillMaxWidth(),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.Center,
-        ) {
-            ConnectButton(status = status, onClick = onToggle)
+        Spacer(modifier = Modifier.height(28.dp))
 
-            Spacer(modifier = Modifier.height(28.dp))
-
-            Text(
-                text = statusLabel(status),
-                color = statusColor(status),
-                fontSize = 18.sp,
-                fontWeight = FontWeight.Medium,
-            )
+        if (configs.isNotEmpty()) {
+            LazyColumn(
+                modifier = Modifier.weight(1f),
+                verticalArrangement = Arrangement.spacedBy(14.dp),
+            ) {
+                items(configs, key = { it.id }) { config ->
+                    val cardStatus = if (activeConfigId == config.id) status else ConnectionStatus.IDLE
+                    ConfigInfoCard(
+                        config = config,
+                        status = cardStatus,
+                        onToggle = { onToggle(config) },
+                        onLongPress = { onEditConfig(config) },
+                    )
+                }
+            }
 
             if (status == ConnectionStatus.ERROR && message.isNotBlank()) {
-                Spacer(modifier = Modifier.height(8.dp))
+                Spacer(modifier = Modifier.height(12.dp))
                 Text(
                     text = message,
-                    color = TextSecondary,
+                    color = StatusError,
                     fontSize = 13.sp,
-                    modifier = Modifier.padding(horizontal = 32.dp),
                 )
-            } else if (!hasConfig) {
+            }
+        } else {
+            Column(
+                modifier = Modifier.weight(1f).fillMaxWidth(),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.Center,
+            ) {
+                Text(
+                    text = "Нет добавленной конфигурации",
+                    color = TextPrimary,
+                    fontSize = 16.sp,
+                    fontWeight = FontWeight.Medium,
+                )
                 Spacer(modifier = Modifier.height(8.dp))
                 Text(
-                    text = "Нажмите ⚙ и вставьте client.yaml",
+                    text = "Нажмите + чтобы добавить client.yaml",
                     color = TextSecondary,
                     fontSize = 13.sp,
                 )
@@ -210,29 +271,17 @@ private fun MainScreen(
     }
 }
 
-private fun statusLabel(status: ConnectionStatus): String = when (status) {
-    ConnectionStatus.IDLE -> "Отключено"
-    ConnectionStatus.CONNECTING -> "Подключение..."
-    ConnectionStatus.CONNECTED -> "Подключено"
-    ConnectionStatus.ERROR -> "Ошибка подключения"
-}
-
-@Composable
-private fun statusColor(status: ConnectionStatus): Color = when (status) {
-    ConnectionStatus.CONNECTED -> StatusConnected
-    ConnectionStatus.ERROR -> StatusError
-    ConnectionStatus.CONNECTING -> AccentLavenderBright
-    ConnectionStatus.IDLE -> TextSecondary
-}
-
 @Composable
 private fun ConfigScreen(
     yaml: String,
+    isEditing: Boolean,
     onYamlChange: (String) -> Unit,
     onSave: () -> Unit,
+    onDelete: () -> Unit,
     onBack: () -> Unit,
-    onViewLog: () -> Unit,
 ) {
+    var showDeleteConfirm by remember { mutableStateOf(false) }
+
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -244,7 +293,12 @@ private fun ConfigScreen(
             IconButton(onClick = onBack) {
                 Text("←", fontSize = 22.sp, color = TextPrimary)
             }
-            Text("Конфигурация", color = TextPrimary, fontSize = 20.sp, fontWeight = FontWeight.SemiBold)
+            Text(
+                if (isEditing) "Редактировать конфигурацию" else "Добавить конфигурацию",
+                color = TextPrimary,
+                fontSize = 20.sp,
+                fontWeight = FontWeight.SemiBold,
+            )
         }
 
         Text(
@@ -279,6 +333,56 @@ private fun ConfigScreen(
             Text("Сохранить")
         }
 
+        if (isEditing) {
+            OutlinedButton(
+                onClick = { showDeleteConfirm = true },
+                colors = ButtonDefaults.outlinedButtonColors(contentColor = StatusError),
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Text("Удалить конфигурацию")
+            }
+        }
+    }
+
+    if (showDeleteConfirm) {
+        AlertDialog(
+            onDismissRequest = { showDeleteConfirm = false },
+            title = { Text("Удалить конфигурацию?") },
+            text = { Text("Придётся снова вставить client.yaml, чтобы подключиться этим профилем.") },
+            confirmButton = {
+                TextButton(onClick = {
+                    showDeleteConfirm = false
+                    onDelete()
+                }) { Text("Удалить", color = StatusError) }
+            },
+            dismissButton = {
+                TextButton(onClick = { showDeleteConfirm = false }) { Text("Отмена") }
+            },
+            containerColor = BgSurface,
+            titleContentColor = TextPrimary,
+            textContentColor = TextSecondary,
+        )
+    }
+}
+
+@Composable
+private fun SettingsScreen(
+    onBack: () -> Unit,
+    onViewLog: () -> Unit,
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(20.dp),
+        verticalArrangement = Arrangement.spacedBy(14.dp),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            IconButton(onClick = onBack) {
+                Text("←", fontSize = 22.sp, color = TextPrimary)
+            }
+            Text("Настройки", color = TextPrimary, fontSize = 20.sp, fontWeight = FontWeight.SemiBold)
+        }
+
         OutlinedButton(onClick = onViewLog, modifier = Modifier.fillMaxWidth()) {
             Text("Посмотреть лог")
         }
@@ -287,7 +391,7 @@ private fun ConfigScreen(
 
 @Composable
 private fun LogScreen(onClose: () -> Unit) {
-    val context = androidx.compose.ui.platform.LocalContext.current
+    val context = LocalContext.current
     val logText = remember { FileLog.readAll() }
 
     Column(

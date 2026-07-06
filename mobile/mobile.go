@@ -12,12 +12,14 @@ package mobile
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net"
 	"time"
 
 	"phantom/internal/config"
 	"phantom/internal/netstack"
+	"phantom/internal/pingcheck"
 	"phantom/internal/protocol"
 	"phantom/internal/transport"
 	"phantom/internal/tunnel"
@@ -147,4 +149,27 @@ func (t *Tunnel) Stats() string {
 // IsAlive reports whether the underlying Phantom session is still connected.
 func (t *Tunnel) IsAlive() bool {
 	return t.inner != nil && t.inner.IsAlive()
+}
+
+// Ping resolves configYAML's server address and performs one full disguised
+// handshake (TCP connect + uTLS ClientHello + the WS-upgrade auth exchange -
+// the same cost a real Start incurs), timing it, then closes the connection
+// without building a tunnel. Meant for a UI to show "IP/latency" for a saved
+// config without actually connecting - safe to call repeatedly/periodically.
+// Returns a JSON blob {"ip":"1.2.3.4","latency_ms":42} (a plain string keeps
+// this gomobile-safe, same pattern as Stats). The actual work lives in
+// internal/pingcheck, shared with the Windows app.
+func Ping(configYAML string) (string, error) {
+	result, err := pingcheck.Ping(configYAML)
+	if err != nil {
+		return "", err
+	}
+	data, err := json.Marshal(struct {
+		IP        string `json:"ip"`
+		LatencyMs int64  `json:"latency_ms"`
+	}{IP: result.IP, LatencyMs: result.LatencyMs})
+	if err != nil {
+		return "", err
+	}
+	return string(data), nil
 }

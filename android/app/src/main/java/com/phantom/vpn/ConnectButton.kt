@@ -17,17 +17,19 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.unit.dp
 
 /**
- * Big circular power button that is the whole point of interaction on the main screen:
- * tap connects when idle/error, tap disconnects when connected, no-op while connecting.
+ * Circular power button: tap connects when idle/error, tap disconnects when connected,
+ * no-op while connecting. `size` defaults to the original full-screen dimensions but is
+ * overridable so the same composable fits inside the smaller config info block.
  */
 @Composable
 fun ConnectButton(
     status: ConnectionStatus,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
+    size: androidx.compose.ui.unit.Dp = 180.dp,
 ) {
-    val size = 180.dp
-    val glowSize = 232.dp
+    val glowSize = size + 52.dp
+    val iconSize = size * (60f / 180f)
 
     Box(modifier = modifier.size(glowSize), contentAlignment = androidx.compose.ui.Alignment.Center) {
         if (status == ConnectionStatus.CONNECTED) {
@@ -59,7 +61,7 @@ fun ConnectButton(
                     trackColor = Color.Transparent,
                 )
             }
-            PowerGlyph(color = iconColorFor(status), size = 60.dp)
+            PowerGlyph(color = iconColorFor(status), size = iconSize)
         }
     }
 }

@@ -5,6 +5,7 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.Intent
+import android.graphics.drawable.Icon
 import android.net.VpnService
 import android.os.Build
 import android.os.ParcelFileDescriptor
@@ -18,7 +19,9 @@ class PhantomVpnService : VpnService() {
     companion object {
         const val ACTION_CONNECT = "com.phantom.vpn.CONNECT"
         const val ACTION_DISCONNECT = "com.phantom.vpn.DISCONNECT"
+        const val ACTION_SHOW_STATUS = "com.phantom.vpn.SHOW_STATUS"
         const val EXTRA_CONFIG_YAML = "config_yaml"
+        const val EXTRA_CONFIG_ID = "config_id"
 
         private const val CHANNEL_ID = "phantom_vpn"
         private const val NOTIFICATION_ID = 1
@@ -37,25 +40,60 @@ class PhantomVpnService : VpnService() {
                 return START_NOT_STICKY
             }
             ACTION_CONNECT -> {
-                val yaml = intent.getStringExtra(EXTRA_CONFIG_YAML)
-                if (yaml.isNullOrBlank()) {
-                    FileLog.e("connect requested with empty config")
+                var id = intent.getStringExtra(EXTRA_CONFIG_ID)
+                var yaml = intent.getStringExtra(EXTRA_CONFIG_YAML)?.takeIf { it.isNotBlank() }
+
+                if (yaml == null) {
+                    // The notification's own "Подключить" action carries no fresh extras
+                    // (its PendingIntent is built once) - resume the last-active config,
+                    // falling back to the first saved one if there's no prior session.
+                    val saved = ConfigStore.loadAll(this)
+                    val resumed = ConfigStore.loadLastActiveId(this)?.let { last -> saved.find { it.id == last } }
+                        ?: saved.firstOrNull()
+                    id = resumed?.id
+                    yaml = resumed?.yaml
+                }
+
+                if (yaml == null || id == null) {
+                    FileLog.e("connect requested with no saved config")
                     VpnStateHolder.update(ConnectionStatus.ERROR, "Missing client.yaml contents")
-                    stopSelf()
+                    showPersistentNotification(ConnectionStatus.ERROR)
                     return START_NOT_STICKY
                 }
-                connect(yaml)
+                ConfigStore.saveLastActiveId(this, id)
+                connect(id, yaml)
+            }
+            ACTION_SHOW_STATUS -> {
+                // Just (re)posts the notification for whatever the current state already
+                // is - never touches the tunnel, so it's safe to call on every app launch.
+                showPersistentNotification(VpnStateHolder.state.value.status)
+                return START_NOT_STICKY
             }
         }
         return START_STICKY
     }
 
-    private fun connect(configYaml: String) {
+    private fun connect(configId: String, configYaml: String) {
         FileLog.i("connect: establishing tunnel")
-        VpnStateHolder.update(ConnectionStatus.CONNECTING, "Establishing tunnel...")
-        startForeground(NOTIFICATION_ID, buildNotification("Connecting..."))
+        VpnStateHolder.update(ConnectionStatus.CONNECTING, "Establishing tunnel...", configId)
+        showPersistentNotification(ConnectionStatus.CONNECTING)
 
         executor.execute {
+            // Tear down any previous tunnel first - switching from one saved config to
+            // another reuses this same connect() call, not a separate disconnect step.
+            try {
+                tunnel?.stop()
+            } catch (e: Throwable) {
+                FileLog.e("tunnel stop error (switching config)", e)
+            }
+            tunnel = null
+            try {
+                tunInterface?.close()
+            } catch (e: Throwable) {
+                FileLog.e("tun close error (switching config)", e)
+            }
+            tunInterface = null
+
             try {
                 val pfd = Builder()
                     .setSession("Phantom")
@@ -70,6 +108,8 @@ class PhantomVpnService : VpnService() {
                 if (pfd == null) {
                     FileLog.e("VpnService.Builder.establish() returned null (permission not granted)")
                     VpnStateHolder.update(ConnectionStatus.ERROR, "VPN permission not granted")
+                    showPersistentNotification(ConnectionStatus.ERROR)
+                    stopForeground(STOP_FOREGROUND_DETACH)
                     stopSelf()
                     return@execute
                 }
@@ -86,11 +126,11 @@ class PhantomVpnService : VpnService() {
                 tunnel = Mobile.start(configYaml, pfd.fd.toLong(), MTU.toLong(), protector)
 
                 FileLog.i("Mobile.start returned, tunnel connected")
-                VpnStateHolder.update(ConnectionStatus.CONNECTED, "Connected")
-                updateNotification("Connected")
+                VpnStateHolder.update(ConnectionStatus.CONNECTED, "Connected", configId)
+                showPersistentNotification(ConnectionStatus.CONNECTED)
             } catch (e: Throwable) {
                 FileLog.e("connect failed", e)
-                VpnStateHolder.update(ConnectionStatus.ERROR, e.message ?: "connection failed")
+                VpnStateHolder.update(ConnectionStatus.ERROR, e.message ?: "connection failed", configId)
                 disconnect()
             }
         }
@@ -113,7 +153,11 @@ class PhantomVpnService : VpnService() {
             tunInterface = null
 
             VpnStateHolder.update(ConnectionStatus.IDLE, "")
-            stopForeground(STOP_FOREGROUND_REMOVE)
+            // Refresh the notification to its idle/"Подключить" form and only then detach
+            // from foreground - DETACH (not REMOVE) leaves the ongoing notification posted
+            // so it stays in the shade after this service instance stops.
+            showPersistentNotification(ConnectionStatus.IDLE)
+            stopForeground(STOP_FOREGROUND_DETACH)
             stopSelf()
         }
     }
@@ -128,12 +172,24 @@ class PhantomVpnService : VpnService() {
         super.onRevoke()
     }
 
-    private fun buildNotification(text: String): Notification {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val channel = NotificationChannel(
-                CHANNEL_ID, "Phantom VPN", NotificationManager.IMPORTANCE_LOW
-            )
-            getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
+    /** Posts/refreshes the always-visible connect/disconnect notification for [status]. */
+    private fun showPersistentNotification(status: ConnectionStatus) {
+        val notification = buildNotification(status)
+        if (status == ConnectionStatus.CONNECTING || status == ConnectionStatus.CONNECTED) {
+            startForeground(NOTIFICATION_ID, notification)
+        } else {
+            getSystemService(NotificationManager::class.java).notify(NOTIFICATION_ID, notification)
+        }
+    }
+
+    private fun buildNotification(status: ConnectionStatus): Notification {
+        ensureChannel()
+
+        val (text, actionLabel, actionIntent) = when (status) {
+            ConnectionStatus.CONNECTED -> Triple("Подключено", "Отключить", disconnectPendingIntent())
+            ConnectionStatus.CONNECTING -> Triple("Подключение...", "Отменить", disconnectPendingIntent())
+            ConnectionStatus.ERROR -> Triple("Ошибка подключения", "Подключить", connectPendingIntent())
+            ConnectionStatus.IDLE -> Triple("Отключено", "Подключить", connectPendingIntent())
         }
 
         val openAppIntent = PendingIntent.getActivity(
@@ -142,17 +198,34 @@ class PhantomVpnService : VpnService() {
             PendingIntent.FLAG_IMMUTABLE
         )
 
+        val actionIcon = Icon.createWithResource(this, R.drawable.ic_notification)
+
         return Notification.Builder(this, CHANNEL_ID)
             .setContentTitle("Phantom VPN")
             .setContentText(text)
             .setSmallIcon(R.drawable.ic_notification)
             .setContentIntent(openAppIntent)
+            .addAction(Notification.Action.Builder(actionIcon, actionLabel, actionIntent).build())
             .setOngoing(true)
             .build()
     }
 
-    private fun updateNotification(text: String) {
-        val manager = getSystemService(NotificationManager::class.java)
-        manager.notify(NOTIFICATION_ID, buildNotification(text))
+    private fun ensureChannel() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val channel = NotificationChannel(
+                CHANNEL_ID, "Phantom VPN", NotificationManager.IMPORTANCE_LOW
+            )
+            getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
+        }
+    }
+
+    private fun connectPendingIntent(): PendingIntent {
+        val intent = Intent(this, PhantomVpnService::class.java).apply { action = ACTION_CONNECT }
+        return PendingIntent.getService(this, 1, intent, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
+    }
+
+    private fun disconnectPendingIntent(): PendingIntent {
+        val intent = Intent(this, PhantomVpnService::class.java).apply { action = ACTION_DISCONNECT }
+        return PendingIntent.getService(this, 2, intent, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
     }
 }

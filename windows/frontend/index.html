@@ -6,36 +6,31 @@
   </head>
   <body>
     <div id="app">
-      <!-- Main screen -->
+      <!-- Main screen: list of saved config tiles -->
       <div id="screen-main" class="screen">
         <div class="header">
           <img src="./src/assets/images/phantom-emblem.png" class="emblem" alt="" />
           <div class="title">Phantom</div>
           <div class="spacer"></div>
+          <button id="btn-add" class="icon-btn" title="Добавить конфигурацию">&#43;</button>
           <button id="btn-gear" class="icon-btn" title="Настройки">&#9881;</button>
         </div>
 
-        <div class="center">
-          <button id="btn-power" class="power-btn idle">
-            <svg viewBox="0 0 24 24" class="power-icon">
-              <path d="M12 2v9" stroke-linecap="round" />
-              <path d="M6.5 5.5a8 8 0 1 0 11 0" stroke-linecap="round" fill="none" />
-            </svg>
-            <svg class="spinner" viewBox="0 0 50 50">
-              <circle cx="25" cy="25" r="20" fill="none" stroke-width="4" />
-            </svg>
-          </button>
+        <div id="config-list" class="config-list"></div>
 
-          <div id="status-text" class="status-text">Отключено</div>
-          <div id="hint-text" class="hint-text">Нажмите &#9881; и вставьте client.yaml</div>
+        <div id="empty-state" class="empty-state hidden">
+          <div class="empty-title">Нет добавленной конфигурации</div>
+          <div class="empty-hint">Нажмите + чтобы добавить client.yaml</div>
         </div>
+
+        <div id="error-text" class="error-text hidden"></div>
       </div>
 
-      <!-- Config screen -->
+      <!-- Add/edit config screen -->
       <div id="screen-config" class="screen hidden">
         <div class="header">
           <button id="btn-back-config" class="icon-btn">&#8592;</button>
-          <div class="title">Конфигурация</div>
+          <div id="config-screen-title" class="title">Добавить конфигурацию</div>
         </div>
         <div class="content">
           <div class="label">Вставьте содержимое client.yaml целиком:</div>
@@ -43,6 +38,17 @@
           <div class="row">
             <button id="btn-save" class="btn btn-primary">Сохранить</button>
           </div>
+          <button id="btn-delete" class="btn btn-danger hidden">Удалить конфигурацию</button>
+        </div>
+      </div>
+
+      <!-- Settings screen -->
+      <div id="screen-settings" class="screen hidden">
+        <div class="header">
+          <button id="btn-back-settings" class="icon-btn">&#8592;</button>
+          <div class="title">Настройки</div>
+        </div>
+        <div class="content">
           <button id="btn-view-log" class="btn btn-outline">Посмотреть лог</button>
         </div>
       </div>
@@ -56,6 +62,18 @@
         <div class="content">
           <pre id="log-text" class="log-text"></pre>
           <button id="btn-copy-log" class="btn btn-primary">Скопировать</button>
+        </div>
+      </div>
+
+      <!-- Delete confirmation overlay -->
+      <div id="delete-confirm" class="overlay hidden">
+        <div class="dialog">
+          <div class="dialog-title">Удалить конфигурацию?</div>
+          <div class="dialog-text">Придётся снова вставить client.yaml, чтобы подключиться этим профилем.</div>
+          <div class="dialog-row">
+            <button id="btn-delete-cancel" class="btn btn-outline">Отмена</button>
+            <button id="btn-delete-confirm" class="btn btn-danger">Удалить</button>
+          </div>
         </div>
       </div>
     </div>
