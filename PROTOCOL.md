@@ -9,9 +9,9 @@ Repo root: `phantom/` (on disk: `phantom-tls-updated/`). Go module: `phantom` (G
 
 This is a ground-up hardened rewrite of an earlier prototype (informally "v1", kept in
 a sibling directory as a reference/fallback and not otherwise relevant here). Every
-design decision below exists specifically to close a weakness identified in that
-prototype: a self-signed certificate baked into the binary, no forward secrecy, a
-distinctive fixed-size frame sent immediately after the TLS handshake, unauthenticated
+design decision in the wire protocol exists specifically to close a weakness identified
+in that prototype: a self-signed certificate baked into the binary, no forward secrecy,
+a distinctive fixed-size frame sent immediately after the TLS handshake, unauthenticated
 probes getting silence instead of realistic behavior, and padding that was scaffolded
 but never wired in.
 
@@ -26,12 +26,24 @@ operator controls. Authentication and key exchange are smuggled inside what look
 an unremarkable WebSocket-upgrade HTTP request; anything that isn't authenticated gets
 served a real small decoy website instead of being dropped.
 
-Two clients share one Go implementation:
-- **Desktop** (`cmd/client`): local SOCKS5 (`127.0.0.1:1080`) + HTTP CONNECT
-  (`127.0.0.1:1081`) proxy, plus a Windows tray manager (`cmd/vpn`).
-- **Android** (`android/`): a real system-wide VPN via `VpnService`, backed by the same
-  Go core (`mobile/`) compiled with `gomobile bind`. Designed so an iOS client could
-  reuse the same core later (see §11).
+One Go implementation of the protocol (`internal/`) backs three clients:
+
+- **Desktop proxy** (`cmd/client`): local SOCKS5 (`127.0.0.1:1080`) + HTTP CONNECT
+  (`127.0.0.1:1081`) proxy, with an interactive console manager (`cmd/vpn`) that starts
+  it and toggles the Windows system proxy setting. Doesn't need Administrator; only
+  tunnels traffic from apps explicitly pointed at the proxy.
+- **Windows app** (`windows/`, `phantom.exe`): a full system-wide VPN via a Wintun
+  adapter (Wails v2 GUI). All IP traffic on the machine goes through the tunnel, not
+  just proxy-aware apps. See §11.
+- **Android app** (`android/`, package `com.phantom.vpn`): a real system-wide VPN via
+  `VpnService`, backed by the same Go core (`mobile/`) compiled with `gomobile bind`.
+  See §10.
+
+The Windows and Android apps share one packet-routing core (`internal/netstack`, a
+gVisor userspace network stack) and one "preview a server without connecting" core
+(`internal/pingcheck`) — the only genuinely platform-specific code in either app is how
+raw IP packets get in and out (a raw file descriptor from Android's `VpnService` vs. a
+Wintun device on Windows) and the GUI itself.
 
 ---
 
@@ -42,31 +54,44 @@ phantom/
 ├── cmd/
 │   ├── client/main.go     Desktop client: SOCKS5 + HTTP CONNECT proxy
 │   ├── server/main.go     Server: ACME cert, disguised handshake, TCP+UDP relay, decoy
-│   ├── vpn/main.go        Windows tray manager for cmd/client + system proxy toggling
+│   ├── vpn/main.go        Interactive console manager for cmd/client (on/off/status/log
+│   │                      commands) + Windows system-proxy toggling - NOT a tray icon,
+│   │                      despite the name; see §11 for the actual tray icon
 │   └── keygen/main.go     Generates the server's long-term X25519 keypair + PSK
 ├── internal/
-│   ├── config/             YAML config loading/parsing (client.yaml / server.yaml)
+│   ├── common/
+│   │   └── pool.go           Small shared byte-slice sync.Pool
+│   ├── config/                YAML config loading/parsing (client.yaml / server.yaml)
 │   ├── protocol/
-│   │   ├── frame.go          6-byte binary frame header + real bucket padding
-│   │   └── crypto.go         Ephemeral-ECDH-derived HKDF keys + XChaCha20-Poly1305
+│   │   ├── frame.go             6-byte binary frame header + real bucket padding
+│   │   └── crypto.go             Ephemeral-ECDH-derived HKDF keys + XChaCha20-Poly1305
 │   ├── handshake/
-│   │   └── handshake.go      Disguised WebSocket-upgrade handshake + embedded auth/ECDH
+│   │   └── handshake.go          Disguised WebSocket-upgrade handshake + embedded auth/ECDH
 │   ├── transport/
-│   │   ├── tls_client.go     uTLS client dial (Chrome/Firefox/Safari fingerprint)
-│   │   ├── tls_server.go     Real ACME (Let's Encrypt) cert via HTTP-01 + decoy dispatch
-│   │   ├── decoy.go          Realistic fallback site for unauthenticated connections
-│   │   └── connpool.go       Pool of parallel TLS connections, byte-based rotation
+│   │   ├── tls_client.go         uTLS client dial (Chrome/Firefox/Safari fingerprint)
+│   │   ├── tls_server.go         Real ACME (Let's Encrypt) cert via HTTP-01 + decoy dispatch
+│   │   ├── decoy.go              Realistic fallback site for unauthenticated connections
+│   │   └── connpool.go           Pool of parallel TLS connections, byte-based rotation
 │   ├── tunnel/
-│   │   ├── multiplexer.go    Frame read/write loops, stream table (ported, see §4.3)
-│   │   ├── stream.go          Per-stream Read/Write/Close
-│   │   └── session.go         Open/OpenUDP/Accept over a Multiplexer
-│   └── proxy/
-│       ├── socks5.go          Client-side SOCKS5 → session.Open()
-│       ├── http_proxy.go      Client-side HTTP CONNECT → session.Open()
-│       └── direct.go          Server-side outbound: TCP io.Copy + UDP datagram relay
-├── mobile/mobile.go        gomobile-bind entry point: gVisor netstack ⇄ Phantom session
-├── android/                 Kotlin/Compose app (package com.phantom.vpn) using mobile.aar
+│   │   ├── multiplexer.go        Frame read/write loops, stream table (ported, see §4.3)
+│   │   ├── stream.go              Per-stream Read/Write/Close
+│   │   └── session.go             Open/OpenUDP/Accept over a Multiplexer
+│   ├── proxy/
+│   │   ├── socks5.go              Client-side SOCKS5 → session.Open()
+│   │   ├── http_proxy.go          Client-side HTTP CONNECT → session.Open()
+│   │   └── direct.go              Server-side outbound: TCP io.Copy + UDP datagram relay
+│   ├── netstack/
+│   │   └── netstack.go            Shared gVisor wiring: stack.New, NIC, TCP/UDP forwarders,
+│   │                              splice loops - platform-neutral, fed by either a raw fd
+│   │                              (Android) or a channel.Endpoint (Windows) - see §9
+│   └── pingcheck/
+│       └── pingcheck.go           One real disguised handshake, timed, no tunnel built -
+│                                  backs both apps' "preview a saved server" UI feature
+├── mobile/mobile.go        gomobile-bind entry point: internal/netstack ⇄ Phantom session
+├── android/                 Kotlin/Compose app (package com.phantom.vpn) using mobile.aar - §10
+├── windows/                 Wails v2 app (Go + HTML/CSS/JS), phantom.exe - §11
 ├── configs/                 Working client.yaml / server.yaml
+├── scripts/install.sh       One-command server install/uninstall (curl | sh)
 └── Makefile
 ```
 
@@ -100,13 +125,15 @@ phantom/
    before encryption.
 ```
 
+A `Ping` (§9) is the same steps 1-3 only, closing the connection immediately after step
+3 succeeds instead of proceeding to step 4 — used by both GUI apps to show a saved
+config's live latency without building a tunnel.
+
 ---
 
 ## 4. Wire protocol
 
 ### 4.1 Frame format (`internal/protocol/frame.go`)
-
-Unchanged 6-byte header shape:
 
 ```
 Offset  Size   Field
@@ -131,7 +158,7 @@ Frame types:
 
 Flags: only `FlagUDP = 0x04` (marks a stream as UDP-relay rather than TCP-relay, see §7).
 
-### 4.2 Padding (new vs. the earlier prototype)
+### 4.2 Padding
 
 `PadPlaintext`/`UnpadPlaintext` wrap every `FrameData` plaintext as
 `[2-byte real length][real payload][random padding]`, sized up to the nearest of
@@ -148,10 +175,10 @@ transparent to the multiplexer and every caller.
 `internal/tunnel/multiplexer.go` is carried over with its `sendAuth`/`expectAuth`/
 `WaitForAuth`/`handleAuth` machinery intact, but every call site in this codebase
 constructs it with `sendAuth=false` and no `expectAuth` (defaults false) - see
-`cmd/client/main.go`, `cmd/server/main.go`, `mobile/mobile.go`, and the test helpers.
-Real authentication now happens earlier, in `internal/handshake`, before a
-`Multiplexer` is even created. Keeping the dead code path rather than deleting it was a
-deliberate choice to minimize the surface area of the port; `protocol.FrameAuth`,
+`cmd/client/main.go`, `cmd/server/main.go`, `mobile/mobile.go`, `windows/wintun.go`, and
+the test helpers. Real authentication now happens earlier, in `internal/handshake`,
+before a `Multiplexer` is even created. Keeping the dead code path rather than deleting
+it was a deliberate choice to minimize the surface area of the port; `protocol.FrameAuth`,
 `protocol.ComputeAuthTag`, `protocol.VerifyAuthTag` all still exist purely so this file
 compiles unchanged.
 
@@ -159,9 +186,7 @@ compiles unchanged.
 
 ## 5. The disguised handshake (`internal/handshake/handshake.go`)
 
-This is the actual security core of the project - the mechanism that replaces the
-earlier prototype's bare "AUTH frame as the first bytes after the TLS handshake" (a
-signature no real browser produces) and its lack of forward secrecy.
+This is the actual security core of the project.
 
 ### 5.1 Key exchange
 
@@ -169,18 +194,16 @@ signature no real browser produces) and its lack of forward secrecy.
   half goes in `server.yaml`'s `private_key`, the public half in every client's
   `client.yaml` as `server_public_key`).
 - The **client** generates a **fresh X25519 ephemeral keypair on every single
-  connection** and computes `ecdhSecret = X25519(clientEphemeralPriv, serverStaticPub)`.
-  The server computes the same value the other way:
-  `X25519(serverStaticPriv, clientEphemeralPub)`.
+  connection** (including every `Ping`) and computes
+  `ecdhSecret = X25519(clientEphemeralPriv, serverStaticPub)`. The server computes the
+  same value the other way: `X25519(serverStaticPriv, clientEphemeralPub)`.
 - `protocol.DeriveSessionKeys(ecdhSecret, psk, clientEphemeralPub, serverStaticPub)`
   (`internal/protocol/crypto.go`) mixes the ECDH secret **and** a long-term PSK **and**
   both public keys through HKDF-SHA256 to produce `InnerKey` (frame encryption) and
   `AuthKey` (handshake proof / dead in-band-AUTH code path).
-- **Forward secrecy**: because `ecdhSecret` is different on every connection (fresh
-  client ephemeral key each time), compromising the long-term PSK alone is no longer
-  enough to decrypt a previously captured session — unlike the earlier prototype, where
-  the key was 100% static and derived from the PSK alone. (Note the same caveat that
-  applies to any semi-static ECDH scheme like this, including XTLS Reality's identical
+- **Forward secrecy**: because `ecdhSecret` is different on every connection, compromising
+  the long-term PSK alone is not enough to decrypt a previously captured session.
+  (Caveat shared with any semi-static ECDH scheme, including XTLS Reality's identical
   approach: if the *server's* long-term private key is later compromised *and* the
   traffic was recorded, past sessions become computable, since the server's key is
   static. Full forward secrecy against that specific threat would need an
@@ -215,9 +238,10 @@ Connection: Upgrade
 Sec-WebSocket-Accept: <correctly computed per RFC 6455>
 ```
 
-...and the raw connection becomes the Phantom tunnel from that point on. Both the
-request and response are complete, protocol-correct HTTP/1.1 WebSocket-upgrade
-messages; nothing about their *shape* betrays the tunnel.
+...and the raw connection becomes the Phantom tunnel from that point on (or, for a
+`Ping`, the client closes it here). Both the request and response are complete,
+protocol-correct HTTP/1.1 WebSocket-upgrade messages; nothing about their *shape*
+betrays the tunnel.
 
 ### 5.3 Replay protection (channel binding)
 
@@ -247,7 +271,8 @@ completes and before ever calling the exporter — the ClientHello bytes are alr
 the wire by that point, so the fingerprint is unaffected, but `ExportKeyingMaterial`
 becomes available again. This is a real, previously-hit build/runtime error
 (`"ExportKeyingMaterial is unavailable when renegotiation is enabled"`); if this fix is
-ever reverted, every real connection attempt will fail at the handshake step.
+ever reverted, every real connection attempt (and every `Ping`) will fail at the
+handshake step.
 
 ### 5.4 Server-side dispatch (`ServerHandshake` return shape)
 
@@ -267,17 +292,22 @@ handles all three:
 
 ### 6.1 Client (`internal/transport/tls_client.go`)
 
-Same uTLS-based fingerprint mimicry as before (`chrome120`/`firefox120`/`safari16` via
-the `fingerprint` config field), but:
+`transport.Dial(ctx, *TLSClientConfig)` is the single client-side entry point every
+caller uses — `cmd/client`, `mobile.Start`, `windows/wintun.go`'s `StartWindows`, and
+`internal/pingcheck.Ping` all call it directly.
+
+- uTLS-based fingerprint mimicry (`chrome120`/`firefox120`/`safari16` via the
+  `fingerprint` config field).
 - **SNI is the operator's real domain**, not a borrowed/spoofed one.
-- **Certificate validation is real** (no `InsecureSkipVerify`) — since the server now
+- **Certificate validation is real** (no `InsecureSkipVerify`) — since the server
   presents a genuinely CA-signed certificate, the client validates it exactly like a
-  real browser would. This is a meaningful behavioral difference from a design that
-  fakes a certificate and has to skip validation to tolerate it.
-- `ProtectFD` hook unchanged from the mobile-VPN-routing-loop fix (see §9.4-equivalent
-  in `mobile.go`'s comments) — Android's `VpnService.protect()` is wired through a
-  `net.Dialer.Control` callback so the app's own connection to the server bypasses its
-  own VPN routing.
+  real browser would.
+- `ProtectFD` hook: on Android, wired to `VpnService.protect()` via a `net.Dialer.Control`
+  callback so the app's own connection to the server bypasses its own VPN routing (see
+  §10). Windows has no equivalent per-socket exemption API — `windows/wintun.go` solves
+  the same underlying problem with a routing-table trick instead (see §11.2). `Ping`
+  doesn't set `ProtectFD` at all since it never establishes a competing `0.0.0.0/0`
+  route in the first place.
 
 ### 6.2 Server (`internal/transport/tls_server.go`)
 
@@ -288,7 +318,7 @@ the `fingerprint` config field), but:
   HTTP responder needs port 80 reachable, purely for the infrequent (~every 60 days)
   issuance/renewal handshake with Let's Encrypt. Port 80 carries no VPN traffic.
 - Confirmed working against the live Let's Encrypt production API (not just staging):
-  `openssl s_client` against the deployed server shows `issuer=C=US, O=Let's Encrypt`.
+  `openssl s_client` against a deployed server shows `issuer=C=US, O=Let's Encrypt`.
 - `MinVersion: tls.VersionTLS13`.
 - Connections that negotiate the ALPN protocol `acme-tls/1` (an artifact of
   `autocert.Manager.TLSConfig()` always enabling ALPN-01 capability regardless of which
@@ -299,14 +329,14 @@ the `fingerprint` config field), but:
 
 ## 7. UDP relay
 
-Unchanged in design from the ideas in the earlier prototype, carried over intact: a
-stream opened with `FlagUDP` set (`Session.OpenUDP`) is treated by the server
+A stream opened with `FlagUDP` set (`Session.OpenUDP`) is treated by the server
 (`internal/proxy/direct.go`) as a UDP relay — `net.Dial("udp", target)`, with each
 `Write`/`Read` treated as exactly one datagram (relying on `Stream.Write` always
 producing exactly one `FrameData` frame per call, and `Stream.Read` returning exactly
 one queued frame's payload per call when the buffer is large enough — both guaranteed
-by `internal/tunnel/stream.go`). Idle timeout: 60 seconds. This is what lets the
-Android VPN relay DNS/QUIC/WebRTC and other UDP-based traffic, not just TCP.
+by `internal/tunnel/stream.go`). Idle timeout: 60 seconds. This is what lets the mobile
+and Windows VPN tunnels relay DNS/QUIC/WebRTC and other UDP-based traffic, not just TCP
+— see §9's forwarder setup.
 
 ---
 
@@ -319,11 +349,17 @@ domain: "yourdomain.com"             # required - SNI + Host header; must match 
 fingerprint: "chrome131"             # default if unset
 psk: "<64 hex chars>"                 # required - shared secret, one HKDF input alongside the ECDH secret
 server_public_key: "<64 hex chars>"   # required - server's static X25519 public key
-listen: "127.0.0.1:1080"              # default; desktop SOCKS5
-listen_http: "127.0.0.1:1081"         # default; desktop HTTP CONNECT
+listen: "127.0.0.1:1080"              # default; desktop SOCKS5 (cmd/client only)
+listen_http: "127.0.0.1:1081"         # default; desktop HTTP CONNECT (cmd/client only)
 pool_size: 4                          # default; parallel pooled connections
 log_level: "info"                     # not actually read by any logger; plain `log` package used unconditionally
 ```
+
+The Windows and Android apps import this exact same `client.yaml` text verbatim (pasted
+as a whole block, no separate parser on the Kotlin/JS side beyond a couple of scalar
+fields read for display — see §10/§11) and can each store several of them side by side.
+`listen`/`listen_http` are simply unused by those two apps, since they route all system
+traffic rather than exposing a local proxy port.
 
 ```yaml
 # server.yaml
@@ -337,28 +373,39 @@ decoy_site_dir: ""                    # optional; static files to serve to unaut
 log_level: "info"                     # unused, same caveat as client
 ```
 
-`cmd/keygen` prints a matched `private_key`/`server_public_key`/`psk` triple. Unlike
-the earlier prototype, every field here is used exactly as its name says: `psk` really
-is a flat symmetric secret, `private_key`/`server_public_key` really are an X25519
-keypair used in a real ECDH exchange, not window dressing around a de-facto symmetric
-value.
+`cmd/keygen` prints a matched `private_key`/`server_public_key`/`psk` triple.
+`scripts/install.sh` runs it automatically during a fresh server install and prints a
+ready-to-paste `client.yaml`.
 
 ---
 
-## 9. Mobile core (`mobile/mobile.go`)
+## 9. Shared netstack core (`internal/netstack`) and the mobile/Windows bridges
 
-Unchanged architecture from the design established for the earlier prototype's Android
-port: gVisor netstack (`gvisor.dev/gvisor/pkg/tcpip`) bridges Android's raw TUN file
-descriptor to the same `session.Open`/`OpenUDP` API used everywhere else, `Protector`
-lets the Android app exempt the tunnel's own outbound socket from its own VPN routing,
-and `Start(configYAML, tunFD, mtu, protector)` parses config, dials, and starts
-forwarding exactly like the desktop client does. Config field names changed to match
-§8 (`cfg.GetPSK()`/`cfg.GetServerPublicKey()` instead of the old `GetPublicKey()`), and
-`transport.TLSClientConfig` now carries `Domain`/`ServerPub` instead of `SNI`. See the
-mobile.go source comments for the full gVisor wiring details (netstack setup, TCP/UDP
-forwarders, `endpointTarget` address resolution) — that part of the design is
-unaffected by anything in this document's §5-§8 changes, since it operates purely in
-terms of the `Session`/`Stream` abstractions.
+`internal/netstack.New(session *tunnel.Session, linkEndpoint stack.LinkEndpoint, mtu int)`
+is the platform-neutral core both GUI apps build on: it constructs the gVisor
+`stack.Stack`, creates a NIC bound to whatever `LinkEndpoint` the caller hands in,
+enables promiscuous mode + spoofing (needed since the stack is relaying for arbitrary
+destinations, not terminating traffic addressed to itself), installs a
+`0.0.0.0/0`+`::/0` route table pointing at that NIC, and registers TCP/UDP forwarders
+that turn an inbound SYN/first-datagram into `session.Open`/`session.OpenUDP` calls,
+splicing bytes between the gVisor endpoint and the Phantom stream in both directions.
+Only TCP and UDP are registered — **no ICMP**, so ping-through-the-tunnel doesn't work
+end-to-end on either app (see §12).
+
+The only thing that differs per platform is how raw IP packets get into and out of that
+`LinkEndpoint`:
+
+- **Android** (`mobile/mobile.go`): `gvisor.dev/gvisor/pkg/tcpip/link/fdbased.New`
+  reads/writes the raw TUN file descriptor Android's `VpnService.Builder.establish()`
+  handed over. `mobile.Start(configYAML, tunFD, mtu, protector)` parses the config,
+  dials via `transport.Dial`, builds the `fdbased` endpoint, and calls
+  `netstack.New`. `mobile.Tunnel.Stop()`/`.Stats()`/`.IsAlive()` all just delegate to the
+  inner `netstack.Tunnel`.
+- **Windows** (`windows/wintun.go`): no raw fd exists on Windows, so
+  `gvisor.dev/gvisor/pkg/tcpip/link/channel.New` is used instead — a queue-based
+  endpoint with no OS handle requirement. Two goroutines pump packets between it and a
+  `golang.zx2c4.com/wireguard/tun` Wintun device (`pumpTunToChannel`/`pumpChannelToTun`).
+  See §11.2 for the routing-table setup this needs.
 
 `gvisor.dev/gvisor` is pinned to the exact pseudo-version Tailscale ships in production
 (`v0.0.0-20260224225140-573d5e7127a8`) rather than `@latest`, because the latest
@@ -367,39 +414,226 @@ upstream snapshot at development time had a broken test file that breaks plain
 and separately was missing Bazel-generated source files that the Tailscale-pinned
 version has checked in.
 
+### 9.1 `internal/pingcheck.Ping` — previewing a server without connecting
+
+Both apps show each saved config's live latency and resolved IP before (and while) the
+user is connected to it. `pingcheck.Ping(configYAML string) (Result, error)`:
+
+1. Parses the config, resolves the server host via `net.DefaultResolver.LookupIP(ctx,
+   "ip4", host)` — **`"ip4"` specifically, not a dual-stack lookup**: on at least one
+   real network this project was tested on, the AAAA query stalled for several seconds
+   before falling back to A, which dominated total connect time; skipping it outright
+   was the fix (see the identical fix in `windows/wintun.go`'s own server-address
+   resolution, §11.2).
+2. Dials via `transport.Dial` (the full disguised handshake, §5), timing from just
+   before the dial to just after it succeeds.
+3. Closes the connection immediately — no session, no tunnel, no netstack involved.
+
+Returns `{IP, LatencyMs}`. `mobile.Ping` wraps this as a JSON string (gomobile-safe
+return type, same pattern as `Tunnel.Stats()`); the Windows `App.Ping` method does the
+same for its Wails binding. Both UIs poll this on a repeating timer (every ~6s) per
+saved config tile and independently resolve a country name/flag for the returned IP via
+a public geo-IP HTTP lookup (`ipapi.co` from both apps' own code, not through the Go
+core) - the one place in either app that calls a third party, purely for that cosmetic
+label (see §12).
+
+---
+
 ## 10. Android app (`android/`, package `com.phantom.vpn`)
 
-Kotlin + Jetpack Compose, dark/purple theme, a single large circular connect button as
-the primary interaction (tap to connect/disconnect), a gear icon opening a config
-screen where the full `client.yaml` text is pasted in (no separate YAML parser in
-Kotlin — the raw text goes straight into the Go core via `Mobile.start`). `FileLog`
-persists a plain-text log to the app's private storage with an in-app viewer/share
-screen, since diagnosing a startup crash with no ADB access was a real problem
-encountered during development. Config is stored via `EncryptedSharedPreferences` with
-a plain-prefs fallback if Keystore access throws on a given device/ROM.
+Kotlin + Jetpack Compose, dark/purple theme (`Theme.kt`). Manual state-based screen
+switching (a `Screen` enum in `MainActivity.kt`; no `NavHost`) across four screens:
 
-## 11. iOS portability path (not implemented in this repo)
+- **Main** (`MainScreen` in `MainActivity.kt`): a scrollable list of saved-config tiles
+  (`ConfigInfoCard`, `ConfigInfo.kt`), one per entry in `ConfigStore`. Each tile shows
+  the config's domain, resolved IP, live ping (`fetchPing`/`pingcheck.Ping` via the
+  `Mobile.ping` gomobile binding, polled every 6s independently per tile), and country +
+  flag (`fetchGeo`, `ipapi.co`; the flag itself is a real image fetched from
+  `flagcdn.com` and cached in memory, not the Unicode flag emoji — some Android system
+  images/devices lack flag glyphs in their emoji font and fall back to showing the bare
+  two-letter code, the same gap Windows has structurally, see §11.3). A circular connect
+  button (`ConnectButton.kt`, reused at a smaller `size` for tiles) sits on the right of
+  each tile; the currently-connected tile additionally gets a purple→pink→blue gradient
+  border (`Modifier.border(width, Brush, shape)`). Header has a "+" button (always adds
+  a new tile, never overwrites an existing one) and a gear icon.
+- **Add/edit config** (`ConfigScreen`): a textarea for the full `client.yaml` text plus
+  Save; reached either via "+" (blank, adds a new `SavedConfig`) or a long-press on an
+  existing tile (pre-filled, edits that tile in place and offers a confirm-gated
+  "Удалить конфигурацию" delete button).
+- **Settings** (`SettingsScreen`): just a "Посмотреть лог" button — config
+  management moved out of here into the dedicated add/edit screen above.
+- **Log** (`LogScreen`): shows `FileLog`'s persisted plain-text log with a share button.
 
-Same as previously designed: `gomobile bind -target=ios ./mobile` would produce an
-`.xcframework` from the identical source used for Android. The only platform-specific
-piece is the link-layer glue in `mobile.go`'s `setupNetstack` (`fdbased.New` reading a
-raw Android fd directly); iOS's `NEPacketTunnelProvider` would need gVisor's
-callback-driven `channel.Endpoint` instead, since `NetworkExtension` doesn't hand out a
-raw fd. Everything else — config parsing, the disguised handshake, TCP/UDP forwarders,
-splicing — carries over unchanged.
+### 10.1 Config storage (`ConfigStore.kt`)
 
-## 12. Known gaps / residual risks
+A list of `SavedConfig(id: String, yaml: String)`, backed by `EncryptedSharedPreferences`
+(falling back to plain `SharedPreferences` if Android Keystore access throws on a given
+device/ROM — `FileLog.e(...)` records which path was taken). One-time migration: if the
+old pre-multi-config single `"client_yaml"` key exists and the new list key doesn't,
+it's wrapped into a one-entry list and the old key removed.
+
+### 10.2 Connecting, switching, and the persistent notification
+
+`PhantomVpnService` (a `VpnService` subclass) exposes `ACTION_CONNECT` (with
+`EXTRA_CONFIG_ID`/`EXTRA_CONFIG_YAML`), `ACTION_DISCONNECT`, and `ACTION_SHOW_STATUS`.
+Tapping a different tile's connect button while another is already active reuses the
+same `connect()` call — it tears down the previous tunnel/TUN fd before establishing the
+new one, rather than requiring an explicit disconnect first.
+
+A persistent, ongoing notification (posted via `startForeground`/`NotificationManager.notify`
+depending on state, never removed on disconnect — `stopForeground(false)`/`STOP_FOREGROUND_DETACH`
+detaches without clearing it) mirrors the connect/disconnect state with an action button
+("Подключить"/"Отключить"). Tapping "Подключить" from the notification (no fresh config
+extras available from a static `PendingIntent`) resumes whichever config ID was last
+connected (`VpnStateHolder`'s `activeConfigId`, persisted across restarts), falling back
+to the first saved config if none. On Android 13+ (`TIRAMISU`), `MainActivity` requests
+the runtime `POST_NOTIFICATIONS` permission on first launch — without it the
+notification silently never appears, since the manifest `<uses-permission>` declaration
+alone isn't sufficient starting with that API level.
+
+`VpnStateHolder` (`VpnState.kt`) is a simple `MutableStateFlow<VpnState>` bridge between
+the service and the Compose UI; `VpnState` carries `status`/`message`/`activeConfigId`
+(the last reset to `null` whenever `status` goes back to `IDLE`).
+
+### 10.3 `Protector` / routing-loop prevention
+
+Once `VpnService.Builder.establish()` installs a `0.0.0.0/0`+`::/0` route through the
+TUN interface, the app's own outbound connection to the Phantom server would be
+captured by its own tunnel and never complete. `PhantomVpnService` passes a `Protector`
+implementation (`Protect(fd) = this@PhantomVpnService.protect(fd)`, i.e.
+`VpnService.protect()`) into `Mobile.start`, which threads it into
+`transport.TLSClientConfig.ProtectFD` (§6.1) via a `net.Dialer.Control` callback that
+runs before the TCP connection completes.
+
+---
+
+## 11. Windows app (`windows/`, `phantom.exe`)
+
+A Wails v2 app: Go backend (`App` struct in `app.go`, methods bound to
+`window.go.main.App.*` in JS) + plain HTML/CSS/JS frontend (`frontend/`, no framework) in
+the OS's native WebView2 control. Visually mirrors the Android app (same palette, same
+tile layout, same gradient-border-when-connected treatment) since both are driven by
+the same underlying data shape (`SavedConfig{id, yaml}`, ping/geo polling per tile).
+
+### 11.1 Why a second, heavier client alongside `cmd/client`
+
+`cmd/client`/`cmd/vpn` remain as a lighter-weight, no-Administrator-required option that
+only tunnels traffic from apps explicitly pointed at the SOCKS5/HTTP proxy. `windows/`
+is a full system-wide VPN — all IP traffic goes through it — which requires creating a
+TUN adapter and modifying the routing table, both of which need Administrator
+(`build/windows/wails.exe.manifest` sets `requestedExecutionLevel="requireAdministrator"`,
+so Windows shows the UAC prompt on launch automatically).
+
+### 11.2 `StartWindows` (`wintun.go`) — order of operations matters
+
+Once a `0.0.0.0/0` route exists through the TUN interface, this process's own connection
+to the Phantom server would loop back into the tunnel it's building — the same class of
+bug as Android's routing loop (§10.3), but Windows has no per-socket exemption API, so
+the fix is routing-table specificity instead. `StartWindows` does, strictly in this
+order:
+
+1. Resolve the server's IP (`net.DefaultResolver.LookupIP(ctx, "ip4", host)` — see the
+   AAAA-stall note in §9.1, identical fix applied here) and find the current default
+   gateway (`route print -4 0.0.0.0`, picking the lowest-metric entry whose gateway is
+   an actual IP — this naturally skips any *other* already-active VPN's own `On-link`
+   default route, which has no real gateway address to parse).
+2. Add a `/32` host route for the server IP via that *original* gateway
+   (`route add <ip> mask 255.255.255.255 <gateway>`) — more specific than the `/0` route
+   added in step 5, so Windows' longest-prefix-match always prefers it regardless of
+   metric.
+3. Only now dial and establish the Phantom session (`transport.Dial`, pooled via
+   `transport.NewConnPool`).
+4. Create the Wintun device (`golang.zx2c4.com/wireguard/tun.CreateTUN`), assign it
+   `10.10.0.2/24`, set DNS (`netsh interface ip set/add dns ... validate=no` — omitting
+   `validate=no` was previously the single largest chunk of connect time, since `netsh`
+   by default probes each DNS server for reachability before committing, which stalls
+   for several seconds on a freshly-created adapter with routing not fully up yet).
+5. Pin the new adapter's own interface metric to `1`
+   (`netsh interface ipv4 set interface <name> metric=1`) *and* add the `0.0.0.0/0` route
+   at route-metric `1` (`netsh interface ipv4 add route 0.0.0.0/0 name=<name> metric=1`).
+   Windows' actual route preference is `route metric + interface metric`, not the route
+   metric alone — a fresh Wintun adapter's automatically-computed interface metric can
+   outrank even a fast physical NIC, so the `0.0.0.0/0` route can silently lose the
+   routing race (traffic keeps going out the old path, external IP never changes) unless
+   the interface's own metric is also pinned low, not just the route's.
+6. Bridge the Wintun device into `internal/netstack.New` via a gVisor `channel.Endpoint`
+   (§9) and start the TCP/UDP forwarders.
+
+`Stop()` tears down in reverse, and explicitly `route delete`s the step-2 bypass host
+route — it isn't tied to the tunnel interface's lifetime the way the `0.0.0.0/0` route
+is (Windows drops routes bound to an interface's LUID automatically once that interface
+disappears; a route via the *physical* gateway needs an explicit removal). Switching
+from one saved config to another (`App.Connect` called again while a tunnel is already
+up) tears down the previous tunnel first, same as the Android side.
+
+All of `wintun.go`'s `route`/`netsh` subprocess calls run through a `runNetCmd` helper
+that sets `syscall.SysProcAttr{HideWindow: true}` (otherwise each one flashes a visible
+console window, since this is a GUI app with no console of its own) and logs the exact
+command and its output to `phantom.log` either way — useful for diagnosing exactly which
+step failed without attaching a debugger.
+
+`wintun.dll` (the actual driver, same one WireGuard-for-Windows uses) is embedded in the
+binary via `//go:embed` and extracted next to the running exe on first launch
+(`wintun_dll.go`) — end users still only download one `.exe`.
+
+### 11.3 Multi-config storage and Ping (`configstore.go`, `app.go`)
+
+Same `SavedConfig{ID, Yaml}` list shape as Android, persisted as JSON
+(`os.UserConfigDir()/Phantom/configs.json`) with the same one-time migration from the
+pre-multi-config single `client.yaml` file. `App` exposes `ListConfigs`/`AddConfig`/
+`UpdateConfig`/`DeleteConfig`/`Connect(id, yaml)`/`Disconnect`/`Status`/`Ping`/`ReadLog`
+to the frontend. `Ping` wraps `internal/pingcheck.Ping` (§9.1) the same way `mobile.Ping`
+does. The frontend (`main.js`) fetches country/flag from `ipapi.co`/`flagcdn.com`
+directly (not through Go) — real flag *images*, not emoji, since Windows' Segoe UI Emoji
+font has no flag glyphs at all and would otherwise show the bare two-letter country code
+(a deliberate, longstanding Microsoft choice, not a WebView2 bug — confirmed by testing,
+not assumed).
+
+### 11.4 System tray (`tray.go`)
+
+`github.com/energye/systray` runs its own native message loop on a locked OS thread in
+a separate goroutine (`go runTray(app)` in `main.go`, alongside `wails.Run(...)` on the
+main goroutine) — the two event loops don't interfere with each other. Right-click shows
+a context menu (systray's default behavior when no `SetOnRClick` handler is registered):
+a disabled status label, a "Подключить"/"Отключить" toggle (mirrors the Android
+notification's last-active-config fallback logic exactly, §10.2), "Открыть"
+(`runtime.WindowShow`), and "Выход" (`Disconnect()` then `os.Exit(0)` — a hard exit,
+since it also needs to stop the tray's own native loop). Left-click also restores the
+window, as a convenience.
+
+Closing the main window (the X button) doesn't quit the app: `App.beforeClose`
+(`options.App.OnBeforeClose`) unconditionally calls `runtime.WindowHide` and returns
+`true` to cancel the default close-and-quit behavior, so the process (and any active
+tunnel) keeps running in the tray until "Выход" is chosen explicitly.
+
+---
+
+## 12. iOS portability path (not implemented in this repo)
+
+`gomobile bind -target=ios ./mobile` would produce an `.xcframework` from the identical
+source used for Android. The only platform-specific piece is the link-layer glue in
+`mobile.go` (`fdbased.New` reading a raw Android fd directly); iOS's
+`NEPacketTunnelProvider` would need gVisor's callback-driven `channel.Endpoint` instead
+(exactly the mechanism `windows/wintun.go` already uses for the same reason — no raw fd
+available), since `NetworkExtension` doesn't hand out one either. Everything else —
+config parsing, the disguised handshake, TCP/UDP forwarders, splicing, `Ping` — carries
+over unchanged, since `internal/netstack` and `internal/pingcheck` were already factored
+out to be platform-neutral.
+
+---
+
+## 13. Known gaps / residual risks
 
 1. **Single VPS IP is a single point of failure.** CDN fronting (the standard fix for
    this — terminating the outer TLS at real, hard-to-block infrastructure like
    Cloudflare) was explicitly declined for this deployment to avoid a third-party
-   dependency. Blocking the server's IP still stops everything, regardless of how good
-   the wire-level disguise is.
+   dependency on the VPN path itself. Blocking the server's IP still stops everything,
+   regardless of how good the wire-level disguise is.
 2. **No post-quantum key exchange.** Reality (the closest prior art) has started
    experimenting with hybrid X25519+ML-KEM-768; this project doesn't attempt that.
-3. **No ICMP support in the mobile tunnel** — only TCP and UDP transport protocols are
-   registered with the gVisor stack, so ping through the Android VPN won't work
-   end-to-end.
+3. **No ICMP support** in either mobile tunnel (Android or Windows) — only TCP and UDP
+   are registered with the gVisor stack (§9), so ping-through-the-tunnel doesn't work
+   end-to-end on either app.
 4. **Semi-static ECDH, not fully ephemeral-ephemeral** — see the forward-secrecy caveat
    in §5.1: a future compromise of the server's long-term private key combined with
    recorded traffic could still decrypt past sessions, same limitation Reality has.
@@ -407,3 +641,19 @@ splicing — carries over unchanged.
    in `multiplexer.go` are dead code**, kept only to avoid modifying a ported file —
    see §4.3. Not a security risk (they're simply never triggered), but worth knowing
    about if extending the multiplexer later.
+6. **Both GUI apps call a third-party geo-IP/flag service (`ipapi.co`, `flagcdn.com`)
+   directly from the client**, purely to show a cosmetic country name + flag image next
+   to each saved server. This is the only network dependency in either app that isn't
+   the user's own Phantom server — it leaks the *server's* IP (not the user's own) to
+   that third party on a timer. Easy to strip out if that tradeoff isn't wanted; nothing
+   else about the tunnel depends on it.
+7. **Windows routing/interface setup shells out to `route`/`netsh`** (§11.2) rather than
+   using the native IP Helper API (`iphlpapi.dll` via `CreateUnicastIpAddressEntry`/
+   `CreateIpForwardEntry2`, the approach `winipcfg`-based tools like WireGuard-Windows
+   use). Simpler and lower-risk to get right, at the cost of process-spawn overhead and
+   coarser error handling than a native API call would give.
+8. **Windows tray icon adds a real third-party Go dependency**
+   (`github.com/energye/systray`) with its own native message loop running alongside
+   Wails' — low risk in practice (this is a common, well-tested pairing) but worth
+   knowing about if something ever looks like an event-loop/threading issue specific to
+   Windows.
