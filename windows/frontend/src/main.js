@@ -44,18 +44,22 @@ function parseYamlField(yaml, key) {
   return bare ? bare[1].trim() : '';
 }
 
+// ipwho.is rather than ipapi.co - the latter's free tier rate-limited itself into 429s
+// during development from repeated polling across both this app and the Android one.
 async function fetchGeo(ip) {
   try {
-    const resp = await fetch(`https://ipapi.co/${ip}/json/`);
+    const resp = await fetch(`https://ipwho.is/${ip}`);
     const data = await resp.json();
-    if (data.country_name && data.country_code) {
-      return { country: data.country_name, countryCode: data.country_code };
+    if (data.success !== false && data.country && data.country_code) {
+      return { country: data.country, countryCode: data.country_code };
     }
   } catch (e) {
     console.error(e);
   }
   return null;
 }
+
+const lastGeoAttempt = new Map(); // id -> epoch ms of the last (possibly failed) geo lookup
 
 async function pollPing(config) {
   const prev = pingData.get(config.id) || {};
@@ -64,7 +68,13 @@ async function pollPing(config) {
     if (json.ip) {
       let country = prev.country;
       let countryCode = prev.countryCode;
-      if (json.ip !== prev.ip || !countryCode) {
+      const ipChanged = json.ip !== prev.ip;
+      const now = Date.now();
+      // Retrying a failed lookup on every 6s ping cycle is what rate-limited ipapi.co -
+      // only retry a failure every couple of minutes, but always retry immediately if
+      // the resolved IP actually changed.
+      if (ipChanged || (!countryCode && now - (lastGeoAttempt.get(config.id) || 0) > 120000)) {
+        lastGeoAttempt.set(config.id, now);
         const geo = await fetchGeo(json.ip);
         if (geo) {
           country = geo.country;

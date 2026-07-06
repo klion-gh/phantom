@@ -101,17 +101,20 @@ suspend fun fetchPing(yaml: String): Pair<String, Long>? = withContext(Dispatche
 /**
  * Looks up the country for the server's IP via a public geo-IP API - this is the one
  * place in the app that calls a third party, purely for the cosmetic country/flag label.
- * Best-effort: any failure (offline, rate limit) just leaves the location blank.
+ * Best-effort: any failure (offline, rate limit) just leaves the location blank. Uses
+ * ipwho.is rather than ipapi.co - the latter's free tier rate-limited itself into 429s
+ * during development from repeated polling across both this app and the Windows one.
  */
 suspend fun fetchGeo(ip: String): Pair<String, String>? = withContext(Dispatchers.IO) {
     runCatching {
-        val conn = URL("https://ipapi.co/$ip/json/").openConnection() as HttpURLConnection
+        val conn = URL("https://ipwho.is/$ip").openConnection() as HttpURLConnection
         conn.connectTimeout = 4000
         conn.readTimeout = 4000
         conn.requestMethod = "GET"
         val body = conn.inputStream.bufferedReader().use { it.readText() }
         val json = JSONObject(body)
-        val name = json.optString("country_name").takeIf { it.isNotBlank() }
+        if (!json.optBoolean("success", true)) return@withContext null
+        val name = json.optString("country").takeIf { it.isNotBlank() }
         val code = json.optString("country_code").takeIf { it.isNotBlank() }
         if (name != null && code != null) name to code else null
     }.getOrNull()
@@ -132,6 +135,10 @@ fun ConfigInfoCard(
     onLongPress: () -> Unit,
 ) {
     var pingInfo by remember(config.id) { mutableStateOf<PingInfo?>(null) }
+    // Retrying a failed geo lookup on every 6s ping cycle is what rate-limited ipapi.co
+    // into 429s during development - only retry a failure every couple of minutes, but
+    // always look up immediately when the resolved IP actually changes.
+    var lastGeoAttemptAt by remember(config.id) { mutableStateOf(0L) }
 
     LaunchedEffectPing(config.yaml) { result ->
         val previous = pingInfo
@@ -139,7 +146,10 @@ fun ConfigInfoCard(
             val (ip, latency) = result
             var country = previous?.country
             var countryCode = previous?.countryCode
-            if (ip != previous?.ip || countryCode == null) {
+            val ipChanged = ip != previous?.ip
+            val now = System.currentTimeMillis()
+            if (ipChanged || (countryCode == null && now - lastGeoAttemptAt > 120_000)) {
+                lastGeoAttemptAt = now
                 fetchGeo(ip)?.let { (name, code) -> country = name; countryCode = code }
             }
             PingInfo(ip, latency, country, countryCode)
@@ -176,7 +186,7 @@ fun ConfigInfoCard(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(20.dp),
+                .padding(horizontal = 20.dp, vertical = 12.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Column(modifier = Modifier.weight(1f)) {
@@ -186,14 +196,14 @@ fun ConfigInfoCard(
                     fontSize = 17.sp,
                     fontWeight = FontWeight.SemiBold,
                 )
-                Spacer(modifier = Modifier.height(4.dp))
+                Spacer(modifier = Modifier.height(2.dp))
                 Text(
                     text = info?.ip ?: server,
                     color = TextSecondary,
                     fontSize = 13.sp,
                     fontFamily = FontFamily.Monospace,
                 )
-                Spacer(modifier = Modifier.height(10.dp))
+                Spacer(modifier = Modifier.height(6.dp))
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(
                         text = info?.latencyMs?.let { "Пинг: $it мс" } ?: "Пинг: —",
