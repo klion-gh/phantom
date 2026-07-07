@@ -192,14 +192,14 @@ fun ConfigInfoCard(
                     fontFamily = FontFamily.Monospace,
                 )
                 Spacer(modifier = Modifier.height(6.dp))
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(
-                        text = info?.latencyMs?.let { "Пинг: $it мс" } ?: "Пинг: —",
-                        color = TextSecondary,
-                        fontSize = 13.sp,
-                    )
-                    if (!config.countryCode.isNullOrBlank()) {
-                        Spacer(modifier = Modifier.width(12.dp))
+                Text(
+                    text = info?.latencyMs?.let { "Пинг: $it мс" } ?: "Пинг: —",
+                    color = TextSecondary,
+                    fontSize = 13.sp,
+                )
+                if (!config.countryCode.isNullOrBlank()) {
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Row(verticalAlignment = Alignment.CenterVertically) {
                         flagBitmap?.let { bitmap ->
                             Image(
                                 bitmap = bitmap,
