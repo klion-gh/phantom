@@ -66,6 +66,53 @@ html, body {
 }
 .icon-btn:hover { background: var(--bg-surface); color: var(--text-primary); }
 
+/* --- Update banner --- */
+.update-banner {
+    margin: 0 24px 16px;
+    padding: 10px 14px;
+    border-radius: 10px;
+    background: var(--bg-surface-alt);
+    color: var(--accent-lavender-bright);
+    font-size: 13px;
+}
+
+/* --- Two-column main body: saved configs on the left, resource checks on
+   the right - see windows/resourcestore.go and main.js's resource-* code. --- */
+.main-body {
+    flex: 1;
+    display: flex;
+    min-height: 0;
+    padding: 0 24px 20px;
+    gap: 20px;
+}
+
+.main-col {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+}
+
+.main-col-resources {
+    flex: 0 0 260px;
+    border-left: 1px solid rgba(156, 151, 184, 0.15);
+    padding-left: 20px;
+}
+
+.panel-header {
+    display: flex;
+    align-items: center;
+    margin-bottom: 12px;
+}
+.panel-title {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text-secondary);
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+    flex: 1;
+}
+
 /* --- Config tile list --- */
 .config-list {
     flex: 1;
@@ -73,7 +120,7 @@ html, body {
     display: flex;
     flex-direction: column;
     gap: 14px;
-    padding: 0 24px 20px;
+    padding: 0 0 20px;
 }
 
 .config-card {
@@ -148,7 +195,6 @@ html, body {
     align-items: center;
     justify-content: center;
     gap: 8px;
-    padding: 0 24px;
     text-align: center;
 }
 .empty-title { font-size: 16px; font-weight: 500; }
@@ -157,7 +203,7 @@ html, body {
 .error-text {
     font-size: 13px;
     color: var(--status-error);
-    padding: 0 24px 16px;
+    padding-bottom: 16px;
 }
 
 /* --- Circular connect button, mirrors android ConnectButton.kt --- */
@@ -219,6 +265,54 @@ html, body {
     100% { transform: rotate(360deg); }
 }
 
+/* --- Resource reachability tiles (right column) --- */
+.resource-list {
+    flex: 1;
+    overflow: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.resource-card {
+    position: relative;
+    background: var(--bg-surface);
+    border-radius: 14px;
+    padding: 12px 14px;
+}
+
+.resource-name {
+    font-size: 14px;
+    font-weight: 600;
+    padding-right: 20px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.resource-status {
+    font-size: 12px;
+    color: var(--text-secondary);
+    margin-top: 4px;
+}
+.resource-status.reachable { color: var(--status-connected); }
+.resource-status.unreachable { color: var(--status-error); }
+
+.resource-remove-btn {
+    position: absolute;
+    top: 8px;
+    right: 8px;
+    background: transparent;
+    border: none;
+    color: var(--text-secondary);
+    font-size: 14px;
+    line-height: 1;
+    cursor: pointer;
+    padding: 4px 6px;
+    border-radius: 6px;
+}
+.resource-remove-btn:hover { background: var(--bg-surface-alt); color: var(--status-error); }
+
 /* --- Config / Settings / Log screens --- */
 .content {
     flex: 1;
@@ -251,6 +345,18 @@ textarea {
 }
 textarea:focus { outline: none; border-color: var(--accent-lavender); }
 textarea::placeholder { color: var(--text-secondary); }
+
+.text-input {
+    background: var(--bg-surface);
+    border: 1px solid rgba(156, 151, 184, 0.4);
+    border-radius: 8px;
+    color: var(--text-primary);
+    font-size: 13px;
+    padding: 10px 12px;
+    font-family: inherit;
+}
+.text-input:focus { outline: none; border-color: var(--accent-lavender); }
+.text-input::placeholder { color: var(--text-secondary); }
 
 .log-text {
     flex: 1;

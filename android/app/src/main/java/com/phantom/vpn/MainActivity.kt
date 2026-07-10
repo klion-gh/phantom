@@ -3,6 +3,7 @@ package com.phantom.vpn
 import android.Manifest
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.Uri
 import android.net.VpnService
 import android.os.Build
 import android.os.Bundle
@@ -28,6 +29,8 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 
 private enum class Screen { MAIN, ADD_CONFIG, SETTINGS, LOG }
@@ -65,6 +68,15 @@ class MainActivity : ComponentActivity() {
             notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
         } else {
             showPersistentNotification()
+        }
+
+        // Unlike the Windows app, Android can't silently replace its own installed APK -
+        // this just opens the releases page for the user to download/install manually.
+        CoroutineScope(Dispatchers.Main).launch {
+            checkForUpdate(BuildConfig.VERSION_NAME)?.let { url ->
+                FileLog.i("update available, opening $url")
+                startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
+            }
         }
 
         setContent {

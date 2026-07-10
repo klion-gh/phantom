@@ -1,5 +1,5 @@
 import './style.css';
-import { Connect, Disconnect, Status, ReadLog, ListConfigs, AddConfig, UpdateConfig, DeleteConfig, SetConfigGeo, Ping } from '../wailsjs/go/main/App';
+import { Connect, Disconnect, Status, ReadLog, ListConfigs, AddConfig, UpdateConfig, DeleteConfig, SetConfigGeo, Ping, ListResources, AddResource, DeleteResource } from '../wailsjs/go/main/App';
 
 const screens = {
   main: document.getElementById('screen-main'),
@@ -22,6 +22,11 @@ const configScreenTitle = document.getElementById('config-screen-title');
 const btnDelete = document.getElementById('btn-delete');
 const deleteConfirm = document.getElementById('delete-confirm');
 const logText = document.getElementById('log-text');
+const resourceList = document.getElementById('resource-list');
+const updateBanner = document.getElementById('update-banner');
+const addResourceOverlay = document.getElementById('add-resource-overlay');
+const resourceNameInput = document.getElementById('resource-name-input');
+const resourceUrlInput = document.getElementById('resource-url-input');
 
 let configs = [];
 let editingId = null;
@@ -31,6 +36,9 @@ let currentStatus = { connected: false, alive: false, stats: '{}', activeConfigI
 const pingData = new Map(); // id -> { ip, latencyMs } - just live latency; country/flag
                              // come from the config's own cached fields (see SetConfigGeo)
 const pingTimers = new Map(); // id -> interval handle
+
+let resources = [];
+const resourceTimers = new Map(); // id -> interval handle
 
 function escapeHtml(text) {
   const div = document.createElement('div');
@@ -123,6 +131,100 @@ function updateTileMeta(id) {
     flagImg.classList.add('hidden');
     geoText.textContent = '';
   }
+}
+
+// Checks one resource tile via a plain fetch() from this page's own network
+// stack - which goes through the OS's real routing table, so once the
+// Phantom tunnel's 0.0.0.0/0 route is active, this request (like every
+// other request on the machine) travels through it too. That's what makes
+// "blocked site starts responding once connected" work with no special
+// casing: mode:'no-cors' avoids CORS entirely since only success/failure
+// and timing matter here, not the response body.
+async function checkResource(resource) {
+  const card = resourceList.querySelector(`[data-id="${resource.id}"]`);
+  if (!card) return;
+  const statusEl = card.querySelector('.resource-status');
+
+  const start = performance.now();
+  try {
+    await fetch(resource.url, { mode: 'no-cors', signal: AbortSignal.timeout(5000) });
+    const ms = Math.round(performance.now() - start);
+    statusEl.textContent = `Доступен, ${ms} мс`;
+    statusEl.className = 'resource-status reachable';
+  } catch (e) {
+    statusEl.textContent = 'Недоступен';
+    statusEl.className = 'resource-status unreachable';
+  }
+}
+
+function startResourceLoop(resource) {
+  checkResource(resource);
+  resourceTimers.set(resource.id, setInterval(() => checkResource(resource), 8000));
+}
+
+function stopAllResourceLoops() {
+  for (const handle of resourceTimers.values()) clearInterval(handle);
+  resourceTimers.clear();
+}
+
+// Pausing on document.hidden (rather than only on renderConfigList/renderResourceList's
+// own stopAll*Loops) is what makes pinging skip minimized/backgrounded time - checking
+// blocked sites or dialing the disguised handshake every few seconds while nobody's
+// looking at the window is just wasted traffic. document.hidden reflects the native
+// window's occlusion/minimized state in WebView2, not just tab-switching, so this
+// covers both a plain taskbar minimize and the tray-hide from App.beforeClose. Unlike
+// stopAllPingLoops/stopAllResourceLoops (used when actually rebuilding the tile DOM),
+// this never touches pingData/resources - the last-known values stay on screen instead
+// of flashing to "—" every time the window is hidden and shown again.
+function pauseAllPolling() {
+  for (const handle of pingTimers.values()) clearInterval(handle);
+  pingTimers.clear();
+  for (const handle of resourceTimers.values()) clearInterval(handle);
+  resourceTimers.clear();
+}
+
+function resumeAllPolling() {
+  for (const config of configs) startPingLoop(config);
+  for (const resource of resources) startResourceLoop(resource);
+}
+
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) {
+    pauseAllPolling();
+  } else {
+    resumeAllPolling();
+  }
+});
+
+function renderResourceList() {
+  stopAllResourceLoops();
+  resourceList.innerHTML = '';
+
+  for (const resource of resources) {
+    const card = document.createElement('div');
+    card.className = 'resource-card';
+    card.dataset.id = resource.id;
+    card.innerHTML = `
+      <button class="resource-remove-btn" title="Удалить">&times;</button>
+      <div class="resource-name">${escapeHtml(resource.name)}</div>
+      <div class="resource-status">Проверка...</div>
+    `;
+    card.querySelector('.resource-remove-btn').addEventListener('click', async () => {
+      await DeleteResource(resource.id);
+      await reloadResources();
+    });
+    resourceList.appendChild(card);
+    startResourceLoop(resource);
+  }
+}
+
+async function reloadResources() {
+  try {
+    resources = JSON.parse(await ListResources());
+  } catch (e) {
+    resources = [];
+  }
+  renderResourceList();
 }
 
 function renderConfigList() {
@@ -297,11 +399,45 @@ document.getElementById('btn-copy-log').addEventListener('click', async () => {
   }
 });
 
+document.getElementById('btn-add-resource').addEventListener('click', () => {
+  resourceNameInput.value = '';
+  resourceUrlInput.value = '';
+  addResourceOverlay.classList.remove('hidden');
+});
+document.getElementById('btn-resource-cancel').addEventListener('click', () => {
+  addResourceOverlay.classList.add('hidden');
+});
+document.getElementById('btn-resource-save').addEventListener('click', async () => {
+  const name = resourceNameInput.value.trim();
+  let url = resourceUrlInput.value.trim();
+  if (!name || !url) return;
+  if (!/^https?:\/\//i.test(url)) url = 'https://' + url;
+  await AddResource(name, url);
+  addResourceOverlay.classList.add('hidden');
+  await reloadResources();
+});
+
+// The Go side (updater.go) checks GitHub for a newer release shortly after
+// startup and, if found, downloads+swaps+relaunches on its own - these just
+// surface that it's happening, since a silent relaunch with no explanation
+// would look like the app crashed.
+if (window.runtime) {
+  window.runtime.EventsOn('update:downloading', (tag) => {
+    updateBanner.textContent = `Найдено обновление ${tag} — скачивание и перезапуск...`;
+    updateBanner.classList.remove('hidden');
+  });
+  window.runtime.EventsOn('update:failed', (message) => {
+    updateBanner.textContent = `Не удалось обновиться: ${message}`;
+    updateBanner.classList.remove('hidden');
+  });
+}
+
 setInterval(refreshStatus, 4000);
 
 (async () => {
   await reloadConfigs();
   await refreshStatus();
+  await reloadResources();
 
   // Configs saved before this per-config geo cache existed have no country/flag yet -
   // backfill them once on launch rather than leaving those tiles blank forever.

@@ -6,24 +6,41 @@
   </head>
   <body>
     <div id="app">
-      <!-- Main screen: list of saved config tiles -->
+      <!-- Main screen: config tiles on the left, resource-reachability tiles on the right -->
       <div id="screen-main" class="screen">
         <div class="header">
           <img src="./src/assets/images/phantom-emblem.png" class="emblem" alt="" />
           <div class="title">Phantom</div>
-          <div class="spacer"></div>
-          <button id="btn-add" class="icon-btn" title="Добавить конфигурацию">&#43;</button>
           <button id="btn-gear" class="icon-btn" title="Настройки">&#9881;</button>
+          <div class="spacer"></div>
         </div>
 
-        <div id="config-list" class="config-list"></div>
+        <div id="update-banner" class="update-banner hidden"></div>
 
-        <div id="empty-state" class="empty-state hidden">
-          <div class="empty-title">Нет добавленной конфигурации</div>
-          <div class="empty-hint">Нажмите + чтобы добавить client.yaml</div>
+        <div class="main-body">
+          <div class="main-col">
+            <div class="panel-header">
+              <div class="panel-title">Конфигурации</div>
+              <button id="btn-add" class="icon-btn" title="Добавить конфигурацию">&#43;</button>
+            </div>
+            <div id="config-list" class="config-list"></div>
+
+            <div id="empty-state" class="empty-state hidden">
+              <div class="empty-title">Нет добавленной конфигурации</div>
+              <div class="empty-hint">Нажмите + чтобы добавить client.yaml</div>
+            </div>
+
+            <div id="error-text" class="error-text hidden"></div>
+          </div>
+
+          <div class="main-col main-col-resources">
+            <div class="panel-header">
+              <div class="panel-title">Доступность ресурсов</div>
+              <button id="btn-add-resource" class="icon-btn" title="Добавить ресурс">&#43;</button>
+            </div>
+            <div id="resource-list" class="resource-list"></div>
+          </div>
         </div>
-
-        <div id="error-text" class="error-text hidden"></div>
       </div>
 
       <!-- Add/edit config screen -->
@@ -73,6 +90,19 @@
           <div class="dialog-row">
             <button id="btn-delete-cancel" class="btn btn-outline">Отмена</button>
             <button id="btn-delete-confirm" class="btn btn-danger">Удалить</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Add resource overlay -->
+      <div id="add-resource-overlay" class="overlay hidden">
+        <div class="dialog">
+          <div class="dialog-title">Добавить ресурс</div>
+          <input id="resource-name-input" class="text-input" placeholder="Название, например Netflix" />
+          <input id="resource-url-input" class="text-input" placeholder="https://example.com" />
+          <div class="dialog-row">
+            <button id="btn-resource-cancel" class="btn btn-outline">Отмена</button>
+            <button id="btn-resource-save" class="btn btn-primary">Добавить</button>
           </div>
         </div>
       </div>

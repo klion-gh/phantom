@@ -6,6 +6,10 @@ export function AddConfig(arg1) {
   return window['go']['main']['App']['AddConfig'](arg1);
 }
 
+export function AddResource(arg1, arg2) {
+  return window['go']['main']['App']['AddResource'](arg1, arg2);
+}
+
 export function Connect(arg1, arg2) {
   return window['go']['main']['App']['Connect'](arg1, arg2);
 }
@@ -14,12 +18,20 @@ export function DeleteConfig(arg1) {
   return window['go']['main']['App']['DeleteConfig'](arg1);
 }
 
+export function DeleteResource(arg1) {
+  return window['go']['main']['App']['DeleteResource'](arg1);
+}
+
 export function Disconnect() {
   return window['go']['main']['App']['Disconnect']();
 }
 
 export function ListConfigs() {
   return window['go']['main']['App']['ListConfigs']();
+}
+
+export function ListResources() {
+  return window['go']['main']['App']['ListResources']();
 }
 
 export function Ping(arg1) {

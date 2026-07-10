@@ -13,13 +13,19 @@ import (
 var assets embed.FS
 
 func main() {
-	if err := ensureWintunDLL(); err != nil {
-		println("Failed to prepare wintun.dll:", err.Error())
+	if len(os.Args) > 2 && os.Args[1] == "selftest" {
+		runSelfTest(os.Args[2])
 		return
 	}
 
-	if len(os.Args) > 2 && os.Args[1] == "selftest" {
-		runSelfTest(os.Args[2])
+	// Refuse to start a second GUI instance - bring the existing one to the
+	// front (it may be hidden in the tray) and exit instead.
+	if !acquireSingleInstanceLock() {
+		return
+	}
+
+	if err := ensureWintunDLL(); err != nil {
+		println("Failed to prepare wintun.dll:", err.Error())
 		return
 	}
 
@@ -32,11 +38,14 @@ func main() {
 
 	// Create application with options
 	err := wails.Run(&options.App{
-		Title:     "Phantom",
-		Width:     420,
+		Title: "Phantom",
+		// Wide enough for the two-column main screen (saved configs on the
+		// left, resource-reachability tiles on the right - see
+		// frontend/src/style.css's .main-body).
+		Width:     760,
 		Height:    680,
-		MinWidth:  380,
-		MinHeight: 600,
+		MinWidth:  640,
+		MinHeight: 500,
 		AssetServer: &assetserver.Options{
 			Assets: assets,
 		},

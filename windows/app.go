@@ -29,6 +29,7 @@ func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
 	initLog()
 	log.Println("App started")
+	go checkAndSelfUpdate(ctx)
 }
 
 // shutdown runs when the window is closed. Without this, closing the window
@@ -208,4 +209,37 @@ func (a *App) Ping(configYAML string) string {
 		return "{}"
 	}
 	return string(data)
+}
+
+// ListResources returns every saved resource-reachability tile as a JSON
+// array of {"id","name","url"} - seeded with a handful of well-known sites
+// on first run. Actual reachability checks happen in the frontend (plain
+// fetch(), subject to the real system routing table - see PingResource).
+func (a *App) ListResources() string {
+	resources, err := loadResources()
+	if err != nil {
+		return "[]"
+	}
+	data, err := json.Marshal(resources)
+	if err != nil {
+		return "[]"
+	}
+	return string(data)
+}
+
+// AddResource saves a new user-defined resource tile. Returns "" on success
+// or an error message.
+func (a *App) AddResource(name string, url string) string {
+	if _, err := addResource(name, url); err != nil {
+		return err.Error()
+	}
+	return ""
+}
+
+// DeleteResource removes a resource tile (built-in or user-added).
+func (a *App) DeleteResource(id string) string {
+	if err := deleteResource(id); err != nil {
+		return err.Error()
+	}
+	return ""
 }
