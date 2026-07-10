@@ -101,15 +101,28 @@ func Dial(ctx context.Context, cfg *TLSClientConfig) (net.Conn, *protocol.Sessio
 	return uconn, crypto, nil
 }
 
+// getFingerprint maps a config's fingerprint name to a uTLS ClientHelloID.
+//
+// chrome131/chrome133 carry a real X25519MLKEM768 post-quantum hybrid key
+// share, matching current real Chrome (~57%+ of real browser connections
+// have one as of early 2026) - chrome120 (kept only for explicit opt-in/
+// backward compat) predates Chrome's PQ rollout and is now the more
+// anomalous-looking ClientHello of the two, not the safer default it used to
+// be. firefox120/safari16 have no PQ-carrying capture available in the
+// pinned uTLS version, so they stay as-is.
 func getFingerprint(name string) (utls.ClientHelloID, error) {
 	switch name {
-	case "chrome120", "chrome131", "chrome":
+	case "chrome131":
+		return utls.HelloChrome_131, nil
+	case "chrome133", "chrome":
+		return utls.HelloChrome_133, nil
+	case "chrome120":
 		return utls.HelloChrome_120, nil
 	case "firefox120", "firefox130", "firefox":
 		return utls.HelloFirefox_120, nil
 	case "safari16", "safari18", "safari":
 		return utls.HelloSafari_16_0, nil
 	default:
-		return utls.HelloChrome_120, fmt.Errorf("unknown fingerprint %q, using chrome120", name)
+		return utls.HelloChrome_133, fmt.Errorf("unknown fingerprint %q, using chrome133", name)
 	}
 }

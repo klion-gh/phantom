@@ -296,8 +296,20 @@ handles all three:
 caller uses — `cmd/client`, `mobile.Start`, `windows/wintun.go`'s `StartWindows`, and
 `internal/pingcheck.Ping` all call it directly.
 
-- uTLS-based fingerprint mimicry (`chrome120`/`firefox120`/`safari16` via the
-  `fingerprint` config field).
+- uTLS-based fingerprint mimicry (`fingerprint` config field). Default is `chrome133`
+  (`utls.HelloChrome_133`), which carries a real `X25519MLKEM768` post-quantum hybrid
+  key share in its ClientHello - matching current real Chrome, where a majority of
+  connections now include one. `chrome131` is the same story (`X25519MLKEM768` too);
+  `chrome120` (`utls.HelloChrome_120`) is kept only for explicit opt-in/backward
+  compatibility and predates Chrome's PQ rollout, making it the more anomalous-looking
+  ClientHello of the two now, not the safer/older-is-stabler choice it used to be - a
+  passive fingerprint-matching censor comparing ClientHello shape against the current
+  real-browser population (JA3/JA4-style) can use "claims to be modern Chrome but has no
+  PQ key share" as a distinguisher precisely because that share is no longer rare.
+  `firefox120`/`safari16` remain available but have no PQ-carrying capture in the pinned
+  uTLS version. This only affects the outer TLS camouflage layer (what a passive
+  fingerprint check sees) - it has no bearing on Phantom's own inner handshake crypto
+  (§5.1's semi-static X25519 ECDH), which is unrelated and still classical.
 - **SNI is the operator's real domain**, not a borrowed/spoofed one.
 - **Certificate validation is real** (no `InsecureSkipVerify`) — since the server
   presents a genuinely CA-signed certificate, the client validates it exactly like a
@@ -346,7 +358,7 @@ and Windows VPN tunnels relay DNS/QUIC/WebRTC and other UDP-based traffic, not j
 # client.yaml
 server: "yourdomain.com:8443"       # required
 domain: "yourdomain.com"             # required - SNI + Host header; must match the server's real cert domain
-fingerprint: "chrome131"             # default if unset
+fingerprint: "chrome133"             # default if unset - see §6.1 for the post-quantum note
 psk: "<64 hex chars>"                 # required - shared secret, one HKDF input alongside the ECDH secret
 server_public_key: "<64 hex chars>"   # required - server's static X25519 public key
 listen: "127.0.0.1:1080"              # default; desktop SOCKS5 (cmd/client only)
@@ -629,8 +641,16 @@ out to be platform-neutral.
    Cloudflare) was explicitly declined for this deployment to avoid a third-party
    dependency on the VPN path itself. Blocking the server's IP still stops everything,
    regardless of how good the wire-level disguise is.
-2. **No post-quantum key exchange.** Reality (the closest prior art) has started
-   experimenting with hybrid X25519+ML-KEM-768; this project doesn't attempt that.
+2. **The outer TLS ClientHello carries a post-quantum hybrid key share
+   (`X25519MLKEM768`, via the `chrome131`/`chrome133` fingerprints - §6.1), but
+   Phantom's own inner handshake does not.** The disguised handshake's session-key
+   ECDH (§5.1) is still plain X25519, so the forward-secrecy caveat there is
+   unaffected by the outer TLS layer's PQ key share - that share only shapes what a
+   passive fingerprint check sees, it doesn't feed into Phantom's own key derivation
+   at all. Reality (the closest prior art) shipped `X25519MLKEM768` support in
+   production in early 2026 (Xray-core v26.2.4+); this project's outer-layer PQ
+   ClientHello was added for the same reason (matching current real-browser
+   ClientHello shape) rather than as an independent design choice.
 3. **No ICMP support** in either mobile tunnel (Android or Windows) — only TCP and UDP
    are registered with the gVisor stack (§9), so ping-through-the-tunnel doesn't work
    end-to-end on either app.

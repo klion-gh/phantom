@@ -11,7 +11,7 @@ import (
 type ClientConfig struct {
 	Server          string `yaml:"server"`            // VPS address:port, e.g. "1.2.3.4:443"
 	Domain          string `yaml:"domain"`             // real domain the server has a CA-signed cert for; used as SNI and as the Host header in the disguised handshake
-	Fingerprint     string `yaml:"fingerprint"`        // uTLS ClientHello mimicry: chrome120/firefox120/safari16
+	Fingerprint     string `yaml:"fingerprint"`        // uTLS ClientHello mimicry: chrome133/chrome131 (post-quantum X25519MLKEM768 key share)/chrome120/firefox120/safari16
 	PSK             string `yaml:"psk"`                // shared secret (hex, 32 bytes) - one of several HKDF inputs, must match server's psk
 	ServerPublicKey string `yaml:"server_public_key"`  // server's static X25519 public key (hex, 32 bytes) - for real per-session ECDH
 	Listen          string `yaml:"listen"`             // SOCKS5 proxy, desktop only
@@ -44,7 +44,7 @@ func LoadClientConfig(path string) (*ClientConfig, error) {
 // receives the config as an in-memory string (imported/pasted client.yaml).
 func ParseClientConfig(data []byte) (*ClientConfig, error) {
 	cfg := &ClientConfig{
-		Fingerprint: "chrome131",
+		Fingerprint: "chrome133",
 		Listen:      "127.0.0.1:1080",
 		PoolSize:    4,
 		LogLevel:    "info",
