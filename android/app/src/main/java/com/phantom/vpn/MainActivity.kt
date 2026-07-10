@@ -10,10 +10,13 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
@@ -22,6 +25,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -29,6 +33,8 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -136,13 +142,36 @@ private fun PhantomApp(
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
     var configs by remember { mutableStateOf(ConfigStore.loadAll(context)) }
+    var resources by remember { mutableStateOf(ResourceStore.loadAll(context)) }
     var screen by remember { mutableStateOf(Screen.MAIN) }
     var editingId by remember { mutableStateOf<String?>(null) }
     var editingYaml by remember { mutableStateOf("") }
     val state by VpnStateHolder.state.collectAsState()
 
+    // Whether the Activity itself is resumed (visible, interactive) right now - both
+    // pages' ping loops must stop the instant this goes false, not just once Android
+    // gets around to actually stopping the process. An activity-lifecycle concern, so
+    // it's tracked once here rather than per-page.
+    var appInForeground by remember { mutableStateOf(true) }
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            when (event) {
+                Lifecycle.Event.ON_RESUME -> appInForeground = true
+                Lifecycle.Event.ON_PAUSE -> appInForeground = false
+                else -> Unit
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
+
     fun refreshConfigs() {
         configs = ConfigStore.loadAll(context)
+    }
+
+    fun refreshResources() {
+        resources = ResourceStore.loadAll(context)
     }
 
     // Resolves and persists a config's server IP/country/flag exactly once (via
@@ -201,6 +230,8 @@ private fun PhantomApp(
             message = state.message,
             activeConfigId = state.activeConfigId,
             configs = configs,
+            resources = resources,
+            appInForeground = appInForeground,
             onToggle = { config ->
                 when {
                     state.activeConfigId == config.id && state.status == ConnectionStatus.CONNECTED -> onDisconnect()
@@ -218,22 +249,44 @@ private fun PhantomApp(
                 editingYaml = ""
                 screen = Screen.ADD_CONFIG
             },
+            onAddResource = { name, url ->
+                ResourceStore.add(context, name, url)
+                refreshResources()
+            },
+            onDeleteResource = { id ->
+                ResourceStore.delete(context, id)
+                refreshResources()
+            },
             onOpenSettings = { screen = Screen.SETTINGS },
         )
     }
 }
 
+/**
+ * Two swipeable pages sharing one fixed header: configs on the left/page 0 (the
+ * default), resource-reachability tiles on the right/page 1 (swipe left to reach it).
+ * Only the page currently on screen ever pings anything, and only while [appInForeground]
+ * is true - see ConfigInfoCard/ResourceCard's pingEnabled parameter.
+ */
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun MainScreen(
     status: ConnectionStatus,
     message: String,
     activeConfigId: String?,
     configs: List<SavedConfig>,
+    resources: List<PingResource>,
+    appInForeground: Boolean,
     onToggle: (SavedConfig) -> Unit,
     onEditConfig: (SavedConfig) -> Unit,
     onAddConfig: () -> Unit,
+    onAddResource: (String, String) -> Unit,
+    onDeleteResource: (String) -> Unit,
     onOpenSettings: () -> Unit,
 ) {
+    val pagerState = rememberPagerState(pageCount = { 2 })
+    var showAddResourceDialog by remember { mutableStateOf(false) }
+
     Column(modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp, vertical = 24.dp)) {
         Row(
             verticalAlignment = Alignment.CenterVertically,
@@ -251,16 +304,76 @@ private fun MainScreen(
                 fontSize = 20.sp,
                 fontWeight = FontWeight.SemiBold,
             )
-            Spacer(modifier = Modifier.weight(1f))
-            IconButton(onClick = onAddConfig) {
-                Text("+", fontSize = 24.sp, color = TextSecondary)
-            }
             IconButton(onClick = onOpenSettings) {
                 Text("⚙", fontSize = 22.sp, color = TextSecondary)
             }
+            Spacer(modifier = Modifier.weight(1f))
         }
 
-        Spacer(modifier = Modifier.height(28.dp))
+        Spacer(modifier = Modifier.height(20.dp))
+
+        HorizontalPager(
+            state = pagerState,
+            modifier = Modifier.weight(1f),
+        ) { page ->
+            when (page) {
+                0 -> ConfigsPage(
+                    status = status,
+                    message = message,
+                    activeConfigId = activeConfigId,
+                    configs = configs,
+                    pingEnabled = appInForeground && pagerState.currentPage == 0,
+                    onToggle = onToggle,
+                    onEditConfig = onEditConfig,
+                    onAddConfig = onAddConfig,
+                )
+                else -> ResourcesPage(
+                    resources = resources,
+                    pingEnabled = appInForeground && pagerState.currentPage == 1,
+                    onAdd = { showAddResourceDialog = true },
+                    onDelete = onDeleteResource,
+                )
+            }
+        }
+    }
+
+    if (showAddResourceDialog) {
+        AddResourceDialog(
+            onDismiss = { showAddResourceDialog = false },
+            onSave = { name, url ->
+                showAddResourceDialog = false
+                onAddResource(name, url)
+            },
+        )
+    }
+}
+
+@Composable
+private fun ConfigsPage(
+    status: ConnectionStatus,
+    message: String,
+    activeConfigId: String?,
+    configs: List<SavedConfig>,
+    pingEnabled: Boolean,
+    onToggle: (SavedConfig) -> Unit,
+    onEditConfig: (SavedConfig) -> Unit,
+    onAddConfig: () -> Unit,
+) {
+    Column(modifier = Modifier.fillMaxSize()) {
+        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+            Text(
+                "Конфигурации",
+                color = TextSecondary,
+                fontSize = 13.sp,
+                fontWeight = FontWeight.SemiBold,
+                modifier = Modifier.weight(1f),
+            )
+            IconButton(onClick = onAddConfig) {
+                Text("+", fontSize = 22.sp, color = TextSecondary)
+            }
+        }
+
+        Spacer(modifier = Modifier.height(10.dp))
 
         if (configs.isNotEmpty()) {
             LazyColumn(
@@ -272,6 +385,7 @@ private fun MainScreen(
                     ConfigInfoCard(
                         config = config,
                         status = cardStatus,
+                        pingEnabled = pingEnabled,
                         onToggle = { onToggle(config) },
                         onLongPress = { onEditConfig(config) },
                     )
@@ -307,6 +421,127 @@ private fun MainScreen(
             }
         }
     }
+}
+
+@Composable
+private fun ResourcesPage(
+    resources: List<PingResource>,
+    pingEnabled: Boolean,
+    onAdd: () -> Unit,
+    onDelete: (String) -> Unit,
+) {
+    Column(modifier = Modifier.fillMaxSize()) {
+        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+            Text(
+                "Доступность ресурсов",
+                color = TextSecondary,
+                fontSize = 13.sp,
+                fontWeight = FontWeight.SemiBold,
+                modifier = Modifier.weight(1f),
+            )
+            IconButton(onClick = onAdd) {
+                Text("+", fontSize = 22.sp, color = TextSecondary)
+            }
+        }
+
+        Spacer(modifier = Modifier.height(10.dp))
+
+        if (resources.isNotEmpty()) {
+            LazyColumn(
+                modifier = Modifier.weight(1f),
+                verticalArrangement = Arrangement.spacedBy(14.dp),
+            ) {
+                items(resources, key = { it.id }) { resource ->
+                    ResourceCard(
+                        resource = resource,
+                        pingEnabled = pingEnabled,
+                        onDelete = { onDelete(resource.id) },
+                    )
+                }
+            }
+        } else {
+            Column(
+                modifier = Modifier.weight(1f).fillMaxWidth(),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.Center,
+            ) {
+                Text(
+                    text = "Нет добавленных ресурсов",
+                    color = TextPrimary,
+                    fontSize = 16.sp,
+                    fontWeight = FontWeight.Medium,
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+                Text(
+                    text = "Нажмите + чтобы добавить сайт для проверки",
+                    color = TextSecondary,
+                    fontSize = 13.sp,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun AddResourceDialog(
+    onDismiss: () -> Unit,
+    onSave: (String, String) -> Unit,
+) {
+    var name by remember { mutableStateOf("") }
+    var url by remember { mutableStateOf("") }
+
+    val fieldColors = OutlinedTextFieldDefaults.colors(
+        focusedTextColor = TextPrimary,
+        unfocusedTextColor = TextPrimary,
+        focusedBorderColor = AccentLavender,
+        unfocusedBorderColor = TextSecondary.copy(alpha = 0.4f),
+        cursorColor = AccentLavender,
+    )
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Добавить ресурс") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                OutlinedTextField(
+                    value = name,
+                    onValueChange = { name = it },
+                    placeholder = { Text("Название, например Netflix", color = TextSecondary) },
+                    singleLine = true,
+                    colors = fieldColors,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                OutlinedTextField(
+                    value = url,
+                    onValueChange = { url = it },
+                    placeholder = { Text("example.com", color = TextSecondary) },
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
+                    colors = fieldColors,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = {
+                val trimmedName = name.trim()
+                val trimmedUrl = url.trim()
+                if (trimmedName.isBlank() || trimmedUrl.isBlank()) return@TextButton
+                val fullUrl = if (trimmedUrl.startsWith("http://") || trimmedUrl.startsWith("https://")) {
+                    trimmedUrl
+                } else {
+                    "https://$trimmedUrl"
+                }
+                onSave(trimmedName, fullUrl)
+            }) { Text("Добавить", color = AccentLavender) }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("Отмена") }
+        },
+        containerColor = BgSurface,
+        titleContentColor = TextPrimary,
+        textContentColor = TextSecondary,
+    )
 }
 
 @Composable

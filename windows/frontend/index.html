@@ -67,6 +67,19 @@
         </div>
         <div class="content">
           <button id="btn-view-log" class="btn btn-outline">Посмотреть лог</button>
+
+          <div class="panel-header">
+            <div class="panel-title">Раздельное туннелирование</div>
+            <button id="btn-add-excluded-app" class="icon-btn" title="Добавить приложение">&#43;</button>
+          </div>
+          <div class="settings-hint">
+            Эти приложения будут работать напрямую, в обход VPN, даже при активном подключении.
+          </div>
+          <div id="excluded-app-list" class="resource-list"></div>
+          <div id="excluded-app-empty" class="empty-state hidden">
+            <div class="empty-title">Список пуст</div>
+            <div class="empty-hint">Нажмите + чтобы выбрать .exe</div>
+          </div>
         </div>
       </div>
 

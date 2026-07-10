@@ -3,11 +3,15 @@
 
 export function AddConfig(arg1:string):Promise<string>;
 
+export function AddExcludedApp(arg1:string,arg2:string):Promise<string>;
+
 export function AddResource(arg1:string,arg2:string):Promise<string>;
 
 export function Connect(arg1:string,arg2:string):Promise<string>;
 
 export function DeleteConfig(arg1:string):Promise<string>;
+
+export function DeleteExcludedApp(arg1:string):Promise<string>;
 
 export function DeleteResource(arg1:string):Promise<string>;
 
@@ -15,7 +19,11 @@ export function Disconnect():Promise<void>;
 
 export function ListConfigs():Promise<string>;
 
+export function ListExcludedApps():Promise<string>;
+
 export function ListResources():Promise<string>;
+
+export function PickExcludedAppExe():Promise<string>;
 
 export function Ping(arg1:string):Promise<string>;
 

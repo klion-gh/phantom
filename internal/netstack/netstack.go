@@ -35,6 +35,15 @@ import (
 const tunNICID = tcpip.NICID(1)
 const udpIdleTimeout = 60 * time.Second
 
+// BypassFunc decides whether a new connection should bypass the Phantom
+// tunnel entirely, given the *originating* app's local port on this machine
+// (network is "tcp" or "udp", target is the real internet destination the
+// app is trying to reach). Returning nil tunnels the connection normally
+// through session.Open/OpenUDP; returning a non-nil connection splices it
+// directly instead. Used by the Windows client for per-app split tunneling -
+// nil on Android, which has no equivalent per-app concept at this layer.
+type BypassFunc func(network string, localPort uint16, target string) io.ReadWriteCloser
+
 // Tunnel routes all IP traffic arriving on a gVisor link endpoint through a
 // Phantom session. Obtain one via New.
 type Tunnel struct {
@@ -43,6 +52,15 @@ type Tunnel struct {
 	startTime time.Time
 	bytesUp   int64
 	bytesDown int64
+	bypass    BypassFunc
+}
+
+// SetBypass installs an optional per-connection bypass hook - see BypassFunc.
+// Safe to call any time after New; takes effect for connections forwarded
+// afterwards. A nil Tunnel receiver check isn't needed since callers always
+// have a valid *Tunnel from a successful New.
+func (t *Tunnel) SetBypass(fn BypassFunc) {
+	t.bypass = fn
 }
 
 // New wires linkEndpoint (already attached to whatever OS-specific packet
@@ -95,13 +113,13 @@ func (t *Tunnel) handleTCP(r *tcp.ForwarderRequest) {
 
 	local := gonet.NewTCPConn(&wq, ep)
 
-	stream, streamErr := t.session.Open(target)
-	if streamErr != nil {
+	remote := t.openRemote("tcp", id.RemotePort, target)
+	if remote == nil {
 		local.Close()
 		return
 	}
 
-	t.splice(local, stream)
+	t.splice(local, remote)
 }
 
 func (t *Tunnel) handleUDP(r *udp.ForwarderRequest) bool {
@@ -115,38 +133,64 @@ func (t *Tunnel) handleUDP(r *udp.ForwarderRequest) bool {
 	}
 	local := gonet.NewUDPConn(&wq, ep)
 
-	stream, streamErr := t.session.OpenUDP(target)
-	if streamErr != nil {
+	remote := t.openRemote("udp", id.RemotePort, target)
+	if remote == nil {
 		local.Close()
 		return false
 	}
 
-	go t.spliceUDP(local, stream)
+	go t.spliceUDP(local, remote)
 	return true
 }
 
+// openRemote gives the bypass hook (if any) first refusal on a new
+// connection - see BypassFunc - and falls back to tunneling through the
+// Phantom session otherwise (including when a bypass was attempted but the
+// direct dial itself failed, so an excluded app still gets connectivity via
+// the tunnel rather than none at all).
+func (t *Tunnel) openRemote(network string, localPort uint16, target string) io.ReadWriteCloser {
+	if t.bypass != nil {
+		if conn := t.bypass(network, localPort, target); conn != nil {
+			return conn
+		}
+	}
+	if network == "udp" {
+		stream, err := t.session.OpenUDP(target)
+		if err != nil {
+			return nil
+		}
+		return stream
+	}
+	stream, err := t.session.Open(target)
+	if err != nil {
+		return nil
+	}
+	return stream
+}
+
 // splice bridges a netstack-side TCP connection with the corresponding
-// Phantom stream, mirroring the pipe() pattern used by the desktop
-// SOCKS5/HTTP proxies (internal/proxy/socks5.go).
-func (t *Tunnel) splice(local *gonet.TCPConn, stream *tunnel.Stream) {
+// remote connection (a tunneled Phantom stream, or - for a split-tunneled
+// app - a direct connection dialed by the bypass hook), mirroring the pipe()
+// pattern used by the desktop SOCKS5/HTTP proxies (internal/proxy/socks5.go).
+func (t *Tunnel) splice(local *gonet.TCPConn, remote io.ReadWriteCloser) {
 	done := make(chan struct{})
 
 	go func() {
-		n, _ := io.Copy(stream, local)
+		n, _ := io.Copy(remote, local)
 		atomic.AddInt64(&t.bytesUp, n)
-		stream.Close()
+		remote.Close()
 		close(done)
 	}()
 
-	n, _ := io.Copy(local, stream)
+	n, _ := io.Copy(local, remote)
 	atomic.AddInt64(&t.bytesDown, n)
 	local.Close()
 	<-done
 }
 
-func (t *Tunnel) spliceUDP(local *gonet.UDPConn, stream *tunnel.Stream) {
+func (t *Tunnel) spliceUDP(local *gonet.UDPConn, remote io.ReadWriteCloser) {
 	defer local.Close()
-	defer stream.Close()
+	defer remote.Close()
 
 	done := make(chan struct{})
 
@@ -154,7 +198,7 @@ func (t *Tunnel) spliceUDP(local *gonet.UDPConn, stream *tunnel.Stream) {
 		defer close(done)
 		buf := make([]byte, 65535)
 		for {
-			n, err := stream.Read(buf)
+			n, err := remote.Read(buf)
 			if err != nil {
 				return
 			}
@@ -172,7 +216,7 @@ func (t *Tunnel) spliceUDP(local *gonet.UDPConn, stream *tunnel.Stream) {
 		if err != nil {
 			break
 		}
-		if _, err := stream.Write(buf[:n]); err != nil {
+		if _, err := remote.Write(buf[:n]); err != nil {
 			break
 		}
 		atomic.AddInt64(&t.bytesUp, int64(n))

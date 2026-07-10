@@ -6,6 +6,10 @@ export function AddConfig(arg1) {
   return window['go']['main']['App']['AddConfig'](arg1);
 }
 
+export function AddExcludedApp(arg1, arg2) {
+  return window['go']['main']['App']['AddExcludedApp'](arg1, arg2);
+}
+
 export function AddResource(arg1, arg2) {
   return window['go']['main']['App']['AddResource'](arg1, arg2);
 }
@@ -16,6 +20,10 @@ export function Connect(arg1, arg2) {
 
 export function DeleteConfig(arg1) {
   return window['go']['main']['App']['DeleteConfig'](arg1);
+}
+
+export function DeleteExcludedApp(arg1) {
+  return window['go']['main']['App']['DeleteExcludedApp'](arg1);
 }
 
 export function DeleteResource(arg1) {
@@ -30,8 +38,16 @@ export function ListConfigs() {
   return window['go']['main']['App']['ListConfigs']();
 }
 
+export function ListExcludedApps() {
+  return window['go']['main']['App']['ListExcludedApps']();
+}
+
 export function ListResources() {
   return window['go']['main']['App']['ListResources']();
+}
+
+export function PickExcludedAppExe() {
+  return window['go']['main']['App']['PickExcludedAppExe']();
 }
 
 export function Ping(arg1) {

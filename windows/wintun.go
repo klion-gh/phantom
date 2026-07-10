@@ -122,6 +122,17 @@ func StartWindows(configYAML string) (*WinTunnel, error) {
 		return nil, fmt.Errorf("find default gateway: %w", err)
 	}
 
+	// Must be captured now, before any routing changes below - once the
+	// tunnel's 0.0.0.0/0 route exists, this would just return the tunnel's
+	// own interface instead of the real one split-tunneled apps need to dial
+	// out through. A failure here isn't fatal to the tunnel itself, just to
+	// split tunneling (excluded apps' connections will fall back to being
+	// tunneled - see openRemote in internal/netstack).
+	physicalIfIndex, physicalIfErr := bestInterfaceIndex(serverIP)
+	if physicalIfErr != nil {
+		log.Printf("split tunneling unavailable: %v", physicalIfErr)
+	}
+
 	if err := addHostRoute(serverIP, gateway); err != nil {
 		return nil, fmt.Errorf("add bypass route for %s via %s: %w", serverIP, gateway, err)
 	}
@@ -209,6 +220,9 @@ func StartWindows(configYAML string) (*WinTunnel, error) {
 		return nil, err
 	}
 	w.inner = inner
+	if physicalIfErr == nil {
+		inner.SetBypass(newSplitTunnelBypass(physicalIfIndex))
+	}
 
 	return w, nil
 }

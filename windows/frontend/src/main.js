@@ -1,5 +1,5 @@
 import './style.css';
-import { Connect, Disconnect, Status, ReadLog, ListConfigs, AddConfig, UpdateConfig, DeleteConfig, SetConfigGeo, Ping, ListResources, AddResource, DeleteResource } from '../wailsjs/go/main/App';
+import { Connect, Disconnect, Status, ReadLog, ListConfigs, AddConfig, UpdateConfig, DeleteConfig, SetConfigGeo, Ping, ListResources, AddResource, DeleteResource, ListExcludedApps, PickExcludedAppExe, AddExcludedApp, DeleteExcludedApp } from '../wailsjs/go/main/App';
 
 const screens = {
   main: document.getElementById('screen-main'),
@@ -27,6 +27,8 @@ const updateBanner = document.getElementById('update-banner');
 const addResourceOverlay = document.getElementById('add-resource-overlay');
 const resourceNameInput = document.getElementById('resource-name-input');
 const resourceUrlInput = document.getElementById('resource-url-input');
+const excludedAppList = document.getElementById('excluded-app-list');
+const excludedAppEmpty = document.getElementById('excluded-app-empty');
 
 let configs = [];
 let editingId = null;
@@ -39,6 +41,8 @@ const pingTimers = new Map(); // id -> interval handle
 
 let resources = [];
 const resourceTimers = new Map(); // id -> interval handle
+
+let excludedApps = [];
 
 function escapeHtml(text) {
   const div = document.createElement('div');
@@ -225,6 +229,39 @@ async function reloadResources() {
     resources = [];
   }
   renderResourceList();
+}
+
+// Split-tunneling exclusion list - no polling loop here (unlike configs/
+// resources), this is just a static list the Go side consults per-connection
+// (see windows/splittunnel.go), so rendering is a plain one-shot refresh.
+function renderExcludedAppList() {
+  excludedAppList.innerHTML = '';
+  excludedAppEmpty.classList.toggle('hidden', excludedApps.length > 0);
+
+  for (const app of excludedApps) {
+    const card = document.createElement('div');
+    card.className = 'resource-card';
+    card.dataset.id = app.id;
+    card.innerHTML = `
+      <button class="resource-remove-btn" title="Удалить">&times;</button>
+      <div class="resource-name">${escapeHtml(app.name)}</div>
+      <div class="excluded-app-path">${escapeHtml(app.exePath)}</div>
+    `;
+    card.querySelector('.resource-remove-btn').addEventListener('click', async () => {
+      await DeleteExcludedApp(app.id);
+      await reloadExcludedApps();
+    });
+    excludedAppList.appendChild(card);
+  }
+}
+
+async function reloadExcludedApps() {
+  try {
+    excludedApps = JSON.parse(await ListExcludedApps());
+  } catch (e) {
+    excludedApps = [];
+  }
+  renderExcludedAppList();
 }
 
 function renderConfigList() {
@@ -417,6 +454,15 @@ document.getElementById('btn-resource-save').addEventListener('click', async () 
   await reloadResources();
 });
 
+document.getElementById('btn-add-excluded-app').addEventListener('click', async () => {
+  const path = await PickExcludedAppExe();
+  if (!path) return;
+  const fileName = path.split(/[\\/]/).pop() || path;
+  const name = fileName.replace(/\.exe$/i, '');
+  await AddExcludedApp(name, path);
+  await reloadExcludedApps();
+});
+
 // The Go side (updater.go) checks GitHub for a newer release shortly after
 // startup and, if found, downloads+swaps+relaunches on its own - these just
 // surface that it's happening, since a silent relaunch with no explanation
@@ -438,6 +484,7 @@ setInterval(refreshStatus, 4000);
   await reloadConfigs();
   await refreshStatus();
   await reloadResources();
+  await reloadExcludedApps();
 
   // Configs saved before this per-config geo cache existed have no country/flag yet -
   // backfill them once on launch rather than leaving those tiles blank forever.

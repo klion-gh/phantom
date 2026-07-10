@@ -126,18 +126,22 @@ suspend fun fetchGeo(ip: String): Pair<String, String>? = withContext(Dispatcher
  * left, a connect button on the right. Owns its own ping-polling loop (keyed on the
  * config's own yaml/id) so each tile refreshes independently of the others. Long-press
  * anywhere on the tile (outside the button itself) opens it for editing/deletion.
+ *
+ * [pingEnabled] should be true only while this tile's page is the one currently visible
+ * in the pager *and* the app itself is in the foreground - see MainActivity.
  */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun ConfigInfoCard(
     config: SavedConfig,
     status: ConnectionStatus,
+    pingEnabled: Boolean,
     onToggle: () -> Unit,
     onLongPress: () -> Unit,
 ) {
     var pingInfo by remember(config.id) { mutableStateOf<PingInfo?>(null) }
 
-    LaunchedEffectPing(config.yaml) { result ->
+    LaunchedEffectPing(config.yaml, pingEnabled) { result ->
         pingInfo = if (result != null) {
             val (ip, latency) = result
             PingInfo(ip, latency)
@@ -226,14 +230,23 @@ fun ConfigInfoCard(
 }
 
 /**
- * Runs fetchPing on a repeating timer for as long as the calling composable is alive,
- * restarting whenever [yaml] changes. Factored out of ConfigInfoCard purely to keep the
- * polling loop's plumbing (delay/isActive/withContext) out of the layout code above.
+ * Runs fetchPing on a repeating timer for as long as the calling composable is alive
+ * AND [pingEnabled] is true, restarting whenever [yaml] or [pingEnabled] changes -
+ * [pingEnabled] going false immediately cancels the loop rather than just skipping a
+ * cycle (see MainActivity's page/foreground wiring for when that happens), and going
+ * true again resumes with an immediate check rather than waiting out a full interval.
+ * Deliberately does *not* reset to null when only [pingEnabled] flips (a separate
+ * effect below handles the real "yaml changed" reset) - otherwise every pause/resume
+ * (minimize, switch pager page) would flash the tile to "—" instead of keeping the
+ * last-known value on screen, same as the Windows app's visibility-based pause.
  */
 @Composable
-private fun LaunchedEffectPing(yaml: String, onResult: suspend (Pair<String, Long>?) -> Unit) {
+private fun LaunchedEffectPing(yaml: String, pingEnabled: Boolean, onResult: suspend (Pair<String, Long>?) -> Unit) {
     androidx.compose.runtime.LaunchedEffect(yaml) {
         onResult(null)
+    }
+    androidx.compose.runtime.LaunchedEffect(yaml, pingEnabled) {
+        if (!pingEnabled) return@LaunchedEffect
         while (isActive) {
             onResult(fetchPing(yaml))
             delay(6000)

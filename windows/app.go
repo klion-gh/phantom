@@ -243,3 +243,51 @@ func (a *App) DeleteResource(id string) string {
 	}
 	return ""
 }
+
+// ListExcludedApps returns the split-tunneling exclusion list as a JSON array
+// of {"id","name","exePath"} - apps on this list bypass the tunnel entirely
+// (see windows/splittunnel.go).
+func (a *App) ListExcludedApps() string {
+	apps, err := loadExcludedApps()
+	if err != nil {
+		return "[]"
+	}
+	data, err := json.Marshal(apps)
+	if err != nil {
+		return "[]"
+	}
+	return string(data)
+}
+
+// PickExcludedAppExe opens a native file-open dialog for the user to browse
+// to an .exe, returning its path (or "" if cancelled/failed) - the frontend
+// follows this up with AddExcludedApp using the picked path.
+func (a *App) PickExcludedAppExe() string {
+	path, err := runtime.OpenFileDialog(a.ctx, runtime.OpenDialogOptions{
+		Title: "Выбрать приложение",
+		Filters: []runtime.FileFilter{
+			{DisplayName: "Программы (*.exe)", Pattern: "*.exe"},
+		},
+	})
+	if err != nil || path == "" {
+		return ""
+	}
+	return path
+}
+
+// AddExcludedApp adds exePath to the split-tunneling exclusion list under the
+// given display name. Returns "" on success or an error message.
+func (a *App) AddExcludedApp(name string, exePath string) string {
+	if _, err := addExcludedApp(name, exePath); err != nil {
+		return err.Error()
+	}
+	return ""
+}
+
+// DeleteExcludedApp removes an app from the split-tunneling exclusion list.
+func (a *App) DeleteExcludedApp(id string) string {
+	if err := deleteExcludedApp(id); err != nil {
+		return err.Error()
+	}
+	return ""
+}
