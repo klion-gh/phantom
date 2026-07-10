@@ -84,7 +84,13 @@ type WinTunnel struct {
 //  4. Create the TUN device, assign it an address, set DNS.
 //  5. Add the 0.0.0.0/0 route through the TUN interface.
 //  6. Start the netstack forwarders.
-func StartWindows(configYAML string) (*WinTunnel, error) {
+//
+// onNetworkChanged, if non-nil, is called (already debounced - see
+// startWatchingRouteChanges) if the physical network this tunnel dialed out
+// through changes after connecting (switching Wi-Fi networks, Ethernet <->
+// Wi-Fi, etc.) - the caller's job is to reconnect from scratch, mirroring the
+// Android app's ConnectivityManager-triggered reconnect.
+func StartWindows(configYAML string, onNetworkChanged func()) (*WinTunnel, error) {
 	cfg, err := config.ParseClientConfig([]byte(configYAML))
 	if err != nil {
 		return nil, fmt.Errorf("parse config: %w", err)
@@ -224,6 +230,15 @@ func StartWindows(configYAML string) (*WinTunnel, error) {
 		inner.SetBypass(newSplitTunnelBypass(physicalIfIndex))
 	}
 
+	if onNetworkChanged != nil {
+		if err := startWatchingRouteChanges(gateway, onNetworkChanged); err != nil {
+			// Not fatal to the tunnel itself, just to auto-reconnect-on-network-
+			// change - the tunnel still works fine until the network actually
+			// changes, it just won't notice on its own if/when it does.
+			log.Printf("network-change watch unavailable: %v", err)
+		}
+	}
+
 	return w, nil
 }
 
@@ -231,6 +246,10 @@ func StartWindows(configYAML string) (*WinTunnel, error) {
 // call on a partially-initialized WinTunnel (every field is nil-checked)
 // since StartWindows calls it on its own error paths.
 func (w *WinTunnel) Stop() {
+	// Stops watching (and cancels any debounced check still pending) before
+	// anything else - once this tunnel is on its way down, a network-change
+	// callback firing mid-teardown must not try to reconnect out from under it.
+	stopWatchingRouteChanges()
 	if w.cancel != nil {
 		w.cancel()
 	}

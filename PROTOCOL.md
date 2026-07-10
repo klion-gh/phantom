@@ -29,9 +29,8 @@ served a real small decoy website instead of being dropped.
 One Go implementation of the protocol (`internal/`) backs three clients:
 
 - **Desktop proxy** (`cmd/client`): local SOCKS5 (`127.0.0.1:1080`) + HTTP CONNECT
-  (`127.0.0.1:1081`) proxy, with an interactive console manager (`cmd/vpn`) that starts
-  it and toggles the Windows system proxy setting. Doesn't need Administrator; only
-  tunnels traffic from apps explicitly pointed at the proxy.
+  (`127.0.0.1:1081`) proxy. Doesn't need Administrator; only tunnels traffic from apps
+  explicitly pointed at the proxy, not the whole machine.
 - **Windows app** (`windows/`, `phantom.exe`): a full system-wide VPN via a Wintun
   adapter (Wails v2 GUI). All IP traffic on the machine goes through the tunnel, not
   just proxy-aware apps. See §11.
@@ -529,12 +528,18 @@ the same underlying data shape (`SavedConfig{id, yaml}`, ping/geo polling per ti
 
 ### 11.1 Why a second, heavier client alongside `cmd/client`
 
-`cmd/client`/`cmd/vpn` remain as a lighter-weight, no-Administrator-required option that
-only tunnels traffic from apps explicitly pointed at the SOCKS5/HTTP proxy. `windows/`
-is a full system-wide VPN — all IP traffic goes through it — which requires creating a
-TUN adapter and modifying the routing table, both of which need Administrator
+`cmd/client` remains as a lighter-weight, no-Administrator-required option that only
+tunnels traffic from apps explicitly pointed at the SOCKS5/HTTP proxy - useful for
+headless use (WSL, a Linux box, curl/scripting) or routing just one app/browser profile
+through Phantom without touching the rest of the machine's traffic. `windows/` is a full
+system-wide VPN — all IP traffic goes through it — which requires creating a TUN adapter
+and modifying the routing table, both of which need Administrator
 (`build/windows/wails.exe.manifest` sets `requestedExecutionLevel="requireAdministrator"`,
-so Windows shows the UAC prompt on launch automatically).
+so Windows shows the UAC prompt on launch automatically). An earlier `cmd/vpn` console
+wrapper around `cmd/client` (start/stop/toggle the Windows system proxy) was removed once
+`windows/` existed - it added nothing `windows/` didn't already do better (a full-tunnel
+GUI supersedes a proxy-only CLI for the desktop case), and had a stale hardcoded server IP
+in its status output.
 
 ### 11.2 `StartWindows` (`wintun.go`) — order of operations matters
 

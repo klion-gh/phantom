@@ -376,3 +376,12 @@ func (m *Multiplexer) IsClosed() bool {
 		return false
 	}
 }
+
+// Done returns a channel that closes the instant this multiplexer dies -
+// readLoop hitting a real I/O error (its underlying connection's interface
+// disappearing, a reset, etc.) closes it via Close(), same as an explicit
+// Close() call. Lets a caller (ConnPool.monitorConn) react immediately
+// instead of only discovering a dead connection on its own polling schedule.
+func (m *Multiplexer) Done() <-chan struct{} {
+	return m.closed
+}

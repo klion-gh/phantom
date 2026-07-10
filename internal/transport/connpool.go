@@ -115,6 +115,19 @@ func (p *ConnPool) monitorConn(pc *poolConn) {
 
 	for {
 		select {
+		case <-pc.mux.Done():
+			// The underlying connection actually died (its readLoop hit a real
+			// I/O error - e.g. the network interface it was bound to disappeared
+			// under it, a reset, etc.), not just aged out by byte volume. Without
+			// this, Get() would keep handing out this same dead mux forever on an
+			// otherwise-idle pool, since the byte-volume check below would never
+			// trigger - which is exactly what made a phone's Wi-Fi<->cellular
+			// switch look like total internet loss instead of a brief reconnect.
+			pc.mu.Lock()
+			pc.healthy = false
+			pc.mu.Unlock()
+			p.rotateConn(pc)
+			return
 		case <-ticker.C:
 			pc.mu.Lock()
 			if pc.bytesUsed >= p.maxBytes {

@@ -35,7 +35,7 @@ func runSelfTest(configPath string) {
 
 	log("=== connecting ===")
 	start := time.Now()
-	tun, err := StartWindows(string(yaml))
+	tun, err := StartWindows(string(yaml), nil)
 	if err != nil {
 		log("FAIL: StartWindows: %v", err)
 		return

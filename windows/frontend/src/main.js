@@ -476,6 +476,16 @@ if (window.runtime) {
     updateBanner.textContent = `Не удалось обновиться: ${message}`;
     updateBanner.classList.remove('hidden');
   });
+  // Fired by windows/networkwatch.go's native route-change callback (see
+  // app.go's Connect) when the physical network changes out from under an
+  // active tunnel - Status()'s own 4s poll already reflects the brief
+  // disconnected-then-reconnected transition on the tile itself, this banner
+  // just explains *why* rather than leaving it looking like a random drop.
+  window.runtime.EventsOn('tunnel:reconnecting', () => {
+    updateBanner.textContent = 'Смена сети — переподключение...';
+    updateBanner.classList.remove('hidden');
+    setTimeout(() => updateBanner.classList.add('hidden'), 4000);
+  });
 }
 
 setInterval(refreshStatus, 4000);

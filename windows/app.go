@@ -57,7 +57,9 @@ func (a *App) beforeClose(ctx context.Context) (prevent bool) {
 // "connecting" UI state immediately after calling this, the same way the
 // Android app's button does, rather than needing a separate polling step for
 // this specific transition. Switching from one saved config to another reuses
-// this same call - any existing tunnel is torn down first.
+// this same call - any existing tunnel is torn down first, which is also
+// exactly what happens when the network-change watch below decides to
+// reconnect from scratch.
 func (a *App) Connect(configID string, configYAML string) string {
 	a.mu.Lock()
 	if a.tunnel != nil {
@@ -68,7 +70,13 @@ func (a *App) Connect(configID string, configYAML string) string {
 	a.mu.Unlock()
 
 	log.Println("connect: establishing tunnel")
-	tun, err := StartWindows(configYAML)
+	tun, err := StartWindows(configYAML, func() {
+		log.Println("underlying network changed, reconnecting")
+		runtime.EventsEmit(a.ctx, "tunnel:reconnecting")
+		if errMsg := a.Connect(configID, configYAML); errMsg != "" {
+			log.Printf("network-change reconnect failed: %s", errMsg)
+		}
+	})
 	if err != nil {
 		log.Printf("connect failed: %v", err)
 		return err.Error()
