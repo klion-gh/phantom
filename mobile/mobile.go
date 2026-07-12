@@ -119,6 +119,21 @@ func Start(configYAML string, tunFD int, mtu int, protector Protector) (*Tunnel,
 		cancel()
 		return nil, err
 	}
+	// Lets the tunnel recover on its own from the one connection to the
+	// Phantom server dying (a brief Wi-Fi blip, a server-side hiccup) by
+	// pulling a fresh one out of the pool - which, thanks to ConnPool's own
+	// self-healing (see connpool.go's monitorConn), is often *already*
+	// sitting there healthy by the time this is called. See
+	// netstack.Tunnel.SetSessionRefresher for why this matters.
+	inner.SetSessionRefresher(func() (*tunnel.Session, error) {
+		refreshCtx, refreshCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer refreshCancel()
+		freshMux, err := pool.Get(refreshCtx)
+		if err != nil {
+			return nil, err
+		}
+		return tunnel.NewSessionFromMux(freshMux), nil
+	})
 
 	return &Tunnel{pool: pool, cancel: cancel, inner: inner}, nil
 }

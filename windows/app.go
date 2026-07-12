@@ -299,3 +299,13 @@ func (a *App) DeleteExcludedApp(id string) string {
 	}
 	return ""
 }
+
+// ApplyUpdate downloads and installs whatever release checkAndSelfUpdate
+// found (see the "update:available" event) - swapping in the new exe and
+// relaunching. Only ever triggered by the user clicking the update button;
+// the app no longer installs a found update on its own. Returns an error
+// message on failure, or "" if there was nothing pending - on success this
+// call never actually returns, since the process relaunches and exits.
+func (a *App) ApplyUpdate() string {
+	return applyPendingUpdate(a.ctx)
+}

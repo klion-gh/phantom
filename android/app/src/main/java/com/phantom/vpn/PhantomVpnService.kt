@@ -8,6 +8,8 @@ import android.content.Intent
 import android.graphics.drawable.Icon
 import android.net.ConnectivityManager
 import android.net.Network
+import android.net.NetworkCapabilities
+import android.net.NetworkRequest
 import android.net.VpnService
 import android.os.Build
 import android.os.Handler
@@ -39,13 +41,22 @@ class PhantomVpnService : VpnService() {
     // Reconnect-on-network-change: a plain TCP/TLS socket bound to (say) Wi-Fi
     // doesn't migrate itself when Wi-Fi disappears and cellular takes over - it
     // just dies, and since nothing was watching for that, the whole tunnel would
-    // silently stop passing traffic instead of reconnecting. lastNetwork is
-    // primed with whatever network we actually dialed on, so the callback's own
-    // first invocation (which just reports that same network back) doesn't
-    // trigger a spurious reconnect right after connecting.
+    // silently stop passing traffic instead of reconnecting.
+    //
+    // This deliberately does NOT use registerDefaultNetworkCallback: that reports
+    // *this app's own* perceived default network, and once our own tunnel is up,
+    // Android considers our own VPN interface to be this app's new default
+    // (we're not excluded from our own tunnel) - so its very first callback
+    // fires reporting our own just-created VPN network, which looks exactly
+    // like "the network changed" and triggers an immediate reconnect. That
+    // reconnect creates a new VPN interface, which repeats the same thing again -
+    // an infinite reconnect loop even with a rock-stable Wi-Fi. Filtering the
+    // request to NET_CAPABILITY_NOT_VPN sidesteps this entirely: it only ever
+    // reports genuine physical networks (Wi-Fi, cellular, ethernet), never our
+    // own tunnel, so every event it fires is an actual signal worth reacting to.
     private var connectivityManager: ConnectivityManager? = null
     private var networkCallback: ConnectivityManager.NetworkCallback? = null
-    private var lastNetwork: Network? = null
+    private var watchRegisteredAtMs: Long = 0
     private var activeConfigId: String? = null
     private var activeConfigYaml: String? = null
     private val reconnectHandler = Handler(Looper.getMainLooper())
@@ -161,7 +172,7 @@ class PhantomVpnService : VpnService() {
                 FileLog.i("Mobile.start returned, tunnel connected")
                 VpnStateHolder.update(ConnectionStatus.CONNECTED, "Connected", configId)
                 showPersistentNotification(ConnectionStatus.CONNECTED)
-                registerNetworkCallback(cm, underlyingNetwork)
+                registerNetworkCallback(cm)
             } catch (e: Throwable) {
                 FileLog.e("connect failed", e)
                 VpnStateHolder.update(ConnectionStatus.ERROR, e.message ?: "connection failed", configId)
@@ -170,32 +181,46 @@ class PhantomVpnService : VpnService() {
         }
     }
 
-    // Watches for the device's active default network changing underneath the
-    // tunnel (Wi-Fi <-> cellular, Wi-Fi disappearing entirely, etc.) and
-    // reconnects from scratch when it does - a live TCP/TLS socket doesn't
+    // Watches for the underlying *physical* network changing (Wi-Fi <-> cellular,
+    // Wi-Fi disappearing entirely, a different Wi-Fi network taking over, etc.)
+    // and reconnects from scratch when it does - a live TCP/TLS socket doesn't
     // migrate itself to a new interface, it just dies, so without this the
-    // tunnel would silently stop passing any traffic until the user noticed
-    // and reconnected manually.
-    private fun registerNetworkCallback(cm: ConnectivityManager?, initialNetwork: Network?) {
+    // tunnel would silently stop passing any traffic until the user noticed and
+    // reconnected manually. NOT_VPN excludes our own tunnel from ever
+    // triggering this itself - see the field comment above for why that matters.
+    private fun registerNetworkCallback(cm: ConnectivityManager?) {
         if (cm == null) return
         connectivityManager = cm
-        lastNetwork = initialNetwork
+        watchRegisteredAtMs = System.currentTimeMillis()
+
+        val request = NetworkRequest.Builder()
+            .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+            .addCapability(NetworkCapabilities.NET_CAPABILITY_NOT_VPN)
+            .build()
 
         val callback = object : ConnectivityManager.NetworkCallback() {
-            override fun onAvailable(network: Network) {
-                val previous = lastNetwork
-                lastNetwork = network
-                if (previous == null || previous == network) return
-                FileLog.i("underlying network changed, scheduling reconnect")
-                scheduleReconnect()
-            }
+            override fun onAvailable(network: Network) = onPhysicalNetworkEvent()
+            override fun onLost(network: Network) = onPhysicalNetworkEvent()
         }
         networkCallback = callback
         try {
-            cm.registerDefaultNetworkCallback(callback)
+            cm.registerNetworkCallback(request, callback)
         } catch (e: Throwable) {
-            FileLog.e("registerDefaultNetworkCallback failed", e)
+            FileLog.e("registerNetworkCallback failed", e)
         }
+    }
+
+    // registerNetworkCallback immediately replays onAvailable for every
+    // currently-qualifying physical network as soon as it's registered (i.e.
+    // whatever was already connected when we just dialed out on it) - a burst
+    // of events that reflects existing state, not a change, so it must not
+    // itself count as "the network changed". A short grace period is simpler
+    // and more robust here than trying to track exactly how many initial
+    // replay events to expect.
+    private fun onPhysicalNetworkEvent() {
+        if (System.currentTimeMillis() - watchRegisteredAtMs < 2000) return
+        FileLog.i("underlying network changed, scheduling reconnect")
+        scheduleReconnect()
     }
 
     private fun unregisterNetworkCallback() {
@@ -208,7 +233,6 @@ class PhantomVpnService : VpnService() {
         }
         networkCallback = null
         connectivityManager = null
-        lastNetwork = null
         pendingReconnect?.let { reconnectHandler.removeCallbacks(it) }
         pendingReconnect = null
     }

@@ -14,6 +14,10 @@ export function AddResource(arg1, arg2) {
   return window['go']['main']['App']['AddResource'](arg1, arg2);
 }
 
+export function ApplyUpdate() {
+  return window['go']['main']['App']['ApplyUpdate']();
+}
+
 export function Connect(arg1, arg2) {
   return window['go']['main']['App']['Connect'](arg1, arg2);
 }

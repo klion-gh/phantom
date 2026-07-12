@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/wailsapp/wails/v2/pkg/runtime"
@@ -27,13 +28,24 @@ type githubRelease struct {
 	} `json:"assets"`
 }
 
+// Set by checkAndSelfUpdate once it finds something newer, read by
+// applyPendingUpdate when the user actually clicks the update button - the
+// app no longer installs an update on its own the moment it's found.
+var (
+	pendingUpdateMu  sync.Mutex
+	pendingUpdateTag string
+	pendingUpdateURL string
+)
+
 // checkAndSelfUpdate runs once shortly after startup (called as its own
 // goroutine from App.startup, so it never blocks the window from showing).
-// If GitHub has a newer release with a phantom.exe asset, it downloads it,
-// swaps it in for the running exe, and relaunches - see selfUpdate. Any
-// failure along the way (offline, rate-limited, no matching asset) is
-// logged and otherwise ignored; the app keeps running on its current
-// version rather than treating "can't update" as fatal.
+// If GitHub has a newer release with a phantom.exe asset, it just remembers
+// it and emits "update:available" so the frontend can show the update
+// button - actually downloading/installing it is applyPendingUpdate's job,
+// triggered only by the user clicking that button. Any failure along the
+// way (offline, rate-limited, no matching asset) is logged and otherwise
+// ignored; the app keeps running on its current version rather than
+// treating "can't check" as fatal.
 func checkAndSelfUpdate(ctx context.Context) {
 	cleanupOldExe()
 
@@ -42,16 +54,37 @@ func checkAndSelfUpdate(ctx context.Context) {
 		return
 	}
 
-	log.Printf("update available: %s (current %s) - downloading", tag, AppVersion)
+	log.Printf("update available: %s (current %s)", tag, AppVersion)
+	pendingUpdateMu.Lock()
+	pendingUpdateTag = tag
+	pendingUpdateURL = downloadURL
+	pendingUpdateMu.Unlock()
+	runtime.EventsEmit(ctx, "update:available", tag)
+}
+
+// applyPendingUpdate performs the actual download+swap+relaunch for
+// whatever update checkAndSelfUpdate most recently found. Returns an error
+// message on failure, or "" if there was nothing pending to apply - on
+// success this doesn't return at all, since selfUpdate relaunches the new
+// exe and calls os.Exit itself.
+func applyPendingUpdate(ctx context.Context) string {
+	pendingUpdateMu.Lock()
+	tag, downloadURL := pendingUpdateTag, pendingUpdateURL
+	pendingUpdateMu.Unlock()
+
+	if downloadURL == "" {
+		return "no update available"
+	}
+
+	log.Printf("applying update %s (current %s)", tag, AppVersion)
 	runtime.EventsEmit(ctx, "update:downloading", tag)
 
 	if err := selfUpdate(downloadURL); err != nil {
 		log.Printf("self-update to %s failed: %v", tag, err)
 		runtime.EventsEmit(ctx, "update:failed", err.Error())
-		return
+		return err.Error()
 	}
-	// selfUpdate relaunches the new exe and calls os.Exit itself on success -
-	// nothing runs after it returns nil in practice.
+	return "" // unreachable - selfUpdate exits the process on success
 }
 
 // checkForUpdate asks GitHub for the latest release and returns its tag and

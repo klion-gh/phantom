@@ -7,6 +7,8 @@ export function AddExcludedApp(arg1:string,arg2:string):Promise<string>;
 
 export function AddResource(arg1:string,arg2:string):Promise<string>;
 
+export function ApplyUpdate():Promise<string>;
+
 export function Connect(arg1:string,arg2:string):Promise<string>;
 
 export function DeleteConfig(arg1:string):Promise<string>;

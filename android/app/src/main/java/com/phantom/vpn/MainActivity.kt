@@ -3,10 +3,10 @@ package com.phantom.vpn
 import android.Manifest
 import android.content.Intent
 import android.content.pm.PackageManager
-import android.net.Uri
 import android.net.VpnService
 import android.os.Build
 import android.os.Bundle
+import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
@@ -20,10 +20,14 @@ import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.SignalCellularAlt
+import androidx.compose.material.icons.filled.TheaterComedy
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.res.painterResource
@@ -35,8 +39,6 @@ import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 
 private enum class Screen { MAIN, ADD_CONFIG, SETTINGS, LOG }
@@ -74,15 +76,6 @@ class MainActivity : ComponentActivity() {
             notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
         } else {
             showPersistentNotification()
-        }
-
-        // Unlike the Windows app, Android can't silently replace its own installed APK -
-        // this just opens the releases page for the user to download/install manually.
-        CoroutineScope(Dispatchers.Main).launch {
-            checkForUpdate(BuildConfig.VERSION_NAME)?.let { url ->
-                FileLog.i("update available, opening $url")
-                startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
-            }
         }
 
         setContent {
@@ -166,6 +159,28 @@ private fun PhantomApp(
         onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
 
+    // Checked once on launch - unlike the Windows app, actually installing it is
+    // never automatic even after the user asks for it (see downloadAndInstallUpdate),
+    // so there's no equivalent of the exe's silent relaunch to guard against here.
+    var updateInfo by remember { mutableStateOf<UpdateInfo?>(null) }
+    var isUpdating by remember { mutableStateOf(false) }
+    LaunchedEffect(Unit) {
+        updateInfo = checkForUpdate(BuildConfig.VERSION_NAME)
+    }
+
+    fun applyUpdate() {
+        val info = updateInfo ?: return
+        if (isUpdating) return
+        isUpdating = true
+        coroutineScope.launch {
+            val ok = downloadAndInstallUpdate(context, info)
+            isUpdating = false
+            if (!ok) {
+                Toast.makeText(context, "Не удалось скачать обновление", Toast.LENGTH_LONG).show()
+            }
+        }
+    }
+
     fun refreshConfigs() {
         configs = ConfigStore.loadAll(context)
     }
@@ -232,6 +247,9 @@ private fun PhantomApp(
             configs = configs,
             resources = resources,
             appInForeground = appInForeground,
+            hasUpdate = updateInfo != null,
+            isUpdating = isUpdating,
+            onUpdateClick = { applyUpdate() },
             onToggle = { config ->
                 when {
                     state.activeConfigId == config.id && state.status == ConnectionStatus.CONNECTED -> onDisconnect()
@@ -277,6 +295,9 @@ private fun MainScreen(
     configs: List<SavedConfig>,
     resources: List<PingResource>,
     appInForeground: Boolean,
+    hasUpdate: Boolean,
+    isUpdating: Boolean,
+    onUpdateClick: () -> Unit,
     onToggle: (SavedConfig) -> Unit,
     onEditConfig: (SavedConfig) -> Unit,
     onAddConfig: () -> Unit,
@@ -285,6 +306,7 @@ private fun MainScreen(
     onOpenSettings: () -> Unit,
 ) {
     val pagerState = rememberPagerState(pageCount = { 2 })
+    val coroutineScope = rememberCoroutineScope()
     var showAddResourceDialog by remember { mutableStateOf(false) }
 
     Column(modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp, vertical = 24.dp)) {
@@ -306,6 +328,15 @@ private fun MainScreen(
             )
             IconButton(onClick = onOpenSettings) {
                 Text("⚙", fontSize = 22.sp, color = TextSecondary)
+            }
+            if (hasUpdate) {
+                IconButton(onClick = onUpdateClick, enabled = !isUpdating) {
+                    Text(
+                        "⬇",
+                        fontSize = 20.sp,
+                        color = if (isUpdating) TextSecondary else StatusConnected,
+                    )
+                }
             }
             Spacer(modifier = Modifier.weight(1f))
         }
@@ -335,6 +366,11 @@ private fun MainScreen(
                 )
             }
         }
+
+        BottomNavBar(
+            currentPage = pagerState.currentPage,
+            onSelect = { page -> coroutineScope.launch { pagerState.animateScrollToPage(page) } },
+        )
     }
 
     if (showAddResourceDialog) {
@@ -344,6 +380,44 @@ private fun MainScreen(
                 showAddResourceDialog = false
                 onAddResource(name, url)
             },
+        )
+    }
+}
+
+/**
+ * iOS-style bottom tab bar: icon only, no label, the current page tinted with the
+ * accent color and everything else muted - mirrors the pager's own two pages
+ * (configs/mask, resources/signal bars) so tapping is just another way to switch
+ * pages alongside swiping, not a separate navigation model.
+ */
+@Composable
+private fun BottomNavBar(
+    currentPage: Int,
+    onSelect: (Int) -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(top = 8.dp),
+        horizontalArrangement = Arrangement.SpaceEvenly,
+    ) {
+        NavBarItem(icon = Icons.Filled.TheaterComedy, selected = currentPage == 0, onClick = { onSelect(0) })
+        NavBarItem(icon = Icons.Filled.SignalCellularAlt, selected = currentPage == 1, onClick = { onSelect(1) })
+    }
+}
+
+@Composable
+private fun NavBarItem(
+    icon: ImageVector,
+    selected: Boolean,
+    onClick: () -> Unit,
+) {
+    IconButton(onClick = onClick) {
+        Icon(
+            imageVector = icon,
+            contentDescription = null,
+            tint = if (selected) AccentLavender else TextSecondary,
+            modifier = Modifier.size(26.dp),
         )
     }
 }

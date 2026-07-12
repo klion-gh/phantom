@@ -2,6 +2,12 @@
 configs/server.yaml
 configs/client.yaml
 
+# Android release signing - never commit the actual key/password. Losing this file
+# means future releases can't be installed as an update over existing installs
+# (Android requires matching signatures) - back it up somewhere safe, just not here.
+android/phantom-release.keystore
+android/keystore.properties
+
 # Build artifacts
 bin/
 *.apk

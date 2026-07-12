@@ -226,6 +226,22 @@ func StartWindows(configYAML string, onNetworkChanged func()) (*WinTunnel, error
 		return nil, err
 	}
 	w.inner = inner
+	// Lets the tunnel recover on its own from the one connection to the
+	// Phantom server dying (a brief interruption, a server-side hiccup) by
+	// pulling a fresh one out of the pool - which, thanks to ConnPool's own
+	// self-healing (see connpool.go's monitorConn), is often *already*
+	// sitting there healthy by the time this is called. See
+	// netstack.Tunnel.SetSessionRefresher for why this matters: without it, a
+	// transient drop left the tile stuck red until a manual reconnect.
+	inner.SetSessionRefresher(func() (*tunnel.Session, error) {
+		refreshCtx, refreshCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer refreshCancel()
+		freshMux, err := pool.Get(refreshCtx)
+		if err != nil {
+			return nil, err
+		}
+		return tunnel.NewSessionFromMux(freshMux), nil
+	})
 	if physicalIfErr == nil {
 		inner.SetBypass(newSplitTunnelBypass(physicalIfIndex))
 	}

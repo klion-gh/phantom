@@ -66,6 +66,11 @@ html, body {
 }
 .icon-btn:hover { background: var(--bg-surface); color: var(--text-primary); }
 
+.update-btn {
+    color: var(--status-connected);
+}
+.update-btn:hover { background: rgba(74, 222, 128, 0.15); color: var(--status-connected); }
+
 /* --- Update banner --- */
 .update-banner {
     margin: 0 24px 16px;
@@ -184,7 +189,7 @@ html, body {
     cursor: pointer;
     padding: 6px 8px;
     border-radius: 8px;
-    align-self: flex-start;
+    align-self: center;
 }
 .config-edit-btn:hover { background: var(--bg-surface-alt); color: var(--text-primary); }
 
@@ -416,7 +421,11 @@ textarea::placeholder { color: var(--text-secondary); }
 .overlay {
     position: absolute;
     inset: 0;
-    background: rgba(0, 0, 0, 0.5);
+    z-index: 10;
+    /* Opaque enough to fully obscure a connected config tile's glow behind it
+       (box-shadow: 0 0 16px rgba(167,139,250,.35) on .power-btn.connected) -
+       at 0.5 alpha that glow was still visibly showing through the backdrop. */
+    background: rgba(4, 4, 10, 0.92);
     display: flex;
     align-items: center;
     justify-content: center;

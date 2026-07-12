@@ -15,7 +15,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -35,6 +37,12 @@ import (
 const tunNICID = tcpip.NICID(1)
 const udpIdleTimeout = 60 * time.Second
 
+// How often currentSession is allowed to actually attempt a refresh while
+// the session is dead - without this, a prolonged outage would turn every
+// single new connection attempt (and every IsAlive() poll from the UI) into
+// its own redial attempt against a server that's still unreachable.
+const sessionRefreshCooldown = 3 * time.Second
+
 // BypassFunc decides whether a new connection should bypass the Phantom
 // tunnel entirely, given the *originating* app's local port on this machine
 // (network is "tcp" or "udp", target is the real internet destination the
@@ -48,11 +56,15 @@ type BypassFunc func(network string, localPort uint16, target string) io.ReadWri
 // Phantom session. Obtain one via New.
 type Tunnel struct {
 	session   *tunnel.Session
+	sessionMu sync.Mutex
 	netstack  *stack.Stack
 	startTime time.Time
 	bytesUp   int64
 	bytesDown int64
 	bypass    BypassFunc
+
+	refreshSession     func() (*tunnel.Session, error)
+	lastRefreshAttempt time.Time
 }
 
 // SetBypass installs an optional per-connection bypass hook - see BypassFunc.
@@ -61,6 +73,51 @@ type Tunnel struct {
 // have a valid *Tunnel from a successful New.
 func (t *Tunnel) SetBypass(fn BypassFunc) {
 	t.bypass = fn
+}
+
+// SetSessionRefresher installs an optional hook that lets the tunnel recover
+// from its one connection to the Phantom server dying - a brief Wi-Fi blip, a
+// server-side hiccup, a network interface change - by fetching a fresh
+// session (typically pool.Get() wrapped in tunnel.NewSessionFromMux) on
+// demand, instead of staying bound forever to whichever one happened to be
+// alive when New was called.
+//
+// Without this, once that one connection died, every new TCP/UDP flow (and
+// IsAlive(), which the UI polls to decide whether to show a tile as
+// connected or in error) kept failing indefinitely - even though the
+// underlying transport.ConnPool had *already* quietly redialed a healthy
+// replacement connection in the background (see ConnPool.monitorConn). This
+// is what made a transient connectivity interruption look identical to the
+// whole tunnel having died, requiring a manual disconnect/reconnect to
+// recover instead of the pool's own self-healing actually being put to use.
+func (t *Tunnel) SetSessionRefresher(fn func() (*tunnel.Session, error)) {
+	t.refreshSession = fn
+}
+
+// currentSession returns the tunnel's session, transparently replacing it
+// with a fresh one if the current one has died - see SetSessionRefresher.
+// Safe for concurrent use; every new TCP/UDP flow and every IsAlive() call
+// goes through this.
+func (t *Tunnel) currentSession() *tunnel.Session {
+	t.sessionMu.Lock()
+	defer t.sessionMu.Unlock()
+
+	if t.session != nil && t.session.IsAlive() {
+		return t.session
+	}
+	if t.refreshSession == nil || time.Since(t.lastRefreshAttempt) < sessionRefreshCooldown {
+		return t.session
+	}
+
+	t.lastRefreshAttempt = time.Now()
+	fresh, err := t.refreshSession()
+	if err != nil {
+		log.Printf("[netstack] session refresh failed: %v", err)
+		return t.session
+	}
+	log.Printf("[netstack] recovered with a fresh session after the previous one died")
+	t.session = fresh
+	return t.session
 }
 
 // New wires linkEndpoint (already attached to whatever OS-specific packet
@@ -154,14 +211,18 @@ func (t *Tunnel) openRemote(network string, localPort uint16, target string) io.
 			return conn
 		}
 	}
+	session := t.currentSession()
+	if session == nil {
+		return nil
+	}
 	if network == "udp" {
-		stream, err := t.session.OpenUDP(target)
+		stream, err := session.OpenUDP(target)
 		if err != nil {
 			return nil
 		}
 		return stream
 	}
-	stream, err := t.session.Open(target)
+	stream, err := session.Open(target)
 	if err != nil {
 		return nil
 	}
@@ -250,8 +311,11 @@ func (t *Tunnel) Stop() {
 	if t.netstack != nil {
 		t.netstack.Destroy()
 	}
-	if t.session != nil {
-		t.session.Close()
+	t.sessionMu.Lock()
+	session := t.session
+	t.sessionMu.Unlock()
+	if session != nil {
+		session.Close()
 	}
 }
 
@@ -266,7 +330,12 @@ func (t *Tunnel) Stats() string {
 	return string(data)
 }
 
-// IsAlive reports whether the underlying Phantom session is still connected.
+// IsAlive reports whether the underlying Phantom session is still connected -
+// attempting a refresh first (see currentSession/SetSessionRefresher) if it
+// isn't, so a UI polling this (e.g. every few seconds) self-heals its
+// connected/error indicator automatically once connectivity returns, rather
+// than staying stuck on error until a manual reconnect.
 func (t *Tunnel) IsAlive() bool {
-	return t.session != nil && t.session.IsAlive()
+	session := t.currentSession()
+	return session != nil && session.IsAlive()
 }

@@ -1,5 +1,5 @@
 import './style.css';
-import { Connect, Disconnect, Status, ReadLog, ListConfigs, AddConfig, UpdateConfig, DeleteConfig, SetConfigGeo, Ping, ListResources, AddResource, DeleteResource, ListExcludedApps, PickExcludedAppExe, AddExcludedApp, DeleteExcludedApp } from '../wailsjs/go/main/App';
+import { Connect, Disconnect, Status, ReadLog, ListConfigs, AddConfig, UpdateConfig, DeleteConfig, SetConfigGeo, Ping, ListResources, AddResource, DeleteResource, ListExcludedApps, PickExcludedAppExe, AddExcludedApp, DeleteExcludedApp, ApplyUpdate } from '../wailsjs/go/main/App';
 
 const screens = {
   main: document.getElementById('screen-main'),
@@ -24,6 +24,7 @@ const deleteConfirm = document.getElementById('delete-confirm');
 const logText = document.getElementById('log-text');
 const resourceList = document.getElementById('resource-list');
 const updateBanner = document.getElementById('update-banner');
+const btnUpdate = document.getElementById('btn-update');
 const addResourceOverlay = document.getElementById('add-resource-overlay');
 const resourceNameInput = document.getElementById('resource-name-input');
 const resourceUrlInput = document.getElementById('resource-url-input');
@@ -285,7 +286,7 @@ function renderConfigList() {
           <span class="geo-text"></span>
         </div>
       </div>
-      <button class="config-edit-btn" title="Редактировать">&#8942;</button>
+      <button class="config-edit-btn" title="Редактировать">&#9881;</button>
       <button class="power-btn idle" title="Подключить">
         <svg viewBox="0 0 24 24" class="power-icon">
           <path d="M12 2v9" stroke-linecap="round" />
@@ -463,18 +464,35 @@ document.getElementById('btn-add-excluded-app').addEventListener('click', async 
   await reloadExcludedApps();
 });
 
+btnUpdate.addEventListener('click', async () => {
+  btnUpdate.disabled = true;
+  // On success the process relaunches and exits - this call never actually
+  // returns then, so there's nothing further to do here in that case. On
+  // failure the 'update:failed' listener below shows why and re-enables the
+  // button.
+  await ApplyUpdate();
+});
+
 // The Go side (updater.go) checks GitHub for a newer release shortly after
-// startup and, if found, downloads+swaps+relaunches on its own - these just
-// surface that it's happening, since a silent relaunch with no explanation
-// would look like the app crashed.
+// startup - it no longer installs it on its own, just remembers it and fires
+// this, which is what shows the green update button next to the settings
+// gear. Actually downloading/installing (and the app relaunching) only
+// happens once the user clicks that button.
 if (window.runtime) {
+  window.runtime.EventsOn('update:available', (tag) => {
+    btnUpdate.title = `Доступно обновление ${tag} — нажмите, чтобы установить`;
+    btnUpdate.classList.remove('hidden');
+    updateBanner.textContent = `Доступно обновление ${tag} — нажмите зелёную стрелку рядом с настройками, чтобы установить.`;
+    updateBanner.classList.remove('hidden');
+  });
   window.runtime.EventsOn('update:downloading', (tag) => {
-    updateBanner.textContent = `Найдено обновление ${tag} — скачивание и перезапуск...`;
+    updateBanner.textContent = `Установка обновления ${tag} — скачивание и перезапуск...`;
     updateBanner.classList.remove('hidden');
   });
   window.runtime.EventsOn('update:failed', (message) => {
     updateBanner.textContent = `Не удалось обновиться: ${message}`;
     updateBanner.classList.remove('hidden');
+    btnUpdate.disabled = false;
   });
   // Fired by windows/networkwatch.go's native route-change callback (see
   // app.go's Connect) when the physical network changes out from under an
