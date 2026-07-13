@@ -336,6 +336,25 @@ caller uses — `cmd/client`, `mobile.Start`, `windows/wintun.go`'s `StartWindow
   challenge type is actually used) are recognized and left alone — `autocert` answers
   those itself.
 
+### 6.3 Static certificate option (`cert_file`/`key_file`, shared servers)
+
+`ListenAndServe` only uses autocert when `TLSServerConfig.CertFile`/`KeyFile` are both
+empty. If set, it instead builds a `tls.Config{GetCertificate: ...}` backed by
+`certReloader`, which stats both files on every handshake and only re-parses them (via
+`tls.LoadX509KeyPair`) when their mtimes actually changed — a renewal (e.g. certbot
+replacing the files at the same path on its own schedule) is picked up automatically,
+no restart or deploy-hook needed. A transient stat/read failure mid-renewal serves the
+last-known-good certificate rather than failing in-flight handshakes.
+
+This exists because autocert's HTTP-01 challenge needs to bind port 80 itself
+(`ListenAndServe`'s inner `http.Server{Addr: ":80", ...}` goroutine) — on a shared box
+already running its own web server on 80/443 for something unrelated, that bind loses
+silently (logged, not fatal) and every handshake ends up with no certificate to offer
+at all, surfacing to clients as a bare `tls: internal error` with no other explanation.
+`cert_file`/`key_file` sidesteps ACME entirely for that case by pointing at a
+certificate obtained some other way for the same domain (typically the shared box's
+own certbot, already renewing itself independently of Phantom).
+
 ---
 
 ## 7. UDP relay

@@ -2,6 +2,13 @@ listen: ":8443"
 domain: "your-domain.example"
 acme_email: ""
 acme_cache_dir: "/var/lib/phantom/acme"
+# Only needed on a shared box where something else (e.g. your own nginx) already
+# owns port 80, so Phantom's own ACME HTTP-01 challenge can't complete - point
+# these at an existing cert instead (e.g. certbot's), and leave both blank to
+# use ACME normally. Must be set together; hot-reloaded on renewal, no restart
+# needed.
+cert_file: ""
+key_file: ""
 private_key: "REPLACE_WITH_SERVER_PRIVATE_KEY_FROM_KEYGEN"
 psk: "REPLACE_WITH_PSK_FROM_KEYGEN"
 decoy_site_dir: ""

@@ -60,6 +60,8 @@ func main() {
 		Domain:       cfg.Domain,
 		ACMEEmail:    cfg.ACMEEmail,
 		ACMECacheDir: cfg.ACMECacheDir,
+		CertFile:     cfg.CertFile,
+		KeyFile:      cfg.KeyFile,
 		PSK:          psk,
 		ServerPriv:   serverPriv,
 		ServerPub:    serverPub,

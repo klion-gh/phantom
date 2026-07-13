@@ -8,9 +8,13 @@
 #   curl -fsSL https://raw.githubusercontent.com/klion-gh/phantom/main/scripts/install.sh | sh -s -- uninstall
 #
 # Config (env vars, all optional):
-#   PHANTOM_DOMAIN   domain that already points at this server's IP (prompted if unset and a TTY is available)
-#   PHANTOM_REPO     override the GitHub "owner/repo" release source (default baked in below)
-#   PHANTOM_PURGE=1  on uninstall, also remove /var/lib/phantom (ACME cert cache) without prompting
+#   PHANTOM_DOMAIN    domain that already points at this server's IP (prompted if unset and a TTY is available)
+#   PHANTOM_REPO      override the GitHub "owner/repo" release source (default baked in below)
+#   PHANTOM_PURGE=1   on uninstall, also remove /var/lib/phantom (ACME cert cache) without prompting
+#   PHANTOM_CERT_FILE
+#   PHANTOM_KEY_FILE  already have a certificate for this domain (e.g. from certbot, on a box
+#                     where something else already owns port 80)? Set both to use it directly
+#                     instead of Phantom's own ACME - prompted if unset and a TTY is available.
 #
 # POSIX sh only - this is executed via `sh`, not necessarily bash.
 
@@ -127,6 +131,29 @@ if [ -z "$DOMAIN" ]; then
 fi
 [ -n "$DOMAIN" ] || die "no domain given - set PHANTOM_DOMAIN=yourdomain.example and re-run, or run this interactively over SSH"
 
+# Certificate: by default Phantom gets its own via ACME (needs port 80 free for the
+# HTTP-01 challenge) - but on a box that's already running its own web server on
+# 80/443 for something else, that challenge can't complete. If there's already a
+# certificate for this domain from somewhere else (typically certbot, serving that
+# other web server), point Phantom at it directly instead - see PROTOCOL.md §6.3.
+CERT_FILE="${PHANTOM_CERT_FILE:-}"
+KEY_FILE="${PHANTOM_KEY_FILE:-}"
+if [ -z "$CERT_FILE" ] && [ -z "$KEY_FILE" ]; then
+    use_static=$(prompt "Already have a certificate for $DOMAIN (e.g. via certbot)? Use it instead of ACME? [y/N] ")
+    case "$use_static" in
+        y|Y|yes|YES)
+            CERT_FILE=$(prompt "Path to certificate/fullchain file: ")
+            KEY_FILE=$(prompt "Path to private key file: ")
+            ;;
+    esac
+fi
+if [ -n "$CERT_FILE" ] || [ -n "$KEY_FILE" ]; then
+    [ -n "$CERT_FILE" ] && [ -n "$KEY_FILE" ] || die "both PHANTOM_CERT_FILE and PHANTOM_KEY_FILE are needed to skip ACME - leave both unset to use ACME instead"
+    [ -f "$CERT_FILE" ] || die "cert file not found: $CERT_FILE"
+    [ -f "$KEY_FILE" ] || die "key file not found: $KEY_FILE"
+    log "Using existing certificate $CERT_FILE - Phantom's own ACME/port 80 responder will stay off."
+fi
+
 log "Downloading phantom-keygen ($ARCH) to generate server keys..."
 curl -fsSL "$BASE_URL/phantom-keygen-linux-$ARCH" -o /tmp/phantom-keygen
 chmod 755 /tmp/phantom-keygen
@@ -145,20 +172,27 @@ PSK=$(echo "$KEYGEN_OUT" | grep '^PSK:' | grep -oE '[0-9a-f]{64}')
 
 [ -n "$SERVER_PRIV" ] && [ -n "$SERVER_PUB" ] && [ -n "$PSK" ] || die "failed to parse keygen output"
 
-cat > "$INSTALL_DIR/server.yaml" <<EOF
-listen: ":8443"
-domain: "$DOMAIN"
-acme_email: ""
-acme_cache_dir: "$DATA_DIR/acme"
-private_key: "$SERVER_PRIV"
-psk: "$PSK"
-decoy_site_dir: ""
-log_level: "info"
-EOF
+{
+    echo "listen: \":8443\""
+    echo "domain: \"$DOMAIN\""
+    echo "acme_email: \"\""
+    echo "acme_cache_dir: \"$DATA_DIR/acme\""
+    if [ -n "$CERT_FILE" ]; then
+        echo "cert_file: \"$CERT_FILE\""
+        echo "key_file: \"$KEY_FILE\""
+    fi
+    echo "private_key: \"$SERVER_PRIV\""
+    echo "psk: \"$PSK\""
+    echo "decoy_site_dir: \"\""
+    echo "log_level: \"info\""
+} > "$INSTALL_DIR/server.yaml"
 log "Wrote $INSTALL_DIR/server.yaml"
 
 if command -v ufw >/dev/null 2>&1; then
-    ufw allow 80/tcp  >/dev/null 2>&1 || true
+    # Port 80 is only needed for Phantom's own ACME challenge - skip opening it
+    # when using an existing certificate instead, where it's likely already
+    # fielding traffic for whatever else issued that certificate.
+    [ -z "$CERT_FILE" ] && { ufw allow 80/tcp >/dev/null 2>&1 || true; }
     ufw allow 8443/tcp >/dev/null 2>&1 || true
 fi
 
@@ -201,7 +235,11 @@ log_level: \"info\""
 
 echo "$CLIENT_YAML" > "$INSTALL_DIR/client.yaml.example"
 
-log "Installed and running. Certificate issuance happens lazily on the first real connection - watch:"
+if [ -n "$CERT_FILE" ]; then
+    log "Installed and running with the existing certificate at $CERT_FILE. Watch:"
+else
+    log "Installed and running. Certificate issuance happens lazily on the first real connection - watch:"
+fi
 echo "    journalctl -u $SERVICE_NAME -f"
 echo ""
 log "client.yaml (also saved at $INSTALL_DIR/client.yaml.example) - paste this whole block into:"
