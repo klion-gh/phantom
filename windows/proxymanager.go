@@ -91,7 +91,7 @@ func startConfigProxy(configID string, configYAML string, requestedPort int) (in
 		poolSize = 4
 	}
 
-	pool := transport.NewConnPool(poolSize, 12*1024, func(ctx context.Context) (net.Conn, *protocol.SessionCrypto, error) {
+	pool := transport.NewConnPool(poolSize, func(ctx context.Context) (net.Conn, *protocol.SessionCrypto, error) {
 		return transport.Dial(ctx, tlsCfg)
 	})
 
@@ -177,6 +177,14 @@ func configProxyPort(configID string) (int, bool) {
 		return 0, false
 	}
 	return rp.port, true
+}
+
+// anyConfigProxyRunning reports whether at least one independent proxy is
+// currently running, for the tray's combined VPN+proxy status line.
+func anyConfigProxyRunning() bool {
+	proxyMu.Lock()
+	defer proxyMu.Unlock()
+	return len(proxies) > 0
 }
 
 // stopAllConfigProxies tears down every running proxy - called on app shutdown.

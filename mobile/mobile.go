@@ -102,7 +102,7 @@ func Start(configYAML string, tunFD int, mtu int, protector Protector) (*Tunnel,
 
 	ctx, cancel := context.WithCancel(context.Background())
 
-	pool := transport.NewConnPool(poolSize, 12*1024, func(ctx context.Context) (net.Conn, *protocol.SessionCrypto, error) {
+	pool := transport.NewConnPool(poolSize, func(ctx context.Context) (net.Conn, *protocol.SessionCrypto, error) {
 		return transport.Dial(ctx, tlsCfg)
 	})
 
@@ -273,7 +273,7 @@ func StartProxy(configYAML string, requestedPort int, protector Protector) (*Pro
 		poolSize = 4
 	}
 
-	pool := transport.NewConnPool(poolSize, 12*1024, func(ctx context.Context) (net.Conn, *protocol.SessionCrypto, error) {
+	pool := transport.NewConnPool(poolSize, func(ctx context.Context) (net.Conn, *protocol.SessionCrypto, error) {
 		return transport.Dial(ctx, tlsCfg)
 	})
 

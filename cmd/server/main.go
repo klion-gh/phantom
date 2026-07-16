@@ -73,9 +73,8 @@ func main() {
 	err = transport.ListenAndServe(ctx, serverCfg, func(conn net.Conn, crypto *protocol.SessionCrypto) {
 		// Authentication and per-session key derivation already happened in
 		// internal/handshake before this callback ever runs, so - unlike v1 -
-		// the multiplexer needs neither to send nor to wait for an in-band
-		// FrameAuth: sendAuth=false, expectAuth defaults to false too.
-		mux := tunnel.NewMultiplexer(conn, crypto, false)
+		// there is no in-band auth frame exchange here.
+		mux := tunnel.NewMultiplexer(conn, crypto)
 		session := tunnel.NewSessionFromMux(mux)
 		defer session.Close()
 

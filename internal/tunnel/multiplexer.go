@@ -6,7 +6,6 @@ import (
 	"log"
 	"net"
 	"sync"
-	"time"
 
 	"phantom/internal/protocol"
 )
@@ -22,10 +21,6 @@ type Multiplexer struct {
 	writeCh      chan *writeRequest
 	acceptCh     chan *Stream
 	closeOnce    sync.Once
-
-	authPending  bool
-	authResultCh chan error
-	sendAuth     bool
 }
 
 type writeRequest struct {
@@ -33,11 +28,13 @@ type writeRequest struct {
 	errCh chan error
 }
 
-func NewMultiplexer(conn net.Conn, crypto *protocol.SessionCrypto, sendAuth bool, expectAuth ...bool) *Multiplexer {
-	auth := false
-	if len(expectAuth) > 0 {
-		auth = expectAuth[0]
-	}
+// NewMultiplexer starts a bidirectional frame multiplexer over conn. Session
+// authentication and per-session key derivation have already happened out of
+// band (internal/handshake, before conn ever reaches here), so there is no
+// in-band auth handshake - the first thing on the wire is application frames,
+// which deliberately avoids the "fixed-size frame right after the TLS
+// handshake" signature v1 had (see PROTOCOL.md).
+func NewMultiplexer(conn net.Conn, crypto *protocol.SessionCrypto) *Multiplexer {
 	m := &Multiplexer{
 		conn:         conn,
 		crypto:       crypto,
@@ -47,29 +44,12 @@ func NewMultiplexer(conn net.Conn, crypto *protocol.SessionCrypto, sendAuth bool
 		closed:       make(chan struct{}),
 		writeCh:      make(chan *writeRequest, 256),
 		acceptCh:     make(chan *Stream, 64),
-		authPending:  auth,
-		authResultCh: make(chan error, 1),
-		sendAuth:     sendAuth,
 	}
 
 	go m.readLoop()
 	go m.writeLoop()
 
 	return m
-}
-
-func (m *Multiplexer) WaitForAuth(timeout time.Duration) error {
-	timer := time.NewTimer(timeout)
-	defer timer.Stop()
-
-	select {
-	case err := <-m.authResultCh:
-		return err
-	case <-timer.C:
-		return errors.New("auth timeout")
-	case <-m.closed:
-		return errors.New("connection closed")
-	}
 }
 
 func (m *Multiplexer) Open(target string) (*Stream, error) {
@@ -193,28 +173,7 @@ func (m *Multiplexer) readLoop() {
 			frame.Payload = decrypted
 		}
 
-		if frame.Type == protocol.FrameAuth && m.authPending {
-			m.handleAuth(frame)
-			continue
-		}
-
-		if m.authPending {
-			continue
-		}
-
 		m.handleFrame(frame)
-	}
-}
-
-func (m *Multiplexer) handleAuth(f *protocol.Frame) {
-	if protocol.VerifyAuthTag(m.crypto.AuthKey[:], []byte("Phantom-auth"), f.Payload) {
-		log.Printf("[mux] auth verified")
-		m.authPending = false
-		m.authResultCh <- nil
-	} else {
-		log.Printf("[mux] auth failed")
-		m.authResultCh <- errors.New("auth verification failed")
-		m.Close()
 	}
 }
 
@@ -288,19 +247,6 @@ func (m *Multiplexer) handlePing(f *protocol.Frame) {
 func (m *Multiplexer) handleSettings(f *protocol.Frame) {}
 
 func (m *Multiplexer) writeLoop() {
-	if m.sendAuth && m.crypto != nil {
-		tag := protocol.ComputeAuthTag(m.crypto.AuthKey[:], []byte("Phantom-auth"))
-		authFrame := &protocol.Frame{
-			Type:     protocol.FrameAuth,
-			StreamID: 0,
-			Payload:  tag,
-		}
-		data, err := authFrame.Encode()
-		if err == nil {
-			m.conn.Write(data)
-		}
-	}
-
 	for {
 		select {
 		case req := <-m.writeCh:

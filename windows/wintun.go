@@ -161,7 +161,7 @@ func StartWindows(configYAML string, onNetworkChanged func()) (*WinTunnel, error
 	ctx, cancel := context.WithCancel(context.Background())
 	w.cancel = cancel
 
-	pool := transport.NewConnPool(poolSize, 12*1024, func(ctx context.Context) (net.Conn, *protocol.SessionCrypto, error) {
+	pool := transport.NewConnPool(poolSize, func(ctx context.Context) (net.Conn, *protocol.SessionCrypto, error) {
 		return transport.Dial(ctx, tlsCfg)
 	})
 	w.pool = pool

@@ -56,7 +56,7 @@ func main() {
 		ServerPub:   serverPub,
 	}
 
-	pool := transport.NewConnPool(cfg.PoolSize, 12*1024, func(ctx context.Context) (net.Conn, *protocol.SessionCrypto, error) {
+	pool := transport.NewConnPool(cfg.PoolSize, func(ctx context.Context) (net.Conn, *protocol.SessionCrypto, error) {
 		return transport.Dial(ctx, tlsCfg)
 	})
 	defer pool.Close()

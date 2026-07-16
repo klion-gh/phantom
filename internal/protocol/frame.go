@@ -8,14 +8,11 @@ import (
 
 type FrameType uint8
 
-// FrameAuth is kept only because internal/tunnel/multiplexer.go (ported
-// unchanged from v1) still has an in-band auth code path; v2 never actually
-// exercises it - the real session authentication now happens before the
-// Multiplexer is even constructed, during the disguised HTTP/WS-upgrade
-// handshake in internal/handshake (see PROTOCOL.md). Both sides construct
-// their Multiplexer with sendAuth=false/expectAuth=false, so no FrameAuth is
-// ever sent - this avoids reintroducing the "fixed-size frame right after the
-// TLS handshake" signature that v1 had.
+// Session authentication happens out of band during the disguised
+// HTTP/WS-upgrade handshake (internal/handshake, see PROTOCOL.md), before the
+// Multiplexer is even constructed - so there is no in-band auth frame type.
+// The first bytes on the wire are ordinary application frames, which avoids
+// the "fixed-size frame right after the TLS handshake" signature v1 had.
 const (
 	FrameData     FrameType = 0x00
 	FrameOpen     FrameType = 0x01
@@ -23,7 +20,6 @@ const (
 	FramePing     FrameType = 0x03
 	FrameSettings FrameType = 0x04
 	FramePadding  FrameType = 0x05
-	FrameAuth     FrameType = 0x06
 )
 
 type Flags uint8

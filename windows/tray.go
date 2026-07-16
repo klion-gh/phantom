@@ -38,7 +38,7 @@ func onTrayReady(app *App) {
 		}
 	})
 
-	trayStatusItem = systray.AddMenuItem("Отключено", "")
+	trayStatusItem = systray.AddMenuItem("VPN: отключён · Proxy: отключён", "")
 	trayStatusItem.Disable()
 
 	systray.AddSeparator()
@@ -100,12 +100,21 @@ func pollTrayStatus(app *App) {
 		if err := json.Unmarshal([]byte(app.Status()), &status); err != nil {
 			continue
 		}
+
+		// Two independent facts on one line, mirroring the Android notification's
+		// "VPN: … | Proxy: …": the full-tunnel VPN and the standalone per-config
+		// proxies are unrelated features that can each be on or off separately.
+		vpnPart := "VPN: отключён"
 		if status.Connected {
-			trayStatusItem.SetTitle("Подключено")
+			vpnPart = "VPN: подключён"
 			trayToggleItem.SetTitle("Отключить")
 		} else {
-			trayStatusItem.SetTitle("Отключено")
 			trayToggleItem.SetTitle("Подключить")
 		}
+		proxyPart := "Proxy: отключён"
+		if anyConfigProxyRunning() {
+			proxyPart = "Proxy: активен"
+		}
+		trayStatusItem.SetTitle(vpnPart + " · " + proxyPart)
 	}
 }

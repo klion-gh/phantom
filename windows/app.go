@@ -343,16 +343,6 @@ func (a *App) StopProxy(configID string) string {
 	return ""
 }
 
-// ProxyStatus reports whether configID's independent proxy is currently
-// running and which port it's bound to - the frontend calls this once on
-// load to restore each tile's toggle state (there's no persistence across
-// app restarts; a fresh launch always starts with every proxy off).
-func (a *App) ProxyStatus(configID string) string {
-	port, running := configProxyPort(configID)
-	data, _ := json.Marshal(proxyStatusResponse{Running: running, Port: port})
-	return string(data)
-}
-
 // ApplyUpdate downloads and installs whatever release checkAndSelfUpdate
 // found (see the "update:available" event) - swapping in the new exe and
 // relaunching. Only ever triggered by the user clicking the update button;

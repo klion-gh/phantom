@@ -48,26 +48,41 @@ class PhantomVpnService : VpnService() {
         private var activeInstance: PhantomVpnService? = null
 
         /**
-         * A [Protector] backed by whichever PhantomVpnService instance is alive at
-         * each protect() call (registered in onCreate/cleared in onDestroy) - lazily
-         * per-socket, NOT captured once at proxy start, because the proxy redials over
-         * its whole lifetime (pool self-healing, session refresh) and whether a VPN
-         * service exists changes underneath it. No instance means no VPN is capturing
-         * anything, so there's nothing to protect from and true (success) is correct.
+         * A [Protector] for ProxyManager's independent proxy, evaluated lazily at each
+         * protect() call (not captured once at proxy start) because the proxy redials
+         * over its whole lifetime - pool self-healing, session refresh after a network
+         * change - and both whether a VPN is up and which service instance is alive
+         * change underneath it.
          *
-         * Needed by ProxyManager's independent proxy, which has nothing to do with
-         * this service's own tunnel but whose sockets still live in the same process -
-         * and VpnService.protect() applies per-process, not per-component, so any
-         * currently active VpnService instance can exempt them just as well as the one
-         * that happens to own the full tunnel. Without this, turning the full VPN on
-         * (for this config or any other) would capture the proxy's own connections
-         * into that tunnel and break them, since they were never part of its own
-         * protected dial - and they'd stay broken even after the VPN disconnects
-         * again, since the capturing route is simply gone, not "released back" to the
-         * connections that got routed through it.
+         * It only actually calls VpnService.protect() while a full tunnel is really
+         * established (CONNECTED/CONNECTING); otherwise it's a no-op success. Two
+         * reasons:
+         *
+         *  - When no tunnel is up there's nothing capturing the proxy's sockets, so
+         *    protection is simply unnecessary.
+         *  - VpnService.protect() only works for the *active* system VPN. This service
+         *    is often foregrounded purely for the proxy, with no establish() call, so
+         *    it isn't the active VPN - and protect() then returns false, which fails
+         *    the dial. That's what left the proxy dead after a Wi-Fi<->cellular switch
+         *    until an app restart: the pool's fresh redial kept getting its socket
+         *    "protected" by a non-active VPN, i.e. rejected, forever.
+         *
+         * When a tunnel *is* up, protection is essential: without it, turning the full
+         * VPN on (for this config or any other) would capture the proxy's own
+         * connections into that tunnel and break them, since they were never part of
+         * its own protected dial. protect() applies per-process, not per-component, so
+         * the active VpnService instance can exempt them regardless of which component
+         * owns the sockets.
          */
         val lazyProtector: Protector = object : Protector {
-            override fun protect(fd: Long): Boolean = activeInstance?.protect(fd.toInt()) ?: true
+            override fun protect(fd: Long): Boolean {
+                val instance = activeInstance ?: return true
+                val vpnActive = VpnStateHolder.state.value.status.let {
+                    it == ConnectionStatus.CONNECTED || it == ConnectionStatus.CONNECTING
+                }
+                if (!vpnActive) return true
+                return instance.protect(fd.toInt())
+            }
         }
     }
 

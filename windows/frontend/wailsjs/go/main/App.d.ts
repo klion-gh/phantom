@@ -29,8 +29,6 @@ export function PickExcludedAppExe():Promise<string>;
 
 export function Ping(arg1:string):Promise<string>;
 
-export function ProxyStatus(arg1:string):Promise<string>;
-
 export function ReadLog():Promise<string>;
 
 export function SetConfigGeo(arg1:string,arg2:string,arg3:string,arg4:string):Promise<string>;

@@ -18,25 +18,22 @@ type ConnPool struct {
 	mu       sync.Mutex
 	dialFunc func(ctx context.Context) (net.Conn, *protocol.SessionCrypto, error)
 	maxConns int
-	maxBytes int64
 	closed   int32
 }
 
 type poolConn struct {
-	conn      net.Conn
-	crypto    *protocol.SessionCrypto
-	mux       *tunnel.Multiplexer
-	bytesUsed int64
-	healthy   bool
-	mu        sync.Mutex
+	conn    net.Conn
+	crypto  *protocol.SessionCrypto
+	mux     *tunnel.Multiplexer
+	healthy bool
+	mu      sync.Mutex
 }
 
-func NewConnPool(maxConns int, maxBytes int64, dialFunc func(ctx context.Context) (net.Conn, *protocol.SessionCrypto, error)) *ConnPool {
+func NewConnPool(maxConns int, dialFunc func(ctx context.Context) (net.Conn, *protocol.SessionCrypto, error)) *ConnPool {
 	return &ConnPool{
 		conns:    make([]*poolConn, 0, maxConns),
 		dialFunc: dialFunc,
 		maxConns: maxConns,
-		maxBytes: maxBytes,
 	}
 }
 
@@ -48,45 +45,34 @@ func (p *ConnPool) Get(ctx context.Context) (*tunnel.Multiplexer, error) {
 		return nil, ErrPoolClosed
 	}
 
+	// A single healthy connection carries every stream (the multiplexer is built
+	// for exactly that), so steady state is one conn reused here; the rest of the
+	// pool only ever fills in transiently while a dead one is being replaced.
 	for _, pc := range p.conns {
 		pc.mu.Lock()
-		if pc.healthy && pc.bytesUsed < p.maxBytes {
-			pc.mu.Unlock()
+		healthy := pc.healthy
+		pc.mu.Unlock()
+		if healthy {
 			return pc.mux, nil
 		}
-		pc.mu.Unlock()
 	}
 
-	if len(p.conns) < p.maxConns {
-		pc, err := p.newConn(ctx)
-		if err != nil {
-			return nil, err
+	// Nothing healthy to reuse. If the pool is full of dead conns, drop them
+	// (their readLoops have already closed them; rotateConn may not have pruned
+	// them yet) so we can still redial instead of being wedged at maxConns.
+	if len(p.conns) >= p.maxConns {
+		for _, pc := range p.conns {
+			pc.mux.Close()
 		}
-		p.conns = append(p.conns, pc)
-		return pc.mux, nil
+		p.conns = p.conns[:0]
 	}
 
-	var leastLoaded *poolConn
-	var minBytes int64 = 1<<63 - 1
-	for _, pc := range p.conns {
-		pc.mu.Lock()
-		if pc.healthy && pc.bytesUsed < minBytes {
-			leastLoaded = pc
-			minBytes = pc.bytesUsed
-		}
-		pc.mu.Unlock()
+	pc, err := p.newConn(ctx)
+	if err != nil {
+		return nil, err
 	}
-
-	if leastLoaded == nil {
-		pc, err := p.newConn(ctx)
-		if err != nil {
-			return nil, err
-		}
-		p.conns = append(p.conns, pc)
-		return pc.mux, nil
-	}
-
-	return leastLoaded.mux, nil
+	p.conns = append(p.conns, pc)
+	return pc.mux, nil
 }
 
 func (p *ConnPool) newConn(ctx context.Context) (*poolConn, error) {
@@ -95,7 +81,7 @@ func (p *ConnPool) newConn(ctx context.Context) (*poolConn, error) {
 		return nil, err
 	}
 
-	mux := tunnel.NewMultiplexer(conn, crypto, true)
+	mux := tunnel.NewMultiplexer(conn, crypto)
 
 	pc := &poolConn{
 		conn:    conn,
@@ -110,35 +96,17 @@ func (p *ConnPool) newConn(ctx context.Context) (*poolConn, error) {
 }
 
 func (p *ConnPool) monitorConn(pc *poolConn) {
-	ticker := time.NewTicker(30 * time.Second)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-pc.mux.Done():
-			// The underlying connection actually died (its readLoop hit a real
-			// I/O error - e.g. the network interface it was bound to disappeared
-			// under it, a reset, etc.), not just aged out by byte volume. Without
-			// this, Get() would keep handing out this same dead mux forever on an
-			// otherwise-idle pool, since the byte-volume check below would never
-			// trigger - which is exactly what made a phone's Wi-Fi<->cellular
-			// switch look like total internet loss instead of a brief reconnect.
-			pc.mu.Lock()
-			pc.healthy = false
-			pc.mu.Unlock()
-			p.rotateConn(pc)
-			return
-		case <-ticker.C:
-			pc.mu.Lock()
-			if pc.bytesUsed >= p.maxBytes {
-				pc.healthy = false
-				pc.mu.Unlock()
-				p.rotateConn(pc)
-				return
-			}
-			pc.mu.Unlock()
-		}
-	}
+	// Blocks until the underlying connection actually dies - its readLoop hitting
+	// a real I/O error (the network interface it was bound to disappearing under
+	// it, a reset, etc.) - then marks it dead and redials a replacement. Without
+	// this, Get() would keep handing out this same dead mux forever on an
+	// otherwise-idle pool, which is exactly what made a phone's Wi-Fi<->cellular
+	// switch look like total internet loss instead of a brief reconnect.
+	<-pc.mux.Done()
+	pc.mu.Lock()
+	pc.healthy = false
+	pc.mu.Unlock()
+	p.rotateConn(pc)
 }
 
 func (p *ConnPool) rotateConn(old *poolConn) {
@@ -163,16 +131,6 @@ func (p *ConnPool) rotateConn(old *poolConn) {
 			return
 		}
 		p.conns = append(p.conns, newPC)
-	}
-}
-
-func (p *ConnPool) AddBytes(n int64) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	for _, pc := range p.conns {
-		pc.mu.Lock()
-		pc.bytesUsed += n
-		pc.mu.Unlock()
 	}
 }
 

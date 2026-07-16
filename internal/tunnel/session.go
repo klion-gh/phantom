@@ -3,7 +3,6 @@ package tunnel
 import (
 	"context"
 	"log"
-	"net"
 	"time"
 
 	"phantom/internal/protocol"
@@ -11,18 +10,7 @@ import (
 
 type Session struct {
 	mux       *Multiplexer
-	conn      net.Conn
-	crypto    *protocol.SessionCrypto
 	startTime time.Time
-}
-
-func NewSession(conn net.Conn, crypto *protocol.SessionCrypto, sendAuth bool) *Session {
-	return &Session{
-		mux:       NewMultiplexer(conn, crypto, sendAuth),
-		conn:      conn,
-		crypto:    crypto,
-		startTime: time.Now(),
-	}
 }
 
 func NewSessionFromMux(mux *Multiplexer) *Session {

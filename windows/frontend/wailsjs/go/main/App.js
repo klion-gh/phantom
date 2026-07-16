@@ -58,10 +58,6 @@ export function Ping(arg1) {
   return window['go']['main']['App']['Ping'](arg1);
 }
 
-export function ProxyStatus(arg1) {
-  return window['go']['main']['App']['ProxyStatus'](arg1);
-}
-
 export function ReadLog() {
   return window['go']['main']['App']['ReadLog']();
 }

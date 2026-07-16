@@ -64,7 +64,7 @@ func TestFullStackTCPRelay(t *testing.T) {
 			return
 		}
 		handleConnection(conn, cfg, func(conn net.Conn, crypto *protocol.SessionCrypto) {
-			mux := tunnel.NewMultiplexer(conn, crypto, false)
+			mux := tunnel.NewMultiplexer(conn, crypto)
 			session := tunnel.NewSessionFromMux(mux)
 			defer session.Close()
 
@@ -102,7 +102,7 @@ func TestFullStackTCPRelay(t *testing.T) {
 		t.Fatalf("ClientHandshake() error = %v", err)
 	}
 
-	clientMux := tunnel.NewMultiplexer(rawConn, crypto, false)
+	clientMux := tunnel.NewMultiplexer(rawConn, crypto)
 	clientSession := tunnel.NewSessionFromMux(clientMux)
 	defer clientSession.Close()
 
@@ -156,7 +156,7 @@ func TestFullStackUDPRelay(t *testing.T) {
 			return
 		}
 		handleConnection(conn, cfg, func(conn net.Conn, crypto *protocol.SessionCrypto) {
-			mux := tunnel.NewMultiplexer(conn, crypto, false)
+			mux := tunnel.NewMultiplexer(conn, crypto)
 			session := tunnel.NewSessionFromMux(mux)
 			defer session.Close()
 
@@ -189,7 +189,7 @@ func TestFullStackUDPRelay(t *testing.T) {
 		t.Fatalf("ClientHandshake() error = %v", err)
 	}
 
-	clientMux := tunnel.NewMultiplexer(rawConn, crypto, false)
+	clientMux := tunnel.NewMultiplexer(rawConn, crypto)
 	clientSession := tunnel.NewSessionFromMux(clientMux)
 	defer clientSession.Close()
 

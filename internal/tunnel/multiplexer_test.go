@@ -29,8 +29,8 @@ func makeTestPair(t *testing.T) (*Multiplexer, *Multiplexer) {
 		t.Fatal(err)
 	}
 
-	m1 := NewMultiplexer(c1, crypto1, false)
-	m2 := NewMultiplexer(c2, crypto2, false)
+	m1 := NewMultiplexer(c1, crypto1)
+	m2 := NewMultiplexer(c2, crypto2)
 
 	return m1, m2
 }
