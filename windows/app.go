@@ -40,6 +40,7 @@ func (a *App) startup(ctx context.Context) {
 // kept as a safety net for any other path that tears the app down.
 func (a *App) shutdown(ctx context.Context) {
 	a.Disconnect()
+	stopAllConfigProxies()
 }
 
 // beforeClose runs when the user clicks the window's close button. Returning
@@ -184,7 +185,8 @@ func (a *App) SetConfigGeo(id string, ip string, country string, countryCode str
 
 // DeleteConfig removes a saved config, disconnecting first if it's the one
 // currently active (otherwise the tunnel would keep running with no tile
-// left in the UI to represent or control it).
+// left in the UI to represent or control it) and stopping its independent
+// proxy if one is running, for the same reason.
 func (a *App) DeleteConfig(id string) string {
 	a.mu.Lock()
 	if a.activeConfigID == id && a.tunnel != nil {
@@ -193,6 +195,7 @@ func (a *App) DeleteConfig(id string) string {
 		a.activeConfigID = ""
 	}
 	a.mu.Unlock()
+	stopConfigProxy(id)
 
 	if err := deleteConfig(id); err != nil {
 		return err.Error()
@@ -298,6 +301,56 @@ func (a *App) DeleteExcludedApp(id string) string {
 		return err.Error()
 	}
 	return ""
+}
+
+type proxyStatusResponse struct {
+	Running bool   `json:"running"`
+	Port    int    `json:"port"`
+	Error   string `json:"error"`
+}
+
+// StartProxy starts (or, if already running, just reports) configID's
+// independent local SOCKS5 proxy on requestedPort (0 = any free port) - see
+// windows/proxymanager.go. Unlike Connect/the full-tunnel VPN, this doesn't
+// touch routes or a TUN adapter at all, and works whether or not the full
+// VPN is active for this or any other config. The frontend's port field is
+// only editable while the proxy is off, pre-filled with whatever port this
+// config used successfully last time; failing to bind requestedPort is
+// returned as a real error rather than silently substituting a different
+// port, so the user finds out and can pick another one themselves. On
+// success, whichever port actually got used is remembered for next time.
+// Returns {"running":true,"port":N} on success or
+// {"running":false,"error":"..."} on failure.
+func (a *App) StartProxy(configID string, configYAML string, requestedPort int) string {
+	port, err := startConfigProxy(configID, configYAML, requestedPort)
+	if err == nil {
+		if saveErr := setConfigProxyPort(configID, port); saveErr != nil {
+			log.Printf("failed to remember proxy port for %s: %v", configID, saveErr)
+		}
+	}
+
+	resp := proxyStatusResponse{Running: err == nil, Port: port}
+	if err != nil {
+		resp.Error = err.Error()
+	}
+	data, _ := json.Marshal(resp)
+	return string(data)
+}
+
+// StopProxy stops configID's independent proxy, if one is running.
+func (a *App) StopProxy(configID string) string {
+	stopConfigProxy(configID)
+	return ""
+}
+
+// ProxyStatus reports whether configID's independent proxy is currently
+// running and which port it's bound to - the frontend calls this once on
+// load to restore each tile's toggle state (there's no persistence across
+// app restarts; a fresh launch always starts with every proxy off).
+func (a *App) ProxyStatus(configID string) string {
+	port, running := configProxyPort(configID)
+	data, _ := json.Marshal(proxyStatusResponse{Running: running, Port: port})
+	return string(data)
 }
 
 // ApplyUpdate downloads and installs whatever release checkAndSelfUpdate

@@ -55,8 +55,8 @@
           <textarea id="config-textarea" placeholder='server: "1.2.3.4:8443"&#10;domain: "your-domain.example"&#10;...'></textarea>
           <div class="row">
             <button id="btn-save" class="btn btn-primary">Сохранить</button>
+            <button id="btn-delete" class="btn btn-danger hidden">Удалить</button>
           </div>
-          <button id="btn-delete" class="btn btn-danger hidden">Удалить конфигурацию</button>
         </div>
       </div>
 
@@ -68,19 +68,7 @@
         </div>
         <div class="content">
           <button id="btn-view-log" class="btn btn-outline">Посмотреть лог</button>
-
-          <div class="panel-header">
-            <div class="panel-title">Раздельное туннелирование</div>
-            <button id="btn-add-excluded-app" class="icon-btn" title="Добавить приложение">&#43;</button>
-          </div>
-          <div class="settings-hint">
-            Эти приложения будут работать напрямую, в обход VPN, даже при активном подключении.
-          </div>
-          <div id="excluded-app-list" class="resource-list"></div>
-          <div id="excluded-app-empty" class="empty-state hidden">
-            <div class="empty-title">Список пуст</div>
-            <div class="empty-hint">Нажмите + чтобы выбрать .exe</div>
-          </div>
+          <button id="btn-open-split-tunnel" class="btn btn-outline">Раздельное туннелирование</button>
         </div>
       </div>
 
@@ -93,6 +81,28 @@
         <div class="content">
           <pre id="log-text" class="log-text"></pre>
           <button id="btn-copy-log" class="btn btn-primary">Скопировать</button>
+        </div>
+      </div>
+
+      <!-- Split tunneling screen -->
+      <div id="screen-split-tunnel" class="screen hidden">
+        <div class="header">
+          <button id="btn-back-split-tunnel" class="icon-btn">&#8592;</button>
+          <div class="title">Раздельное туннелирование</div>
+        </div>
+        <div class="content">
+          <div class="panel-header">
+            <div class="panel-title">Приложения</div>
+            <button id="btn-add-excluded-app" class="icon-btn" title="Добавить приложение">&#43;</button>
+          </div>
+          <div class="settings-hint">
+            Эти приложения будут работать напрямую, в обход VPN, даже при активном подключении.
+          </div>
+          <div id="excluded-app-list" class="resource-list"></div>
+          <div id="excluded-app-empty" class="empty-state hidden">
+            <div class="empty-title">Список пуст</div>
+            <div class="empty-hint">Нажмите + чтобы выбрать .exe</div>
+          </div>
         </div>
       </div>
 

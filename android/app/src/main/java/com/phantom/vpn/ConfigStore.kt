@@ -24,6 +24,11 @@ data class SavedConfig(
     val ip: String? = null,
     val country: String? = null,
     val countryCode: String? = null,
+    // The independent SOCKS5 proxy's port (see ProxyManager), remembered once it's
+    // first assigned so it stays the same across restarts/toggles - otherwise
+    // whatever else points at it (e.g. Telegram's own proxy settings) would need
+    // reconfiguring every time.
+    val proxyPort: Int? = null,
 )
 
 /**
@@ -83,6 +88,7 @@ object ConfigStore {
                     ip = obj.optString("ip").takeIf { it.isNotBlank() },
                     country = obj.optString("country").takeIf { it.isNotBlank() },
                     countryCode = obj.optString("countryCode").takeIf { it.isNotBlank() },
+                    proxyPort = obj.optInt("proxyPort", 0).takeIf { it > 0 },
                 )
             }
         }.getOrDefault(emptyList())
@@ -97,6 +103,7 @@ object ConfigStore {
                 cfg.ip?.let { put("ip", it) }
                 cfg.country?.let { put("country", it) }
                 cfg.countryCode?.let { put("countryCode", it) }
+                cfg.proxyPort?.let { put("proxyPort", it) }
             })
         }
         prefs(context).edit().putString(CONFIGS_KEY, arr.toString()).apply()
@@ -125,6 +132,15 @@ object ConfigStore {
     fun setGeo(context: Context, id: String, ip: String, country: String?, countryCode: String?) {
         saveAll(context, loadAll(context).map {
             if (it.id == id) it.copy(ip = ip, country = country, countryCode = countryCode) else it
+        })
+    }
+
+    /** Persists the independent proxy's bound port - called the first time it's
+     * started (or if its previously remembered port turned out to be unavailable and
+     * a different one had to be used instead), so the next start reuses the same port. */
+    fun setProxyPort(context: Context, id: String, port: Int) {
+        saveAll(context, loadAll(context).map {
+            if (it.id == id) it.copy(proxyPort = port) else it
         })
     }
 

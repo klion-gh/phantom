@@ -58,6 +58,10 @@ export function Ping(arg1) {
   return window['go']['main']['App']['Ping'](arg1);
 }
 
+export function ProxyStatus(arg1) {
+  return window['go']['main']['App']['ProxyStatus'](arg1);
+}
+
 export function ReadLog() {
   return window['go']['main']['App']['ReadLog']();
 }
@@ -66,8 +70,16 @@ export function SetConfigGeo(arg1, arg2, arg3, arg4) {
   return window['go']['main']['App']['SetConfigGeo'](arg1, arg2, arg3, arg4);
 }
 
+export function StartProxy(arg1, arg2, arg3) {
+  return window['go']['main']['App']['StartProxy'](arg1, arg2, arg3);
+}
+
 export function Status() {
   return window['go']['main']['App']['Status']();
+}
+
+export function StopProxy(arg1) {
+  return window['go']['main']['App']['StopProxy'](arg1);
 }
 
 export function UpdateConfig(arg1, arg2) {

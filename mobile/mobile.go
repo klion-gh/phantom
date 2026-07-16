@@ -1,3 +1,5 @@
+//go:build !windows
+
 // Package mobile is the shared entry point for mobile VPN clients (Android now,
 // iOS later via the same gomobile-bound source). It owns nothing platform
 // specific except the raw TUN file descriptor handed to it by the OS - the
@@ -8,6 +10,17 @@
 // The exported API only uses gomobile-safe types (string, int, error) so it
 // can be bound with `gomobile bind` for both Android (.aar) and iOS
 // (.xcframework).
+//
+// Excluded from GOOS=windows: gvisor's fdbased link endpoint (pkg/rawfile)
+// is linux-only and was never meant to build there anyway (the Windows
+// client feeds netstack from a Wintun device via channel.Endpoint instead -
+// see windows/wintun.go) - but with no build constraint of its own, this
+// package still got *type-checked* whenever a Windows-side tool loaded the
+// whole module (`go list ./...`/`go build ./...`), tripping over that
+// unrelated failure. That's harmless for a plain `go build ./windows/...`
+// (which only resolves windows/'s own dependency graph), but Wails' binding
+// generator loads the full module graph to analyze the bound App struct -
+// and silently produced no bindings at all once that hit this error.
 package mobile
 
 import (
@@ -21,6 +34,7 @@ import (
 	"phantom/internal/netstack"
 	"phantom/internal/pingcheck"
 	"phantom/internal/protocol"
+	"phantom/internal/proxy"
 	"phantom/internal/transport"
 	"phantom/internal/tunnel"
 
@@ -187,4 +201,98 @@ func Ping(configYAML string) (string, error) {
 		return "", err
 	}
 	return string(data), nil
+}
+
+// ProxyHandle is a running independent local SOCKS5 proxy - see StartProxy.
+type ProxyHandle struct {
+	pool   *transport.ConnPool
+	server *proxy.SOCKS5Server
+	port   int
+}
+
+// StartProxy dials configYAML's server and starts a local SOCKS5 proxy on
+// 127.0.0.1, entirely independent of Start's full-tunnel VPN. Point another
+// app's own SOCKS5 proxy setting (e.g. Telegram's) at 127.0.0.1:<Port()> to
+// route just that one app through Phantom, without needing the full-tunnel
+// VPN active at all (and without conflicting with it if it happens to be
+// active too - this dials its own separate pool of connections to the same
+// server).
+//
+// requestedPort, if non-zero, is the exact port to bind - typically the one
+// the UI's own editable port field shows (only editable while off) and/or
+// remembered from a previous successful start, so whatever's pointed at it
+// doesn't need reconfiguring every time. Failing to bind it is a real error,
+// not silently replaced with a different port, so the caller can surface it
+// and let the user pick another one. requestedPort == 0 means "any free
+// port" (OS-assigned).
+func StartProxy(configYAML string, requestedPort int) (*ProxyHandle, error) {
+	// Checked before dialing anything - no point spending a real TLS
+	// handshake against the server just to then discover the requested port
+	// was never available in the first place.
+	listener, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", requestedPort))
+	if err != nil {
+		return nil, fmt.Errorf("listen: %w", err)
+	}
+	port := listener.Addr().(*net.TCPAddr).Port
+
+	cfg, err := config.ParseClientConfig([]byte(configYAML))
+	if err != nil {
+		listener.Close()
+		return nil, fmt.Errorf("parse config: %w", err)
+	}
+	psk, err := cfg.GetPSK()
+	if err != nil {
+		listener.Close()
+		return nil, fmt.Errorf("psk: %w", err)
+	}
+	serverPub, err := cfg.GetServerPublicKey()
+	if err != nil {
+		listener.Close()
+		return nil, fmt.Errorf("server_public_key: %w", err)
+	}
+
+	tlsCfg := &transport.TLSClientConfig{
+		Domain:      cfg.Domain,
+		Fingerprint: cfg.Fingerprint,
+		ServerAddr:  cfg.Server,
+		PSK:         psk,
+		ServerPub:   serverPub,
+	}
+
+	poolSize := cfg.PoolSize
+	if poolSize <= 0 {
+		poolSize = 4
+	}
+
+	pool := transport.NewConnPool(poolSize, 12*1024, func(ctx context.Context) (net.Conn, *protocol.SessionCrypto, error) {
+		return transport.Dial(ctx, tlsCfg)
+	})
+
+	dialCtx, dialCancel := context.WithTimeout(context.Background(), 15*time.Second)
+	mux, err := pool.Get(dialCtx)
+	dialCancel()
+	if err != nil {
+		listener.Close()
+		pool.Close()
+		return nil, fmt.Errorf("connect: %w", err)
+	}
+
+	session := tunnel.NewSessionFromMux(mux)
+	server := proxy.NewSOCKS5Server(listener.Addr().String(), session)
+
+	go server.Serve(listener) // errors already logged inside socks5.go
+
+	return &ProxyHandle{pool: pool, server: server, port: port}, nil
+}
+
+// Port returns the local port the proxy is listening on - point another
+// app's SOCKS5 proxy setting at 127.0.0.1:<Port()>.
+func (p *ProxyHandle) Port() int {
+	return p.port
+}
+
+// Stop tears down the proxy's listener and its connection pool.
+func (p *ProxyHandle) Stop() {
+	p.server.Stop()
+	p.pool.Close()
 }

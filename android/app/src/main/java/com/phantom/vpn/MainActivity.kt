@@ -168,6 +168,11 @@ private fun PhantomApp(
         updateInfo = checkForUpdate(BuildConfig.VERSION_NAME)
     }
 
+    // Independent per-config SOCKS5 proxy toggle state - see ProxyManager. Entirely
+    // separate from state.activeConfigId/the full-tunnel VPN above. Maps id -> the
+    // actual bound port, so the UI's port field can show/restore it after a re-render.
+    var proxyRunningPorts by remember { mutableStateOf(mapOf<String, Int>()) }
+
     fun applyUpdate() {
         val info = updateInfo ?: return
         if (isUpdating) return
@@ -187,6 +192,43 @@ private fun PhantomApp(
 
     fun refreshResources() {
         resources = ResourceStore.loadAll(context)
+    }
+
+    // requestedPortText comes straight from the tile's own port field (empty = "any
+    // free port"); invalid/out-of-range input is rejected client-side with a Toast
+    // before ever calling into the Go core, same as the Windows app's port field.
+    fun toggleProxy(config: SavedConfig, requestedPortText: String) {
+        if (ProxyManager.isRunning(config.id)) {
+            ProxyManager.stop(config.id)
+            proxyRunningPorts = proxyRunningPorts - config.id
+            return
+        }
+
+        val trimmed = requestedPortText.trim()
+        var requestedPort = 0
+        if (trimmed.isNotEmpty()) {
+            requestedPort = trimmed.toIntOrNull() ?: -1
+            if (requestedPort !in 1..65535) {
+                Toast.makeText(context, "Некорректный порт: $trimmed", Toast.LENGTH_SHORT).show()
+                return
+            }
+        }
+
+        coroutineScope.launch {
+            ProxyManager.start(config.id, config.yaml, requestedPort)
+                .onSuccess { port ->
+                    proxyRunningPorts = proxyRunningPorts + (config.id to port)
+                    ConfigStore.setProxyPort(context, config.id, port)
+                    refreshConfigs()
+                }
+                .onFailure { e ->
+                    Toast.makeText(
+                        context,
+                        "Не удалось включить прокси на порту ${trimmed.ifEmpty { "(любой)" }}: ${e.message}",
+                        Toast.LENGTH_LONG,
+                    ).show()
+                }
+        }
     }
 
     // Resolves and persists a config's server IP/country/flag exactly once (via
@@ -233,6 +275,8 @@ private fun PhantomApp(
                 val id = editingId
                 if (id != null) {
                     if (state.activeConfigId == id) onDisconnect()
+                    ProxyManager.stop(id)
+                    proxyRunningPorts = proxyRunningPorts - id
                     ConfigStore.delete(context, id)
                     refreshConfigs()
                 }
@@ -250,6 +294,8 @@ private fun PhantomApp(
             hasUpdate = updateInfo != null,
             isUpdating = isUpdating,
             onUpdateClick = { applyUpdate() },
+            proxyRunningPorts = proxyRunningPorts,
+            onToggleProxy = { config, portText -> toggleProxy(config, portText) },
             onToggle = { config ->
                 when {
                     state.activeConfigId == config.id && state.status == ConnectionStatus.CONNECTED -> onDisconnect()
@@ -298,6 +344,8 @@ private fun MainScreen(
     hasUpdate: Boolean,
     isUpdating: Boolean,
     onUpdateClick: () -> Unit,
+    proxyRunningPorts: Map<String, Int>,
+    onToggleProxy: (SavedConfig, String) -> Unit,
     onToggle: (SavedConfig) -> Unit,
     onEditConfig: (SavedConfig) -> Unit,
     onAddConfig: () -> Unit,
@@ -354,6 +402,8 @@ private fun MainScreen(
                     activeConfigId = activeConfigId,
                     configs = configs,
                     pingEnabled = appInForeground && pagerState.currentPage == 0,
+                    proxyRunningPorts = proxyRunningPorts,
+                    onToggleProxy = onToggleProxy,
                     onToggle = onToggle,
                     onEditConfig = onEditConfig,
                     onAddConfig = onAddConfig,
@@ -429,6 +479,8 @@ private fun ConfigsPage(
     activeConfigId: String?,
     configs: List<SavedConfig>,
     pingEnabled: Boolean,
+    proxyRunningPorts: Map<String, Int>,
+    onToggleProxy: (SavedConfig, String) -> Unit,
     onToggle: (SavedConfig) -> Unit,
     onEditConfig: (SavedConfig) -> Unit,
     onAddConfig: () -> Unit,
@@ -460,7 +512,10 @@ private fun ConfigsPage(
                         config = config,
                         status = cardStatus,
                         pingEnabled = pingEnabled,
+                        proxyRunning = proxyRunningPorts.containsKey(config.id),
+                        proxyPort = proxyRunningPorts[config.id],
                         onToggle = { onToggle(config) },
+                        onToggleProxy = { portText -> onToggleProxy(config, portText) },
                         onLongPress = { onEditConfig(config) },
                     )
                 }

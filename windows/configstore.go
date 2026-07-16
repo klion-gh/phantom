@@ -25,6 +25,12 @@ type SavedConfig struct {
 	IP          string `json:"ip,omitempty"`
 	Country     string `json:"country,omitempty"`
 	CountryCode string `json:"countryCode,omitempty"`
+	// ProxyPort is the independent SOCKS5 proxy's port (see proxymanager.go),
+	// remembered once it's first assigned so it stays the same across
+	// restarts/toggles - otherwise every restart would bind a fresh
+	// OS-assigned port, forcing whatever else points at it (e.g. Telegram's
+	// own proxy settings) to be reconfigured each time.
+	ProxyPort int `json:"proxyPort,omitempty"`
 }
 
 const (
@@ -145,6 +151,27 @@ func setConfigGeo(id, ip, country, countryCode string) error {
 			configs[i].IP = ip
 			configs[i].Country = country
 			configs[i].CountryCode = countryCode
+		}
+	}
+	return saveConfigs(dir, configs)
+}
+
+// setConfigProxyPort persists the independent proxy's bound port for a saved
+// config - called the first time it's started (or if its previously
+// remembered port turned out to be unavailable and a different one had to be
+// used instead), so the next start reuses the same port.
+func setConfigProxyPort(id string, port int) error {
+	dir, err := configDir()
+	if err != nil {
+		return err
+	}
+	configs, err := loadConfigs()
+	if err != nil {
+		return err
+	}
+	for i := range configs {
+		if configs[i].ID == id {
+			configs[i].ProxyPort = port
 		}
 	}
 	return saveConfigs(dir, configs)

@@ -1,11 +1,12 @@
 import './style.css';
-import { Connect, Disconnect, Status, ReadLog, ListConfigs, AddConfig, UpdateConfig, DeleteConfig, SetConfigGeo, Ping, ListResources, AddResource, DeleteResource, ListExcludedApps, PickExcludedAppExe, AddExcludedApp, DeleteExcludedApp, ApplyUpdate } from '../wailsjs/go/main/App';
+import { Connect, Disconnect, Status, ReadLog, ListConfigs, AddConfig, UpdateConfig, DeleteConfig, SetConfigGeo, Ping, ListResources, AddResource, DeleteResource, ListExcludedApps, PickExcludedAppExe, AddExcludedApp, DeleteExcludedApp, ApplyUpdate, StartProxy, StopProxy } from '../wailsjs/go/main/App';
 
 const screens = {
   main: document.getElementById('screen-main'),
   config: document.getElementById('screen-config'),
   settings: document.getElementById('screen-settings'),
   log: document.getElementById('screen-log'),
+  splitTunnel: document.getElementById('screen-split-tunnel'),
 };
 
 function showScreen(name) {
@@ -44,6 +45,14 @@ let resources = [];
 const resourceTimers = new Map(); // id -> interval handle
 
 let excludedApps = [];
+
+// Independent per-config SOCKS5 proxy toggle state - id -> {running, port}.
+// Unrelated to currentStatus/the full-tunnel VPN: a config can have this on,
+// off, connected, disconnected, or any combination, all independently (see
+// windows/proxymanager.go). Not polled on a timer like ping/status - it only
+// ever changes in response to this app's own StartProxy/StopProxy calls, so
+// there's no external drift to detect.
+const proxyState = new Map();
 
 function escapeHtml(text) {
   const div = document.createElement('div');
@@ -287,6 +296,17 @@ function renderConfigList() {
         </div>
       </div>
       <button class="config-edit-btn" title="Редактировать">&#9881;</button>
+      <div class="proxy-block">
+        <button class="proxy-toggle" title="Независимый SOCKS5-прокси">PROXY</button>
+        <input
+          class="proxy-port-input"
+          type="text"
+          inputmode="numeric"
+          placeholder="порт"
+          value="${config.proxyPort || ''}"
+          title="Порт независимого прокси - редактируется, пока прокси выключен"
+        />
+      </div>
       <button class="power-btn idle" title="Подключить">
         <svg viewBox="0 0 24 24" class="power-icon">
           <path d="M12 2v9" stroke-linecap="round" />
@@ -299,13 +319,78 @@ function renderConfigList() {
     `;
 
     card.querySelector('.config-edit-btn').addEventListener('click', () => openEditScreen(config));
+    card.querySelector('.proxy-toggle').addEventListener('click', () => toggleProxy(config));
     card.querySelector('.power-btn').addEventListener('click', () => toggleConnection(config));
 
     configList.appendChild(card);
     startPingLoop(config);
+    refreshProxyToggle(config.id);
   }
 
   refreshTileStatuses();
+}
+
+// Independent SOCKS5 proxy toggle - see the proxyState comment above. Doesn't
+// touch currentStatus/toggleConnection's full-tunnel state at all. The port
+// field under the toggle is only editable while off (see refreshProxyToggle) -
+// its value is read fresh right here at toggle time, so whatever the user
+// last typed is exactly what gets requested.
+async function toggleProxy(config) {
+  const state = proxyState.get(config.id);
+  if (state?.running) {
+    await StopProxy(config.id);
+    proxyState.set(config.id, { running: false });
+    refreshProxyToggle(config.id);
+    return;
+  }
+
+  const card = configList.querySelector(`[data-id="${config.id}"]`);
+  const btn = card?.querySelector('.proxy-toggle');
+  const portInput = card?.querySelector('.proxy-port-input');
+
+  const rawPort = portInput?.value.trim() || '';
+  let requestedPort = 0;
+  if (rawPort) {
+    requestedPort = Number(rawPort);
+    if (!Number.isInteger(requestedPort) || requestedPort < 1 || requestedPort > 65535) {
+      errorText.textContent = `Некорректный порт: ${rawPort}`;
+      errorText.classList.remove('hidden');
+      return;
+    }
+  }
+
+  if (btn) btn.disabled = true;
+  try {
+    const resp = JSON.parse(await StartProxy(config.id, config.yaml, requestedPort));
+    proxyState.set(config.id, resp);
+    if (resp.running) {
+      errorText.classList.add('hidden');
+      config.proxyPort = resp.port; // keep in sync so a later re-render still shows it
+    } else {
+      errorText.textContent = `Не удалось включить прокси на порту ${rawPort || '(любой)'}: ${resp.error}`;
+      errorText.classList.remove('hidden');
+    }
+  } finally {
+    if (btn) btn.disabled = false;
+    refreshProxyToggle(config.id);
+  }
+}
+
+function refreshProxyToggle(configId) {
+  const card = configList.querySelector(`[data-id="${configId}"]`);
+  const btn = card?.querySelector('.proxy-toggle');
+  const portInput = card?.querySelector('.proxy-port-input');
+  if (!btn || !portInput) return;
+  const state = proxyState.get(configId);
+  const running = !!state?.running;
+
+  btn.classList.toggle('active', running);
+  btn.title = running
+    ? `Независимый SOCKS5-прокси — 127.0.0.1:${state.port}`
+    : 'Независимый SOCKS5-прокси';
+
+  portInput.disabled = running;
+  if (running) portInput.value = state.port;
 }
 
 function refreshTileStatuses() {
@@ -416,6 +501,7 @@ document.getElementById('btn-delete-confirm').addEventListener('click', async ()
   deleteConfirm.classList.add('hidden');
   if (editingId) {
     await DeleteConfig(editingId);
+    proxyState.delete(editingId);
     await reloadConfigs();
   }
   showScreen('main');
@@ -429,6 +515,9 @@ document.getElementById('btn-view-log').addEventListener('click', async () => {
   showScreen('log');
 });
 document.getElementById('btn-back-log').addEventListener('click', () => showScreen('settings'));
+
+document.getElementById('btn-open-split-tunnel').addEventListener('click', () => showScreen('splitTunnel'));
+document.getElementById('btn-back-split-tunnel').addEventListener('click', () => showScreen('settings'));
 document.getElementById('btn-copy-log').addEventListener('click', async () => {
   try {
     await navigator.clipboard.writeText(logText.textContent);

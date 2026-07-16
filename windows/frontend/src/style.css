@@ -191,6 +191,57 @@ html, body {
     border-radius: 8px;
     align-self: center;
 }
+
+/* Independent SOCKS5 proxy toggle - grey outline when off, the same
+   gradient outline .config-card.connected uses when on (see toggleProxy in
+   main.js) - deliberately unrelated to the power button's own state. */
+.proxy-toggle {
+    flex-shrink: 0;
+    align-self: center;
+    background: transparent;
+    color: var(--text-secondary);
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    cursor: pointer;
+    padding: 6px 10px;
+    border-radius: 8px;
+    border: 2px solid rgba(156, 151, 184, 0.35);
+    transition: border-color 0.25s ease, color 0.25s ease;
+}
+.proxy-toggle:hover { color: var(--text-primary); }
+.proxy-toggle.active {
+    color: var(--text-primary);
+    border: 2px solid transparent;
+    background:
+        linear-gradient(var(--bg-surface), var(--bg-surface)) padding-box,
+        linear-gradient(120deg, #A78BFA, #F472B6, #7DD3FC) border-box;
+}
+
+.proxy-block {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 4px;
+    flex-shrink: 0;
+}
+
+/* Shows/edits the proxy's port - editable only while off (see
+   refreshProxyToggle in main.js, which disables it once running and fills it
+   with the actual bound port). */
+.proxy-port-input {
+    width: 56px;
+    background: transparent;
+    border: none;
+    border-bottom: 1px solid rgba(156, 151, 184, 0.35);
+    color: var(--text-secondary);
+    font-size: 11px;
+    text-align: center;
+    padding: 2px 0;
+}
+.proxy-port-input:focus { outline: none; border-bottom-color: var(--accent-lavender); color: var(--text-primary); }
+.proxy-port-input:disabled { border-bottom-color: transparent; color: var(--text-secondary); }
+
 .config-edit-btn:hover { background: var(--bg-surface-alt); color: var(--text-primary); }
 
 .empty-state {
@@ -389,7 +440,7 @@ textarea::placeholder { color: var(--text-secondary); }
     text-align: left;
 }
 
-.row { display: flex; gap: 10px; }
+.row { display: flex; gap: 10px; justify-content: space-between; }
 
 .btn {
     font-size: 14px;

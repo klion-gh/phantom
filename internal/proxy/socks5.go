@@ -5,6 +5,7 @@ import (
 	"io"
 	"log"
 	"net"
+	"sync"
 
 	"phantom/internal/tunnel"
 )
@@ -12,6 +13,10 @@ import (
 type SOCKS5Server struct {
 	addr    string
 	session *tunnel.Session
+
+	mu       sync.Mutex
+	listener net.Listener
+	stopped  bool
 }
 
 func NewSOCKS5Server(addr string, session *tunnel.Session) *SOCKS5Server {
@@ -21,24 +26,81 @@ func NewSOCKS5Server(addr string, session *tunnel.Session) *SOCKS5Server {
 	}
 }
 
+// Start binds addr and serves until Stop is called (returns nil) or a real
+// accept error occurs. Kept as a single blocking call for callers (cmd/client)
+// that just run it for the process's whole lifetime with no need to read
+// back the bound address first - see Listen/Serve for callers that do (e.g.
+// binding to port 0 and needing the OS-assigned port before traffic starts).
 func (s *SOCKS5Server) Start() error {
+	listener, err := s.Listen()
+	if err != nil {
+		return err
+	}
+	return s.Serve(listener)
+}
+
+// Listen binds addr without serving yet, so a caller using port 0 (OS picks
+// a free port) can read the actual port back via Addr() before calling Serve.
+func (s *SOCKS5Server) Listen() (net.Listener, error) {
 	listener, err := net.Listen("tcp", s.addr)
 	if err != nil {
-		return fmt.Errorf("listen socks5: %w", err)
+		return nil, fmt.Errorf("listen socks5: %w", err)
 	}
-	defer listener.Close()
+	s.mu.Lock()
+	s.listener = listener
+	s.mu.Unlock()
+	return listener, nil
+}
 
-	log.Printf("[socks5] listening on %s", s.addr)
+// Serve accepts connections on listener (from Listen, or Start's own) until
+// Stop closes it, at which point it returns nil rather than looping on the
+// resulting accept error forever.
+func (s *SOCKS5Server) Serve(listener net.Listener) error {
+	s.mu.Lock()
+	s.listener = listener
+	s.mu.Unlock()
+
+	log.Printf("[socks5] listening on %s", listener.Addr())
 
 	for {
 		conn, err := listener.Accept()
 		if err != nil {
+			s.mu.Lock()
+			stopped := s.stopped
+			s.mu.Unlock()
+			if stopped {
+				return nil
+			}
 			log.Printf("[socks5] accept error: %v", err)
-			continue
+			return err
 		}
 
 		go s.handleClient(conn)
 	}
+}
+
+// Stop closes the listener, ending Start/Serve's accept loop. Safe to call
+// even if the listener was never bound (e.g. Listen itself failed).
+func (s *SOCKS5Server) Stop() {
+	s.mu.Lock()
+	s.stopped = true
+	listener := s.listener
+	s.mu.Unlock()
+	if listener != nil {
+		listener.Close()
+	}
+}
+
+// Addr returns the actual bound address (nil until Listen/Start succeeds) -
+// mainly useful when addr passed to NewSOCKS5Server ends in ":0" and the
+// caller needs to know which port the OS actually picked.
+func (s *SOCKS5Server) Addr() net.Addr {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.listener == nil {
+		return nil
+	}
+	return s.listener.Addr()
 }
 
 func (s *SOCKS5Server) handleClient(conn net.Conn) {

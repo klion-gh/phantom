@@ -4,7 +4,9 @@ import android.graphics.BitmapFactory
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -13,6 +15,8 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Text
@@ -29,8 +33,11 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.Dispatchers
@@ -136,7 +143,10 @@ fun ConfigInfoCard(
     config: SavedConfig,
     status: ConnectionStatus,
     pingEnabled: Boolean,
+    proxyRunning: Boolean,
+    proxyPort: Int?,
     onToggle: () -> Unit,
+    onToggleProxy: (requestedPort: String) -> Unit,
     onLongPress: () -> Unit,
 ) {
     var pingInfo by remember(config.id) { mutableStateOf<PingInfo?>(null) }
@@ -157,6 +167,17 @@ fun ConfigInfoCard(
     var flagBitmap by remember(config.id) { mutableStateOf<ImageBitmap?>(null) }
     LaunchedEffect(config.countryCode) {
         flagBitmap = config.countryCode?.takeIf { it.isNotBlank() }?.let { fetchFlagBitmap(it) }
+    }
+
+    // The port field mirrors whatever's actually running once it starts (in case it
+    // had to fall back... it doesn't anymore - see ProxyManager - but this also covers
+    // the field simply being blank and the OS picking one), and is otherwise just
+    // freely editable by the user while off.
+    var portText by remember(config.id) { mutableStateOf(config.proxyPort?.toString() ?: "") }
+    LaunchedEffect(proxyRunning, proxyPort) {
+        if (proxyRunning && proxyPort != null) {
+            portText = proxyPort.toString()
+        }
     }
 
     val cardShape = RoundedCornerShape(20.dp)
@@ -223,8 +244,82 @@ fun ConfigInfoCard(
                     }
                 }
             }
-            Spacer(modifier = Modifier.width(12.dp))
+            Spacer(modifier = Modifier.width(10.dp))
+            ProxyBlock(
+                running = proxyRunning,
+                portText = portText,
+                onPortTextChange = { portText = it },
+                onToggleClick = { onToggleProxy(portText) },
+            )
+            Spacer(modifier = Modifier.width(16.dp))
             ConnectButton(status = status, onClick = onToggle, size = 68.dp)
+        }
+    }
+}
+
+/**
+ * Independent per-config SOCKS5 proxy toggle - grey border when off, the same
+ * gradient border the tile itself uses for "connected" when on - plus, right below
+ * it, the port it's bound to. The port field is only actually editable while off
+ * (see the disabled-look styling below); [onToggleClick] is invoked with whatever's
+ * currently in it, and the caller (MainActivity's toggleProxy) decides what to do
+ * with that - deliberately unrelated to [status]/the connect button, see ProxyManager.
+ */
+@Composable
+private fun ProxyBlock(
+    running: Boolean,
+    portText: String,
+    onPortTextChange: (String) -> Unit,
+    onToggleClick: () -> Unit,
+) {
+    val shape = RoundedCornerShape(8.dp)
+    val gradient = Brush.linearGradient(
+        colors = listOf(Color(0xFFA78BFA), Color(0xFFF472B6), Color(0xFF7DD3FC))
+    )
+    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+        Box(
+            modifier = Modifier
+                .clip(shape)
+                .then(
+                    if (running) Modifier.border(2.dp, gradient, shape)
+                    else Modifier.border(2.dp, TextSecondary.copy(alpha = 0.35f), shape)
+                )
+                .clickable(onClick = onToggleClick)
+                .padding(horizontal = 10.dp, vertical = 6.dp),
+        ) {
+            Text(
+                text = "PROXY",
+                color = if (running) TextPrimary else TextSecondary,
+                fontSize = 10.sp,
+                fontWeight = FontWeight.Bold,
+            )
+        }
+        Spacer(modifier = Modifier.height(4.dp))
+        Box(contentAlignment = Alignment.Center) {
+            if (portText.isEmpty()) {
+                Text("порт", color = TextSecondary.copy(alpha = 0.6f), fontSize = 11.sp)
+            }
+            BasicTextField(
+                value = portText,
+                onValueChange = { new -> if (new.length <= 5 && new.all(Char::isDigit)) onPortTextChange(new) },
+                enabled = !running,
+                singleLine = true,
+                textStyle = TextStyle(
+                    color = if (running) TextSecondary else TextPrimary,
+                    fontSize = 11.sp,
+                    textAlign = TextAlign.Center,
+                ),
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                modifier = Modifier
+                    .width(52.dp)
+                    .padding(bottom = 2.dp)
+                    .border(
+                        width = 1.dp,
+                        color = if (running) Color.Transparent else TextSecondary.copy(alpha = 0.35f),
+                        shape = RoundedCornerShape(4.dp),
+                    )
+                    .padding(vertical = 3.dp),
+            )
         }
     }
 }
