@@ -70,7 +70,7 @@ phantom/
 │   │   ├── tls_client.go         uTLS client dial (Chrome/Firefox/Safari fingerprint)
 │   │   ├── tls_server.go         Real ACME (Let's Encrypt) cert via HTTP-01 + decoy dispatch
 │   │   ├── decoy.go              Realistic fallback site for unauthenticated connections
-│   │   └── connpool.go           Pool of parallel TLS connections, byte-based rotation
+│   │   └── connpool.go           Pool of parallel TLS connections, self-healing on death
 │   ├── tunnel/
 │   │   ├── multiplexer.go        Frame read/write loops, stream table (ported, see §4.3)
 │   │   ├── stream.go              Per-stream Read/Write/Close
@@ -116,9 +116,9 @@ phantom/
      - Invalid/missing/malformed -> the connection is handed to a real decoy
        website (internal/transport/decoy.go) instead of being dropped.
 4. Multiplexer (internal/tunnel) takes over the now-authenticated connection.
-   Both sides construct it with sendAuth=false/expectAuth=false - the
-   authentication that already happened in step 3 makes the Multiplexer's own
-   legacy in-band AUTH-frame mechanism unnecessary (see §4.3).
+   It carries no authentication of its own - the auth in step 3 is the only
+   auth step - so the first bytes it puts on the wire are ordinary application
+   frames, not a fixed-size auth record right after the TLS handshake (see §4.3).
 5. Application data flows as TCP-relay or UDP-relay streams (session.Open /
    session.OpenUDP), each DATA frame's plaintext padded to a fixed bucket size
    before encryption.
@@ -151,9 +151,8 @@ Frame types:
 | 0x01 | `FrameOpen`    | Open a new logical stream; payload = target `"host:port"` |
 | 0x02 | `FrameClose`   | Close a logical stream |
 | 0x03 | `FramePing`    | Keepalive; echoed back verbatim |
-| 0x04 | `FrameSettings`| Received and ignored - vestigial, kept only so `multiplexer.go`'s switch statement (ported as-is) still compiles/behaves identically |
-| 0x05 | `FramePadding` | Received and ignored - same reason, vestigial |
-| 0x06 | `FrameAuth`    | **Dead at runtime.** Both sides always construct their `Multiplexer` with `sendAuth=false`, so this is never sent - see §4.3 |
+| 0x04 | `FrameSettings`| Received and ignored - vestigial, no sender ever emits it |
+| 0x05 | `FramePadding` | Received and ignored - vestigial, no sender ever emits it |
 
 Flags: only `FlagUDP = 0x04` (marks a stream as UDP-relay rather than TCP-relay, see §7).
 
@@ -169,17 +168,18 @@ directly by `TestPadPlaintextSameSizeDifferentPayloads` and
 `SessionCrypto.EncryptFrame`/`DecryptFrame` (`internal/protocol/crypto.go`), so it's
 transparent to the multiplexer and every caller.
 
-### 4.3 Why the Multiplexer still has unused AUTH-frame code
+### 4.3 No in-band authentication
 
-`internal/tunnel/multiplexer.go` is carried over with its `sendAuth`/`expectAuth`/
-`WaitForAuth`/`handleAuth` machinery intact, but every call site in this codebase
-constructs it with `sendAuth=false` and no `expectAuth` (defaults false) - see
-`cmd/client/main.go`, `cmd/server/main.go`, `mobile/mobile.go`, `windows/wintun.go`, and
-the test helpers. Real authentication now happens earlier, in `internal/handshake`,
-before a `Multiplexer` is even created. Keeping the dead code path rather than deleting
-it was a deliberate choice to minimize the surface area of the port; `protocol.FrameAuth`,
-`protocol.ComputeAuthTag`, `protocol.VerifyAuthTag` all still exist purely so this file
-compiles unchanged.
+The Multiplexer carries no authentication of its own. The only auth step is the
+disguised handshake (§5), which completes before a `Multiplexer` is even
+constructed - so `NewMultiplexer(conn, crypto)` takes no auth flags and the
+first thing it writes is ordinary application data. This is deliberate: it means
+nothing fixed-size and protocol-specific rides right after the TLS handshake,
+which is exactly the "distinctive fixed-size frame sent immediately after the
+TLS handshake" signature the v1 prototype had and this rewrite set out to remove
+(§1). The v1 in-band `FrameAuth` path (`sendAuth`/`expectAuth`/`WaitForAuth`/
+`handleAuth`, the `FrameAuth` frame type, and `protocol.ComputeAuthTag`/
+`VerifyAuthTag`) was removed entirely rather than carried over dead.
 
 ---
 
@@ -199,7 +199,7 @@ This is the actual security core of the project.
 - `protocol.DeriveSessionKeys(ecdhSecret, psk, clientEphemeralPub, serverStaticPub)`
   (`internal/protocol/crypto.go`) mixes the ECDH secret **and** a long-term PSK **and**
   both public keys through HKDF-SHA256 to produce `InnerKey` (frame encryption) and
-  `AuthKey` (handshake proof / dead in-band-AUTH code path).
+  `AuthKey` (the handshake proof HMAC - §5.2/§5.3).
 - **Forward secrecy**: because `ecdhSecret` is different on every connection, compromising
   the long-term PSK alone is not enough to decrypt a previously captured session.
   (Caveat shared with any semi-static ECDH scheme, including XTLS Reality's identical
@@ -681,10 +681,10 @@ out to be platform-neutral.
 4. **Semi-static ECDH, not fully ephemeral-ephemeral** — see the forward-secrecy caveat
    in §5.1: a future compromise of the server's long-term private key combined with
    recorded traffic could still decrypt past sessions, same limitation Reality has.
-5. **`FrameSettings`/`FramePadding` frame types and the entire in-band `FrameAuth` path
-   in `multiplexer.go` are dead code**, kept only to avoid modifying a ported file —
-   see §4.3. Not a security risk (they're simply never triggered), but worth knowing
-   about if extending the multiplexer later.
+5. **`FrameSettings`/`FramePadding` frame types are vestigial** — parsed and ignored,
+   never emitted by any sender. Not a security risk (they're simply never triggered),
+   but worth knowing about if extending the multiplexer later. (The v1 prototype's
+   in-band `FrameAuth` path was removed outright in this rewrite — see §4.3.)
 6. **Both GUI apps call a third-party geo-IP/flag service (`ipapi.co`, `flagcdn.com`)
    directly from the client**, purely to show a cosmetic country name + flag image next
    to each saved server. This is the only network dependency in either app that isn't
