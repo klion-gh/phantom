@@ -6,13 +6,24 @@ import (
 	"log"
 	"net"
 	"sync"
+	"time"
 
 	"phantom/internal/tunnel"
 )
 
+// How often currentSession is allowed to actually attempt a refresh while
+// the session is dead - mirrors netstack.Tunnel's own cooldown so a
+// prolonged outage doesn't turn every single SOCKS5 request into its own
+// redial attempt against a server that's still unreachable.
+const sessionRefreshCooldown = 3 * time.Second
+
 type SOCKS5Server struct {
-	addr    string
-	session *tunnel.Session
+	addr string
+
+	sessionMu          sync.Mutex
+	session            *tunnel.Session
+	refreshSession     func() (*tunnel.Session, error)
+	lastRefreshAttempt time.Time
 
 	mu       sync.Mutex
 	listener net.Listener
@@ -24,6 +35,48 @@ func NewSOCKS5Server(addr string, session *tunnel.Session) *SOCKS5Server {
 		addr:    addr,
 		session: session,
 	}
+}
+
+// SetSessionRefresher installs an optional hook that lets the server recover
+// from its one connection to the Phantom server dying - a brief Wi-Fi blip,
+// the full-tunnel VPN's own TUN interface briefly capturing and then losing
+// this connection when toggled on/off, a server-side hiccup - by fetching a
+// fresh session (typically pool.Get() wrapped in tunnel.NewSessionFromMux)
+// on demand. Without this, once that one connection died, every SOCKS5
+// request would fail forever, even after the underlying transport.ConnPool
+// had already quietly redialed a healthy replacement in the background -
+// requiring a manual proxy restart to recover instead of the pool's own
+// self-healing actually being put to use. Mirrors
+// netstack.Tunnel.SetSessionRefresher exactly.
+func (s *SOCKS5Server) SetSessionRefresher(fn func() (*tunnel.Session, error)) {
+	s.sessionMu.Lock()
+	s.refreshSession = fn
+	s.sessionMu.Unlock()
+}
+
+// currentSession returns the server's session, transparently replacing it
+// with a fresh one if the current one has died. Safe for concurrent use;
+// every SOCKS5 request goes through this.
+func (s *SOCKS5Server) currentSession() *tunnel.Session {
+	s.sessionMu.Lock()
+	defer s.sessionMu.Unlock()
+
+	if s.session != nil && s.session.IsAlive() {
+		return s.session
+	}
+	if s.refreshSession == nil || time.Since(s.lastRefreshAttempt) < sessionRefreshCooldown {
+		return s.session
+	}
+
+	s.lastRefreshAttempt = time.Now()
+	fresh, err := s.refreshSession()
+	if err != nil {
+		log.Printf("[socks5] session refresh failed: %v", err)
+		return s.session
+	}
+	log.Printf("[socks5] recovered with a fresh session after the previous one died")
+	s.session = fresh
+	return s.session
 }
 
 // Start binds addr and serves until Stop is called (returns nil) or a real
@@ -164,7 +217,7 @@ func (s *SOCKS5Server) handleClient(conn net.Conn) {
 	port := uint16(buf[0])<<8 | uint16(buf[1])
 	target = fmt.Sprintf("%s:%d", target, port)
 
-	stream, err := s.session.Open(target)
+	stream, err := s.currentSession().Open(target)
 	if err != nil {
 		conn.Write([]byte{0x05, 0x01, 0x00, 0x01, 0, 0, 0, 0, 0, 0})
 		return

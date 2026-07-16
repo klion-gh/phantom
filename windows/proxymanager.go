@@ -106,6 +106,19 @@ func startConfigProxy(configID string, configYAML string, requestedPort int) (in
 
 	session := tunnel.NewSessionFromMux(mux)
 	server := proxy.NewSOCKS5Server(listener.Addr().String(), session)
+	// See internal/proxy/socks5.go's SetSessionRefresher doc: without this,
+	// the one connection dying (a network blip, the server restarting, ...)
+	// would break the proxy permanently instead of recovering once
+	// transport.ConnPool redials a healthy replacement.
+	server.SetSessionRefresher(func() (*tunnel.Session, error) {
+		refreshCtx, refreshCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer refreshCancel()
+		freshMux, err := pool.Get(refreshCtx)
+		if err != nil {
+			return nil, err
+		}
+		return tunnel.NewSessionFromMux(freshMux), nil
+	})
 
 	rp := &runningProxy{pool: pool, server: server, port: port}
 

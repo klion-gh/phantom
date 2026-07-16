@@ -170,8 +170,9 @@ private fun PhantomApp(
 
     // Independent per-config SOCKS5 proxy toggle state - see ProxyManager. Entirely
     // separate from state.activeConfigId/the full-tunnel VPN above. Maps id -> the
-    // actual bound port, so the UI's port field can show/restore it after a re-render.
-    var proxyRunningPorts by remember { mutableStateOf(mapOf<String, Int>()) }
+    // actual bound port. Collected from ProxyManager (not kept as this composable's
+    // own copy) because the proxies outlive the Activity - see runningPorts's doc.
+    val proxyRunningPorts by ProxyManager.runningPorts.collectAsState()
 
     fun applyUpdate() {
         val info = updateInfo ?: return
@@ -194,13 +195,24 @@ private fun PhantomApp(
         resources = ResourceStore.loadAll(context)
     }
 
+    // Pokes the service to re-evaluate its own foreground state right after any
+    // ProxyManager change - see PhantomVpnService.ACTION_PROXY_STATE_CHANGED and the
+    // class doc on ProxyManager for why a proxy alone (no VPN connected) still needs
+    // this: without it, a backgrounded proxy becomes unreliable/high-latency once
+    // Android's background network throttling kicks in, then eventually stops working.
+    fun notifyProxyStateChanged() {
+        context.startService(Intent(context, PhantomVpnService::class.java).apply {
+            action = PhantomVpnService.ACTION_PROXY_STATE_CHANGED
+        })
+    }
+
     // requestedPortText comes straight from the tile's own port field (empty = "any
     // free port"); invalid/out-of-range input is rejected client-side with a Toast
     // before ever calling into the Go core, same as the Windows app's port field.
     fun toggleProxy(config: SavedConfig, requestedPortText: String) {
         if (ProxyManager.isRunning(config.id)) {
             ProxyManager.stop(config.id)
-            proxyRunningPorts = proxyRunningPorts - config.id
+            notifyProxyStateChanged()
             return
         }
 
@@ -215,11 +227,11 @@ private fun PhantomApp(
         }
 
         coroutineScope.launch {
-            ProxyManager.start(config.id, config.yaml, requestedPort)
+            ProxyManager.start(config.id, config.yaml, requestedPort, PhantomVpnService.lazyProtector)
                 .onSuccess { port ->
-                    proxyRunningPorts = proxyRunningPorts + (config.id to port)
                     ConfigStore.setProxyPort(context, config.id, port)
                     refreshConfigs()
+                    notifyProxyStateChanged()
                 }
                 .onFailure { e ->
                     Toast.makeText(
@@ -276,7 +288,7 @@ private fun PhantomApp(
                 if (id != null) {
                     if (state.activeConfigId == id) onDisconnect()
                     ProxyManager.stop(id)
-                    proxyRunningPorts = proxyRunningPorts - id
+                    notifyProxyStateChanged()
                     ConfigStore.delete(context, id)
                     refreshConfigs()
                 }

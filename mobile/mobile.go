@@ -225,7 +225,13 @@ type ProxyHandle struct {
 // not silently replaced with a different port, so the caller can surface it
 // and let the user pick another one. requestedPort == 0 means "any free
 // port" (OS-assigned).
-func StartProxy(configYAML string, requestedPort int) (*ProxyHandle, error) {
+//
+// protector (nilable) exempts this proxy's own connections from the
+// full-tunnel VPN's routing, exactly like Start's protector param - without
+// it, turning the full VPN on for *any* config (not just this proxy's own)
+// would capture and break this proxy's connections, since they're not part
+// of that tunnel's own dial.
+func StartProxy(configYAML string, requestedPort int, protector Protector) (*ProxyHandle, error) {
 	// Checked before dialing anything - no point spending a real TLS
 	// handshake against the server just to then discover the requested port
 	// was never available in the first place.
@@ -258,6 +264,9 @@ func StartProxy(configYAML string, requestedPort int) (*ProxyHandle, error) {
 		PSK:         psk,
 		ServerPub:   serverPub,
 	}
+	if protector != nil {
+		tlsCfg.ProtectFD = protector.Protect
+	}
 
 	poolSize := cfg.PoolSize
 	if poolSize <= 0 {
@@ -279,6 +288,19 @@ func StartProxy(configYAML string, requestedPort int) (*ProxyHandle, error) {
 
 	session := tunnel.NewSessionFromMux(mux)
 	server := proxy.NewSOCKS5Server(listener.Addr().String(), session)
+	// See internal/proxy/socks5.go's SetSessionRefresher doc: without this,
+	// the one connection dying (the VPN briefly capturing it while toggled
+	// on, a network blip, ...) would break the proxy permanently instead of
+	// recovering once transport.ConnPool redials a healthy replacement.
+	server.SetSessionRefresher(func() (*tunnel.Session, error) {
+		refreshCtx, refreshCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer refreshCancel()
+		freshMux, err := pool.Get(refreshCtx)
+		if err != nil {
+			return nil, err
+		}
+		return tunnel.NewSessionFromMux(freshMux), nil
+	})
 
 	go server.Serve(listener) // errors already logged inside socks5.go
 

@@ -38,6 +38,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.Dispatchers
@@ -208,6 +209,8 @@ fun ConfigInfoCard(
                     color = TextPrimary,
                     fontSize = 17.sp,
                     fontWeight = FontWeight.SemiBold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
                 )
                 Spacer(modifier = Modifier.height(2.dp))
                 Text(
@@ -215,6 +218,8 @@ fun ConfigInfoCard(
                     color = TextSecondary,
                     fontSize = 13.sp,
                     fontFamily = FontFamily.Monospace,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
                 )
                 Spacer(modifier = Modifier.height(6.dp))
                 Text(
@@ -244,17 +249,48 @@ fun ConfigInfoCard(
                     }
                 }
             }
-            Spacer(modifier = Modifier.width(10.dp))
-            ProxyBlock(
-                running = proxyRunning,
-                portText = portText,
-                onPortTextChange = { portText = it },
-                onToggleClick = { onToggleProxy(portText) },
-            )
-            Spacer(modifier = Modifier.width(16.dp))
-            ConnectButton(status = status, onClick = onToggle, size = 68.dp)
+            Spacer(modifier = Modifier.width(8.dp))
+            // One column: the connect toggle on top, the independent-proxy controls
+            // directly under it - two separate concerns (whole-device tunnel vs. this
+            // one tile's own SOCKS5 proxy), but visually grouped since they're both
+            // "controls for this config", not tied to each other's state.
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                ConnectSwitch(status = status, onClick = onToggle)
+                Spacer(modifier = Modifier.height(6.dp))
+                ProxyBlock(
+                    running = proxyRunning,
+                    portText = portText,
+                    onPortTextChange = { portText = it },
+                    onToggleClick = { onToggleProxy(portText) },
+                )
+            }
         }
     }
+}
+
+/**
+ * Classic on/off switch for the full-tunnel VPN connection - checked while connected
+ * or actively connecting (disabled mid-connect to prevent double-taps); [onClick] is
+ * invoked on any tap regardless of the new value Switch itself would compute, since
+ * the caller (MainActivity's toggleConnection) already decides connect-vs-disconnect
+ * from the current [status] itself.
+ */
+@Composable
+private fun ConnectSwitch(status: ConnectionStatus, onClick: () -> Unit) {
+    val checked = status == ConnectionStatus.CONNECTED || status == ConnectionStatus.CONNECTING
+    androidx.compose.material3.Switch(
+        checked = checked,
+        onCheckedChange = { onClick() },
+        enabled = status != ConnectionStatus.CONNECTING,
+        colors = androidx.compose.material3.SwitchDefaults.colors(
+            checkedThumbColor = AccentLavenderBright,
+            checkedTrackColor = AccentPurpleDeep,
+            checkedBorderColor = Color.Transparent,
+            uncheckedThumbColor = TextSecondary,
+            uncheckedTrackColor = BgSurfaceAlt,
+            uncheckedBorderColor = TextSecondary.copy(alpha = 0.4f),
+        ),
+    )
 }
 
 /**
@@ -285,19 +321,19 @@ private fun ProxyBlock(
                     else Modifier.border(2.dp, TextSecondary.copy(alpha = 0.35f), shape)
                 )
                 .clickable(onClick = onToggleClick)
-                .padding(horizontal = 10.dp, vertical = 6.dp),
+                .padding(horizontal = 8.dp, vertical = 5.dp),
         ) {
             Text(
                 text = "PROXY",
                 color = if (running) TextPrimary else TextSecondary,
-                fontSize = 10.sp,
+                fontSize = 9.sp,
                 fontWeight = FontWeight.Bold,
             )
         }
         Spacer(modifier = Modifier.height(4.dp))
         Box(contentAlignment = Alignment.Center) {
             if (portText.isEmpty()) {
-                Text("порт", color = TextSecondary.copy(alpha = 0.6f), fontSize = 11.sp)
+                Text("порт", color = TextSecondary.copy(alpha = 0.6f), fontSize = 10.sp)
             }
             BasicTextField(
                 value = portText,
@@ -306,12 +342,12 @@ private fun ProxyBlock(
                 singleLine = true,
                 textStyle = TextStyle(
                     color = if (running) TextSecondary else TextPrimary,
-                    fontSize = 11.sp,
+                    fontSize = 10.sp,
                     textAlign = TextAlign.Center,
                 ),
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                 modifier = Modifier
-                    .width(52.dp)
+                    .width(46.dp)
                     .padding(bottom = 2.dp)
                     .border(
                         width = 1.dp,
