@@ -30,7 +30,13 @@ type ServerConfig struct {
 	PrivateKey   string `yaml:"private_key"`    // server's static X25519 private key (hex, 32 bytes) - for real per-session ECDH
 	PSK          string `yaml:"psk"`            // shared secret (hex, 32 bytes), must match every client's psk
 	DecoySiteDir string `yaml:"decoy_site_dir"` // directory of static files served to connections that fail/skip the embedded auth check; empty = built-in minimal page
-	LogLevel     string `yaml:"log_level"`
+	// Per-IP anti-enumeration throttle on auth-handshake attempts (see
+	// internal/transport/ratelimit.go). Both 0 = use defaults (2/s sustained,
+	// 60 burst); an over-budget IP is served the decoy without an auth attempt,
+	// not dropped, so throttling stays invisible.
+	HandshakeRatePerSec float64 `yaml:"handshake_rate_per_sec"`
+	HandshakeBurst      float64 `yaml:"handshake_burst"`
+	LogLevel            string  `yaml:"log_level"` // debug|info|warn|error; controls internal/logx (server-side logging)
 }
 
 func LoadClientConfig(path string) (*ClientConfig, error) {

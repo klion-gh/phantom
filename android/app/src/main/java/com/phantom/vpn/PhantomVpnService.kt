@@ -119,6 +119,21 @@ class PhantomVpnService : VpnService() {
     private val reconnectHandler = Handler(Looper.getMainLooper())
     private var pendingReconnect: Runnable? = null
 
+    // A separate, lightweight physical-network watch for the independent proxy,
+    // active only while a proxy is running. The VPN's own watch above rebuilds
+    // the tunnel on a network change, but a proxy running with no full VPN has
+    // no tunnel and no watch of its own - its pooled sockets to the server just
+    // die on a Wi-Fi<->cellular switch. This nudges the pool to redial at once
+    // (ProxyManager.reconnectAll) instead of recovering only lazily on the next
+    // request after the dead sockets time out. Same NET_CAPABILITY_NOT_VPN
+    // filter and debounce as the VPN watch; kept in its own fields so the two
+    // watches never interfere.
+    private var proxyConnectivityManager: ConnectivityManager? = null
+    private var proxyNetworkCallback: ConnectivityManager.NetworkCallback? = null
+    private var proxyWatchRegisteredAtMs: Long = 0
+    private val proxyReconnectHandler = Handler(Looper.getMainLooper())
+    private var pendingProxyReconnect: Runnable? = null
+
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         FileLog.i("onStartCommand action=${intent?.action}")
         when (intent?.action) {
@@ -163,6 +178,7 @@ class PhantomVpnService : VpnService() {
             ACTION_PROXY_DISCONNECT -> {
                 executor.execute {
                     ProxyManager.stopAll()
+                    ensureProxyNetworkWatch()
                     showPersistentNotification(VpnStateHolder.state.value.status)
                     val vpnActive = VpnStateHolder.state.value.status.let {
                         it == ConnectionStatus.CONNECTED || it == ConnectionStatus.CONNECTING
@@ -172,6 +188,7 @@ class PhantomVpnService : VpnService() {
                 return START_NOT_STICKY
             }
             ACTION_PROXY_STATE_CHANGED -> {
+                ensureProxyNetworkWatch()
                 showPersistentNotification(VpnStateHolder.state.value.status)
                 val vpnActive = VpnStateHolder.state.value.status.let {
                     it == ConnectionStatus.CONNECTED || it == ConnectionStatus.CONNECTING
@@ -322,6 +339,67 @@ class PhantomVpnService : VpnService() {
         pendingReconnect = null
     }
 
+    // Registers the proxy's physical-network watch when at least one proxy is
+    // running and tears it down when none are - idempotent, safe to call after
+    // any proxy start/stop. See the field comment above for why the proxy needs
+    // its own watch separate from the VPN's.
+    private fun ensureProxyNetworkWatch() {
+        if (!ProxyManager.hasAnyRunning()) {
+            unregisterProxyNetworkWatch()
+            return
+        }
+        if (proxyNetworkCallback != null) return
+        val cm = getSystemService(ConnectivityManager::class.java) ?: return
+        proxyConnectivityManager = cm
+        proxyWatchRegisteredAtMs = System.currentTimeMillis()
+
+        val request = NetworkRequest.Builder()
+            .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+            .addCapability(NetworkCapabilities.NET_CAPABILITY_NOT_VPN)
+            .build()
+
+        val callback = object : ConnectivityManager.NetworkCallback() {
+            override fun onAvailable(network: Network) = onProxyPhysicalNetworkEvent()
+            override fun onLost(network: Network) = onProxyPhysicalNetworkEvent()
+        }
+        proxyNetworkCallback = callback
+        try {
+            cm.registerNetworkCallback(request, callback)
+        } catch (e: Throwable) {
+            FileLog.e("proxy registerNetworkCallback failed", e)
+            proxyNetworkCallback = null
+        }
+    }
+
+    // Same initial-replay grace + debounce reasoning as onPhysicalNetworkEvent/
+    // scheduleReconnect above; here the action is just "redial the proxy pools"
+    // (cheap) rather than "rebuild the tunnel", and it runs on the executor
+    // since ProxyManager.reconnectAll closes sockets.
+    private fun onProxyPhysicalNetworkEvent() {
+        if (System.currentTimeMillis() - proxyWatchRegisteredAtMs < 2000) return
+        pendingProxyReconnect?.let { proxyReconnectHandler.removeCallbacks(it) }
+        val runnable = Runnable {
+            FileLog.i("underlying network changed, reconnecting proxy pools")
+            executor.execute { ProxyManager.reconnectAll() }
+        }
+        pendingProxyReconnect = runnable
+        proxyReconnectHandler.postDelayed(runnable, 1500)
+    }
+
+    private fun unregisterProxyNetworkWatch() {
+        proxyNetworkCallback?.let { cb ->
+            try {
+                proxyConnectivityManager?.unregisterNetworkCallback(cb)
+            } catch (e: Throwable) {
+                FileLog.e("proxy unregisterNetworkCallback error", e)
+            }
+        }
+        proxyNetworkCallback = null
+        proxyConnectivityManager = null
+        pendingProxyReconnect?.let { proxyReconnectHandler.removeCallbacks(it) }
+        pendingProxyReconnect = null
+    }
+
     // Debounced rather than immediate - a real Wi-Fi<->cellular handover fires
     // several rapid onAvailable/onLost events while things settle, and dialing
     // a fresh tunnel on every single one of them would just race itself.
@@ -359,6 +437,7 @@ class PhantomVpnService : VpnService() {
             }
             // Success or not, re-render so the action button/status text match reality
             // (and the service becomes foreground if the proxy did start).
+            ensureProxyNetworkWatch()
             showPersistentNotification(VpnStateHolder.state.value.status)
         }
     }
@@ -394,6 +473,7 @@ class PhantomVpnService : VpnService() {
 
     override fun onDestroy() {
         if (activeInstance == this) activeInstance = null
+        unregisterProxyNetworkWatch()
         disconnect()
         super.onDestroy()
     }

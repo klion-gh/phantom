@@ -31,12 +31,25 @@ func NewDecoySite(dir string) *DecoySite {
 	return &DecoySite{dir: dir}
 }
 
+// ServeDefault writes the decoy's root response without a parsed request -
+// used on the rate-limited path (see ratelimit.go), where the connection is
+// answered like an ordinary homepage visit without spending an auth attempt on
+// it, so the request bytes are never parsed in the first place.
+func (d *DecoySite) ServeDefault(w io.Writer) {
+	body, contentType, status := d.resolve("/")
+	d.write(w, body, contentType, status)
+}
+
 // Serve writes a complete HTTP response for req directly to w. req is the
 // *http.Request already parsed by handshake.ServerHandshake from the raw
 // connection - this does not go through Go's http.Server machinery since the
 // request has already been consumed from the socket.
 func (d *DecoySite) Serve(w io.Writer, req *http.Request) {
 	body, contentType, status := d.resolve(req.URL.Path)
+	d.write(w, body, contentType, status)
+}
+
+func (d *DecoySite) write(w io.Writer, body []byte, contentType string, status int) {
 
 	resp := fmt.Sprintf(
 		"HTTP/1.1 %d %s\r\n"+

@@ -368,6 +368,15 @@ by `internal/tunnel/stream.go`). Idle timeout: 60 seconds. This is what lets the
 and Windows VPN tunnels relay DNS/QUIC/WebRTC and other UDP-based traffic, not just TCP
 — see §9's forwarder setup.
 
+The same UDP relay is also reachable through the local SOCKS5 proxy: `socks5.go`
+implements **UDP ASSOCIATE** (RFC 1928), binding a loopback UDP socket for the
+association's lifetime (tied to the control TCP connection) and relaying each
+SOCKS5-UDP-wrapped datagram to a per-destination `Session.OpenUDP` stream, with the
+same 60-second idle eviction per destination. So an app pointed at the proxy (the
+desktop `cmd/client`, or either GUI app's independent per-config proxy) can send UDP
+through Phantom — e.g. Telegram voice calls or plain DNS-over-UDP — not just TCP
+CONNECT. Fragmented datagrams (`FRAG != 0`) are unsupported and dropped, as is standard.
+
 ---
 
 ## 8. Configuration (`internal/config/config.go`)
@@ -400,8 +409,22 @@ acme_cache_dir: "/var/lib/phantom/acme"  # where the issued cert/key persist acr
 private_key: "<64 hex chars>"         # required - server's static X25519 private key
 psk: "<64 hex chars>"                 # required - must equal every client's psk
 decoy_site_dir: ""                    # optional; static files to serve to unauthenticated connections. Empty = built-in placeholder page
-log_level: "info"                     # unused, same caveat as client
+handshake_rate_per_sec: 0             # optional; per-IP auth-attempt throttle (0 = default 2/s). See below.
+handshake_burst: 0                    # optional; per-IP burst (0 = default 60)
+log_level: "info"                     # server-side only: debug|info|warn|error, drives internal/logx. Unused on the client (see above).
 ```
+
+`handshake_rate_per_sec`/`handshake_burst` are a per-IP anti-enumeration throttle
+(`internal/transport/ratelimit.go`): an IP that exceeds its token budget is served the
+decoy site *without* an auth attempt rather than dropped, so a scanner hammering the
+endpoint just sees an ordinary website and can't map the auth path's behavior by volume.
+Both 0/unset use loose defaults (2/s sustained, 60 burst) — generous enough for a legit
+client's connection pool + periodic pings and for many users behind one carrier-grade
+NAT, while still defanging a high-rate scanner. This is anti-enumeration, not anti-DoS
+(a TLS-flood still costs a handshake; that belongs at the firewall). The server also
+keeps aggregate counters (authenticated / decoy / non-HTTP / rate-limited / active) and
+logs a periodic summary via `internal/logx` — a spike in decoy or rate-limited relative
+to authenticated is the earliest server-side sign of scanning.
 
 `cmd/keygen` prints a matched `private_key`/`server_public_key`/`psk` triple.
 `scripts/install.sh` runs it automatically during a fresh server install and prints a

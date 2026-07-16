@@ -313,6 +313,15 @@ func (p *ProxyHandle) Port() int {
 	return p.port
 }
 
+// Reconnect forces the proxy's pooled connections to redial immediately.
+// Call it right after the device's network changed (Wi-Fi<->cellular) so the
+// proxy recovers at once, rather than on the next request after the dead
+// sockets time out - the SOCKS5 server's session refresher then pulls a fresh
+// connection from the pool on its next request. Safe to call any time.
+func (p *ProxyHandle) Reconnect() {
+	p.pool.Recycle()
+}
+
 // Stop tears down the proxy's listener and its connection pool.
 func (p *ProxyHandle) Stop() {
 	p.server.Stop()

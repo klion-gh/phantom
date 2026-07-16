@@ -86,6 +86,16 @@ object ProxyManager {
         publish()
     }
 
+    /**
+     * Forces every running proxy to redial its pooled connections at once -
+     * called on a network change (see PhantomVpnService's proxy network watch)
+     * so a Wi-Fi<->cellular switch recovers immediately instead of on the next
+     * request after the dead sockets time out.
+     */
+    fun reconnectAll() {
+        synchronized(handles) { handles.values.toList() }.forEach { it.reconnect() }
+    }
+
     fun isRunning(configId: String): Boolean = synchronized(handles) { handles.containsKey(configId) }
 
     fun hasAnyRunning(): Boolean = synchronized(handles) { handles.isNotEmpty() }

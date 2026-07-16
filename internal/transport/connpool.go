@@ -134,6 +134,25 @@ func (p *ConnPool) rotateConn(old *poolConn) {
 	}
 }
 
+// Recycle closes and drops every current connection without shutting the pool
+// down, so the next Get() (and each closed conn's own monitorConn, which fires
+// on the Close below) dials fresh ones. Meant to be called right after the
+// underlying network changed out from under the existing sockets - a phone's
+// Wi-Fi<->cellular switch - to force an immediate redial on the new network
+// instead of waiting for the dead sockets to be noticed on their own (which,
+// with no traffic flowing, can take a full TCP timeout). Harmless no-op on a
+// closed pool.
+func (p *ConnPool) Recycle() {
+	p.mu.Lock()
+	conns := p.conns
+	p.conns = nil
+	p.mu.Unlock()
+
+	for _, pc := range conns {
+		pc.mux.Close()
+	}
+}
+
 func (p *ConnPool) Close() error {
 	atomic.StoreInt32(&p.closed, 1)
 	p.mu.Lock()

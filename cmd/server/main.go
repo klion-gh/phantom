@@ -13,6 +13,7 @@ import (
 	"golang.org/x/crypto/curve25519"
 
 	"phantom/internal/config"
+	"phantom/internal/logx"
 	"phantom/internal/protocol"
 	"phantom/internal/proxy"
 	"phantom/internal/transport"
@@ -55,18 +56,24 @@ func main() {
 		cancel()
 	}()
 
+	logx.SetLevel(cfg.LogLevel)
+
 	serverCfg := &transport.TLSServerConfig{
-		ListenAddr:   cfg.Listen,
-		Domain:       cfg.Domain,
-		ACMEEmail:    cfg.ACMEEmail,
-		ACMECacheDir: cfg.ACMECacheDir,
-		CertFile:     cfg.CertFile,
-		KeyFile:      cfg.KeyFile,
-		PSK:          psk,
-		ServerPriv:   serverPriv,
-		ServerPub:    serverPub,
-		Decoy:        transport.NewDecoySite(cfg.DecoySiteDir),
+		ListenAddr:          cfg.Listen,
+		Domain:              cfg.Domain,
+		ACMEEmail:           cfg.ACMEEmail,
+		ACMECacheDir:        cfg.ACMECacheDir,
+		CertFile:            cfg.CertFile,
+		KeyFile:             cfg.KeyFile,
+		PSK:                 psk,
+		ServerPriv:          serverPriv,
+		ServerPub:           serverPub,
+		Decoy:               transport.NewDecoySite(cfg.DecoySiteDir),
+		HandshakeRatePerSec: cfg.HandshakeRatePerSec,
+		HandshakeBurst:      cfg.HandshakeBurst,
 	}
+
+	go logMetricsLoop(ctx)
 
 	direct := proxy.NewDirectOutbound(30 * time.Second)
 
@@ -87,5 +94,25 @@ func main() {
 
 	if err != nil {
 		log.Fatalf("Server error: %v", err)
+	}
+}
+
+// logMetricsLoop prints an aggregate connection-outcome summary every few
+// minutes (see internal/transport/metrics.go). A spike in decoy/non-HTTP/
+// rate-limited relative to ok is the server's earliest sign of scanning or
+// probing. Always logged at info so it shows up regardless of log_level's
+// per-connection verbosity.
+func logMetricsLoop(ctx context.Context) {
+	ticker := time.NewTicker(5 * time.Minute)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			m := transport.MetricsSnapshot()
+			logx.Infof("[metrics] active=%d ok=%d decoy=%d non_http=%d rate_limited=%d",
+				m.ActiveNow, m.HandshakeOK, m.DecoyHits, m.NonHTTP, m.RateLimited)
+		}
 	}
 }

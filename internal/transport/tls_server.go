@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/tls"
 	"fmt"
-	"log"
 	"net"
 	"net/http"
 	"os"
@@ -13,6 +12,7 @@ import (
 	"golang.org/x/crypto/acme/autocert"
 
 	"phantom/internal/handshake"
+	"phantom/internal/logx"
 	"phantom/internal/protocol"
 )
 
@@ -27,6 +27,12 @@ type TLSServerConfig struct {
 	ServerPriv   []byte // static X25519 private key, for the handshake's ECDH
 	ServerPub    []byte
 	Decoy        *DecoySite
+
+	// Per-IP auth-handshake throttle (see ratelimit.go); 0 = defaults. Built
+	// into a *rateLimiter once, in ListenAndServe.
+	HandshakeRatePerSec float64
+	HandshakeBurst      float64
+	limiter             *rateLimiter
 }
 
 // ListenAndServe replaces v1's single hardcoded self-signed certificate
@@ -46,6 +52,8 @@ type TLSServerConfig struct {
 // Connections that don't pass internal/handshake's embedded auth check are
 // handed to cfg.Decoy instead of being dropped.
 func ListenAndServe(ctx context.Context, cfg *TLSServerConfig, handler func(net.Conn, *protocol.SessionCrypto)) error {
+	cfg.limiter = newRateLimiter(cfg.HandshakeRatePerSec, cfg.HandshakeBurst)
+
 	var tlsConfig *tls.Config
 
 	if cfg.CertFile != "" && cfg.KeyFile != "" {
@@ -54,7 +62,7 @@ func ListenAndServe(ctx context.Context, cfg *TLSServerConfig, handler func(net.
 			return fmt.Errorf("load cert_file/key_file: %w", err)
 		}
 		tlsConfig = staticConfig
-		log.Printf("[server] using static certificate %s (no ACME HTTP-01 responder - port 80 stays free for anything else already using it)", cfg.CertFile)
+		logx.Infof("[server] using static certificate %s (no ACME HTTP-01 responder - port 80 stays free for anything else already using it)", cfg.CertFile)
 	} else {
 		certManager := &autocert.Manager{
 			Prompt:     autocert.AcceptTOS,
@@ -74,7 +82,7 @@ func ListenAndServe(ctx context.Context, cfg *TLSServerConfig, handler func(net.
 			// up with no certificate to offer; use cert_file/key_file instead.
 			srv := &http.Server{Addr: ":80", Handler: certManager.HTTPHandler(nil)}
 			if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-				log.Printf("[server] ACME HTTP-01 responder on :80 failed: %v", err)
+				logx.Warnf("[server] ACME HTTP-01 responder on :80 failed: %v", err)
 			}
 		}()
 
@@ -89,7 +97,7 @@ func ListenAndServe(ctx context.Context, cfg *TLSServerConfig, handler func(net.
 	}
 	defer listener.Close()
 
-	log.Printf("[server] listening on %s (domain=%s)", cfg.ListenAddr, cfg.Domain)
+	logx.Infof("[server] listening on %s (domain=%s)", cfg.ListenAddr, cfg.Domain)
 
 	for {
 		select {
@@ -100,7 +108,7 @@ func ListenAndServe(ctx context.Context, cfg *TLSServerConfig, handler func(net.
 
 		conn, err := listener.Accept()
 		if err != nil {
-			log.Printf("[server] accept error: %v", err)
+			logx.Warnf("[server] accept error: %v", err)
 			continue
 		}
 
@@ -177,7 +185,7 @@ func (r *certReloader) load() (*tls.Certificate, error) {
 	r.cert = &cert
 	r.certModTime = certInfo.ModTime().UnixNano()
 	r.keyModTime = keyInfo.ModTime().UnixNano()
-	log.Printf("[server] loaded certificate from %s (modified %s)", r.certFile, certInfo.ModTime())
+	logx.Infof("[server] loaded certificate from %s (modified %s)", r.certFile, certInfo.ModTime())
 	return r.cert, nil
 }
 
@@ -190,7 +198,7 @@ func handleConnection(conn net.Conn, cfg *TLSServerConfig, handler func(net.Conn
 	}
 
 	if err := tlsConn.Handshake(); err != nil {
-		log.Printf("[server] tls handshake error: %v", err)
+		logx.Debugf("[server] tls handshake error: %v", err)
 		return
 	}
 
@@ -199,6 +207,16 @@ func handleConnection(conn net.Conn, cfg *TLSServerConfig, handler func(net.Conn
 	// those by itself with a throwaway challenge certificate and no
 	// application data ever follows - nothing else to do for those.
 	if tlsConn.ConnectionState().NegotiatedProtocol == "acme-tls/1" {
+		return
+	}
+
+	// Over its per-IP budget: answer like an ordinary homepage visit without
+	// spending an auth attempt on it (see ratelimit.go). Uses the connection's
+	// remote IP; behind a reverse proxy this would be the proxy's IP, which is
+	// fine - Phantom terminates its own TLS directly, there's no proxy in front.
+	if ip, _, splitErr := net.SplitHostPort(conn.RemoteAddr().String()); splitErr == nil && !cfg.limiter.allow(ip) {
+		metricRateLimited.Add(1)
+		cfg.Decoy.ServeDefault(tlsConn)
 		return
 	}
 
@@ -211,13 +229,18 @@ func handleConnection(conn net.Conn, cfg *TLSServerConfig, handler func(net.Conn
 	if err != nil {
 		// Didn't even parse as HTTP - not a real prober worth a full decoy
 		// response, just close like a real server would for garbage input.
-		log.Printf("[server] handshake read error: %v", err)
+		metricNonHTTP.Add(1)
+		logx.Debugf("[server] handshake read error: %v", err)
 		return
 	}
 	if result == nil {
+		metricDecoyHits.Add(1)
 		cfg.Decoy.Serve(tlsConn, req)
 		return
 	}
 
+	metricHandshakeOK.Add(1)
+	metricActiveNow.Add(1)
+	defer metricActiveNow.Add(-1)
 	handler(tlsConn, result.Crypto)
 }

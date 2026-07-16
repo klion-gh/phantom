@@ -12,4 +12,12 @@ key_file: ""
 private_key: "REPLACE_WITH_SERVER_PRIVATE_KEY_FROM_KEYGEN"
 psk: "REPLACE_WITH_PSK_FROM_KEYGEN"
 decoy_site_dir: ""
+# Per-IP throttle on auth-handshake attempts (anti-enumeration). Over-budget IPs
+# are served the decoy site without an auth attempt, never dropped, so the
+# throttle stays invisible. Both 0/unset = defaults (2/s sustained, 60 burst),
+# loose enough for legit clients and users sharing a NAT while still defanging a
+# scanner. Not a DoS defense - that belongs at the firewall.
+handshake_rate_per_sec: 0
+handshake_burst: 0
+# debug|info|warn|error - controls server-side (internal/logx) logging verbosity.
 log_level: "info"
