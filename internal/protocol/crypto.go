@@ -52,6 +52,38 @@ func DeriveSessionKeys(ecdhSharedSecret, psk, clientEphemeralPub, serverStaticPu
 	return sc, nil
 }
 
+// DeriveInnerKeyEE derives the tunnel encryption key for an
+// ephemeral-ephemeral handshake, mixing the ephemeral-ephemeral ECDH secret
+// (ee = clientEph x serverEph) in addition to the ephemeral-static one (es =
+// clientEph x serverStatic) that DeriveSessionKeys already used. This closes
+// the semi-static forward-secrecy gap: with es alone, a future compromise of
+// the server's long-term private key plus recorded traffic would decrypt past
+// sessions; adding ee means an attacker would also need one of the two
+// ephemeral private keys, which neither side ever persists.
+//
+// Only the InnerKey changes - the AuthKey stays whatever DeriveSessionKeys
+// produced from es, so authentication is unaffected and interops unchanged with
+// peers that don't do the ephemeral-ephemeral step (see internal/handshake).
+// The distinct info label keeps this key from ever colliding with the
+// static-only InnerKey.
+func DeriveInnerKeyEE(es, ee, psk, clientPub, serverStaticPub, serverEphPub []byte) ([32]byte, error) {
+	material := make([]byte, 0, len(es)+len(ee)+len(psk)+len(clientPub)+len(serverStaticPub)+len(serverEphPub))
+	material = append(material, es...)
+	material = append(material, ee...)
+	material = append(material, psk...)
+	material = append(material, clientPub...)
+	material = append(material, serverStaticPub...)
+	material = append(material, serverEphPub...)
+
+	key, err := hkdfExpand(material, []byte("Phantom-inner-encryption-ee"), 32)
+	if err != nil {
+		return [32]byte{}, err
+	}
+	var out [32]byte
+	copy(out[:], key)
+	return out, nil
+}
+
 func hkdfExpand(secret, info []byte, length int) ([]byte, error) {
 	hkdfReader := hkdf.New(sha256.New, secret, nil, info)
 	out := make([]byte, length)

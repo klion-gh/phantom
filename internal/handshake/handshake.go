@@ -40,6 +40,19 @@ const (
 	wsMagicGUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 	cookieName  = "session"
 	authTagSize = 16
+	// eeCapCookie is a second cookie the client sends (with a random value)
+	// purely to signal it supports the ephemeral-ephemeral upgrade (§5.1). Its
+	// presence - not its value - is the signal; an old server ignores it and
+	// stays on the static-only key, a new server responds with its ephemeral
+	// public key. Named/shaped like an ordinary companion cookie (session +
+	// csrf is a very common pair) so it adds no distinctive fingerprint, and
+	// its random value means it isn't a constant tell either.
+	eeCapCookie = "csrf"
+	// eeServerCookie is the cookie the server sets in its 101 response carrying
+	// its per-connection ephemeral public key (base64url), when the client
+	// signaled ee support. Servers setting a cookie in a response is entirely
+	// ordinary; an old client ignores it.
+	eeServerCookie = "sid"
 	// A handful of plausible-looking paths a real small site might expose a
 	// websocket endpoint on; the client picks one per connection so repeated
 	// connections don't all hit the exact same literal path.
@@ -57,20 +70,16 @@ var ErrAuthFailed = errors.New("handshake: auth failed or not present")
 // outer TLS connection (conn) and returns the derived SessionCrypto for the
 // tunnel that follows. domain is used as the Host header.
 func ClientHandshake(rw readWriter, domain string, psk, serverStaticPub []byte, exporter ExportKeyingMaterial) (*protocol.SessionCrypto, error) {
-	clientPriv := make([]byte, 32)
-	if _, err := rand.Read(clientPriv); err != nil {
-		return nil, err
-	}
-	clientPriv[0] &= 248
-	clientPriv[31] &= 127
-	clientPriv[31] |= 64
-
-	clientPub, err := curve25519.X25519(clientPriv, curve25519.Basepoint)
+	clientPriv, clientPub, err := genEphemeral()
 	if err != nil {
 		return nil, err
 	}
 
-	ecdhSecret, err := curve25519.X25519(clientPriv, serverStaticPub)
+	// es = client ephemeral x server static. Authenticates the client (only
+	// someone who knows the PSK and completed this ECDH lands on the same
+	// AuthKey) and, unchanged from before, is the basis for the tunnel key when
+	// the server doesn't do the ephemeral-ephemeral upgrade.
+	es, err := curve25519.X25519(clientPriv, serverStaticPub)
 	if err != nil {
 		return nil, fmt.Errorf("ecdh: %w", err)
 	}
@@ -80,7 +89,7 @@ func ClientHandshake(rw readWriter, domain string, psk, serverStaticPub []byte, 
 		return nil, fmt.Errorf("tls exporter: %w", err)
 	}
 
-	crypto, err := protocol.DeriveSessionKeys(ecdhSecret, psk, clientPub, serverStaticPub)
+	crypto, err := protocol.DeriveSessionKeys(es, psk, clientPub, serverStaticPub)
 	if err != nil {
 		return nil, err
 	}
@@ -88,6 +97,14 @@ func ClientHandshake(rw readWriter, domain string, psk, serverStaticPub []byte, 
 	tag := computeAuthTag(crypto.AuthKey[:], clientPub, binding)
 
 	cookieValue := base64.RawURLEncoding.EncodeToString(append(append([]byte{}, clientPub...), tag...))
+
+	// Random companion-cookie value; presence signals ephemeral-ephemeral
+	// support (see eeCapCookie).
+	capTok := make([]byte, 16)
+	if _, err := rand.Read(capTok); err != nil {
+		return nil, err
+	}
+	capValue := base64.RawURLEncoding.EncodeToString(capTok)
 
 	wsKey := make([]byte, 16)
 	if _, err := rand.Read(wsKey); err != nil {
@@ -104,9 +121,9 @@ func ClientHandshake(rw readWriter, domain string, psk, serverStaticPub []byte, 
 			"Upgrade: websocket\r\n"+
 			"Sec-WebSocket-Version: 13\r\n"+
 			"Sec-WebSocket-Key: %s\r\n"+
-			"Cookie: %s=%s\r\n"+
+			"Cookie: %s=%s; %s=%s\r\n"+
 			"\r\n",
-		path, domain, wsKeyB64, cookieName, cookieValue,
+		path, domain, wsKeyB64, cookieName, cookieValue, eeCapCookie, capValue,
 	)
 
 	if _, err := rw.Write([]byte(req)); err != nil {
@@ -129,7 +146,54 @@ func ClientHandshake(rw readWriter, domain string, psk, serverStaticPub []byte, 
 		return nil, fmt.Errorf("%w: unexpected Sec-WebSocket-Accept", ErrAuthFailed)
 	}
 
+	// If the server included its ephemeral public key, upgrade the tunnel key to
+	// ephemeral-ephemeral (full forward secrecy). If not, it's an older server -
+	// keep the static-only key DeriveSessionKeys already produced.
+	if serverEphPub := readServerEphPub(resp); serverEphPub != nil {
+		ee, err := curve25519.X25519(clientPriv, serverEphPub)
+		if err != nil {
+			return nil, fmt.Errorf("ee ecdh: %w", err)
+		}
+		innerKey, err := protocol.DeriveInnerKeyEE(es, ee, psk, clientPub, serverStaticPub, serverEphPub)
+		if err != nil {
+			return nil, err
+		}
+		crypto.InnerKey = innerKey
+	}
+
 	return crypto, nil
+}
+
+// readServerEphPub extracts the server's ephemeral public key from the 101
+// response's Set-Cookie (see eeServerCookie), or nil if absent/malformed (an
+// older server, or a client that didn't ask for the upgrade).
+func readServerEphPub(resp *http.Response) []byte {
+	for _, c := range resp.Cookies() {
+		if c.Name != eeServerCookie {
+			continue
+		}
+		pub, err := base64.RawURLEncoding.DecodeString(c.Value)
+		if err != nil || len(pub) != 32 {
+			return nil
+		}
+		return pub
+	}
+	return nil
+}
+
+func genEphemeral() (priv, pub []byte, err error) {
+	priv = make([]byte, 32)
+	if _, err = rand.Read(priv); err != nil {
+		return nil, nil, err
+	}
+	priv[0] &= 248
+	priv[31] &= 127
+	priv[31] |= 64
+	pub, err = curve25519.X25519(priv, curve25519.Basepoint)
+	if err != nil {
+		return nil, nil, err
+	}
+	return priv, pub, nil
 }
 
 // ServerResult is returned by ServerHandshake on a successful, authenticated
@@ -187,6 +251,31 @@ func ServerHandshake(rw readWriter, psk, serverPriv, serverPub []byte, exporter 
 		return nil, req, nil
 	}
 
+	// If the client signaled ephemeral-ephemeral support (see eeCapCookie),
+	// generate a per-connection ephemeral keypair, upgrade the tunnel key to
+	// mix in the ephemeral-ephemeral secret, and hand the client our ephemeral
+	// public key in a Set-Cookie header so it can derive the same key. A client
+	// that didn't ask (older client) gets the unchanged static-only key and no
+	// extra header. crypto.AuthKey is untouched either way.
+	var extraHeader string
+	if _, capErr := req.Cookie(eeCapCookie); capErr == nil {
+		serverEphPriv, serverEphPub, genErr := genEphemeral()
+		if genErr != nil {
+			return nil, nil, fmt.Errorf("server ephemeral: %w", genErr)
+		}
+		ee, eeErr := curve25519.X25519(serverEphPriv, clientPub)
+		if eeErr != nil {
+			return nil, nil, fmt.Errorf("ee ecdh: %w", eeErr)
+		}
+		innerKey, deriveErr := protocol.DeriveInnerKeyEE(ecdhSecret, ee, psk, clientPub, serverPub, serverEphPub)
+		if deriveErr != nil {
+			return nil, nil, deriveErr
+		}
+		crypto.InnerKey = innerKey
+		extraHeader = fmt.Sprintf("Set-Cookie: %s=%s; Path=/; HttpOnly\r\n",
+			eeServerCookie, base64.RawURLEncoding.EncodeToString(serverEphPub))
+	}
+
 	wsKey := req.Header.Get("Sec-WebSocket-Key")
 	accept := computeWebSocketAccept(wsKey)
 
@@ -195,8 +284,9 @@ func ServerHandshake(rw readWriter, psk, serverPriv, serverPub []byte, exporter 
 			"Upgrade: websocket\r\n"+
 			"Connection: Upgrade\r\n"+
 			"Sec-WebSocket-Accept: %s\r\n"+
+			"%s"+
 			"\r\n",
-		accept,
+		accept, extraHeader,
 	)
 	if _, err := rw.Write([]byte(resp)); err != nil {
 		return nil, nil, fmt.Errorf("write handshake response: %w", err)
