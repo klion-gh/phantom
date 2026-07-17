@@ -159,14 +159,25 @@ Flags: only `FlagUDP = 0x04` (marks a stream as UDP-relay rather than TCP-relay,
 ### 4.2 Padding
 
 `PadPlaintext`/`UnpadPlaintext` wrap every `FrameData` plaintext as
-`[2-byte real length][real payload][random padding]`, sized up to the nearest of
+`[2-byte real length][real payload][random padding]`. The padded size is a **bucket
+floor plus a random jitter** (`chooseSize`): first rounded up to the nearest of
 `BucketSizes = []int{256, 512, 1024, 2048, 4096}` (or, past 4096, the next multiple of
-4096 - e.g. `io.Copy`'s default 32KB buffer). This means two different payload sizes
-that land in the same bucket produce **identical wire sizes** once encrypted - verified
-directly by `TestPadPlaintextSameSizeDifferentPayloads` and
-`TestEncryptFrameHidesPlaintextLength`. This padding is applied *inside*
-`SessionCrypto.EncryptFrame`/`DecryptFrame` (`internal/protocol/crypto.go`), so it's
-transparent to the multiplexer and every caller.
+4096 - e.g. `io.Copy`'s default 32KB buffer), which hides a frame's *magnitude*, then a
+uniform random `0..maxPadJitter` (512) bytes are added on top. The jitter matters
+because bucketing *alone* made every frame's wire size exactly one of a few discrete
+values - itself a distinguisher, since real HTTPS record sizes are continuously
+distributed. Because the jitter (512) exceeds the smallest inter-bucket gap (256),
+adjacent low buckets' size ranges overlap, so a given observed size no longer maps back
+to a single bucket, and a 1-byte and a 200-byte payload are drawn from the same size
+band (verified by `TestPadPlaintextRandomizesWithinBucketBand` /
+`TestEncryptFramePadsRandomlyWithinBand`). The jitter is clamped so the padded plaintext
+plus AEAD overhead still fits one frame's 16-bit length field.
+
+This is applied *inside* `SessionCrypto.EncryptFrame`/`DecryptFrame`
+(`internal/protocol/crypto.go`), so it's transparent to the multiplexer and every
+caller - and it's wire-compatible in both directions with no versioning, since the
+receiver reads the real length from the 2-byte prefix and ignores however much padding
+the sender chose to add.
 
 ### 4.3 No in-band authentication
 
@@ -202,11 +213,19 @@ This is the actual security core of the project.
   `AuthKey` (the handshake proof HMAC - §5.2/§5.3).
 - **Forward secrecy**: because `ecdhSecret` is different on every connection, compromising
   the long-term PSK alone is not enough to decrypt a previously captured session.
-  (Caveat shared with any semi-static ECDH scheme, including XTLS Reality's identical
-  approach: if the *server's* long-term private key is later compromised *and* the
-  traffic was recorded, past sessions become computable, since the server's key is
-  static. Full forward secrecy against that specific threat would need an
-  ephemeral-ephemeral exchange on both sides, which isn't implemented here.)
+- **Full forward secrecy (ephemeral-ephemeral upgrade)**: the `es = clientEphemeral x
+  serverStatic` secret above still *authenticates* the client and is the basis for the
+  key when talking to an older peer, but by itself it leaves the semi-static caveat that
+  Reality also has - if the *server's* long-term private key is later compromised and the
+  traffic was recorded, past sessions become computable. To close that, the server also
+  generates a **per-connection ephemeral keypair** and both sides mix
+  `ee = clientEphemeral x serverEphemeral` into the tunnel encryption key
+  (`protocol.DeriveInnerKeyEE`, a distinct HKDF label from the static-only `InnerKey`).
+  Now decrypting a recorded session needs one of the two *ephemeral* private keys, which
+  neither side ever persists - a later compromise of the server's static key no longer
+  suffices. Only the `InnerKey` changes; `AuthKey` stays `es`-derived, which is what keeps
+  authentication (and interop) unchanged. See §5.2a for the wire mechanism and its
+  backward compatibility.
 
 ### 5.2 Disguise shape
 
@@ -241,6 +260,33 @@ Sec-WebSocket-Accept: <correctly computed per RFC 6455>
 `Ping`, the client closes it here). Both the request and response are complete,
 protocol-correct HTTP/1.1 WebSocket-upgrade messages; nothing about their *shape*
 betrays the tunnel.
+
+### 5.2a Ephemeral-ephemeral upgrade on the wire (backward-compatible)
+
+The full-forward-secrecy step (§5.1) is negotiated inside the same request/response,
+entirely backward-compatibly in both directions:
+
+- The client adds a **second cookie** whose *presence* (not value - it's random) signals
+  it supports the upgrade: `Cookie: session=<...>; csrf=<random base64url>`. `session +
+  csrf` is one of the most common cookie pairs on the web, so it adds no distinctive
+  shape, and the random value means it's not a constant tell.
+- A server that supports it generates its ephemeral keypair, derives the
+  ephemeral-ephemeral `InnerKey`, and returns its ephemeral public key in a
+  **`Set-Cookie`** header on the 101 response
+  (`Set-Cookie: sid=<base64url(serverEphemeralPub)>; Path=/; HttpOnly`). The client reads
+  it back (`readServerEphPub`) and derives the matching key.
+- **All four old/new combinations interoperate** (verified by
+  `TestHandshakeEE_NewClientOldServer` / `TestHandshakeEE_OldClientNewServer`): an old
+  server ignores the `csrf` cookie and never sends `sid`, so a new client sees no server
+  ephemeral and falls back to the static-only key; an old client never sends `csrf`, so a
+  new server stays on the static-only key and sends no `sid`. Rollout order (clients vs
+  server) therefore doesn't matter. A network attacker can't force a downgrade either -
+  the whole exchange rides inside the real, server-authenticated outer TLS, so it can't be
+  read or modified without the server's certificate key; the worst a downgrade achieves is
+  the *current* (semi-static) security level, never weaker.
+- Minor tradeoff: a `Set-Cookie` on a 101 response is slightly less common than on an
+  ordinary page load (a returning visitor's cookies are usually already set), a small
+  response-side fingerprint accepted in exchange for full forward secrecy.
 
 ### 5.3 Replay protection (channel binding)
 
@@ -383,7 +429,10 @@ CONNECT. Fragmented datagrams (`FRAG != 0`) are unsupported and dropped, as is s
 
 ```yaml
 # client.yaml
-server: "yourdomain.com:8443"       # required
+server: "yourdomain.com:8443"       # required (unless servers: is set) - primary endpoint
+# servers:                            # optional failover list; if set, takes precedence over server.
+#   - "203.0.113.10:8443"             # all must serve the same domain/cert/psk. Tried in order with
+#   - "198.51.100.20:443"             # last-good memory (transport.NewFailoverDialer). See §13.1.
 domain: "yourdomain.com"             # required - SNI + Host header; must match the server's real cert domain
 fingerprint: "chrome133"             # default if unset - see §6.1 for the post-quantum note
 psk: "<64 hex chars>"                 # required - shared secret, one HKDF input alongside the ECDH secret
@@ -392,6 +441,8 @@ listen: "127.0.0.1:1080"              # default; desktop SOCKS5 (cmd/client only
 listen_http: "127.0.0.1:1081"         # default; desktop HTTP CONNECT (cmd/client only)
 pool_size: 4                          # default; parallel pooled connections
 log_level: "info"                     # not actually read by any logger; plain `log` package used unconditionally
+country: "Germany"                    # optional cosmetic location label for the GUI tile (operator-set, not looked up)
+country_code: "DE"                    # optional two-letter ISO code; flag emoji on Android, text on Windows
 ```
 
 The Windows and Android apps import this exact same `client.yaml` text verbatim (pasted
@@ -485,10 +536,9 @@ user is connected to it. `pingcheck.Ping(configYAML string) (Result, error)`:
 Returns `{IP, LatencyMs}`. `mobile.Ping` wraps this as a JSON string (gomobile-safe
 return type, same pattern as `Tunnel.Stats()`); the Windows `App.Ping` method does the
 same for its Wails binding. Both UIs poll this on a repeating timer (every ~6s) per
-saved config tile and independently resolve a country name/flag for the returned IP via
-a public geo-IP HTTP lookup (`ipapi.co` from both apps' own code, not through the Go
-core) - the one place in either app that calls a third party, purely for that cosmetic
-label (see §12).
+saved config tile. The optional country label next to a tile comes straight from the
+config's own `country`/`country_code` fields (§8) - there is no network geo lookup; the
+apps contact only the user's own server (see §13.6).
 
 ---
 
@@ -500,11 +550,10 @@ switching (a `Screen` enum in `MainActivity.kt`; no `NavHost`) across four scree
 - **Main** (`MainScreen` in `MainActivity.kt`): a scrollable list of saved-config tiles
   (`ConfigInfoCard`, `ConfigInfo.kt`), one per entry in `ConfigStore`. Each tile shows
   the config's domain, resolved IP, live ping (`fetchPing`/`pingcheck.Ping` via the
-  `Mobile.ping` gomobile binding, polled every 6s independently per tile), and country +
-  flag (`fetchGeo`, `ipapi.co`; the flag itself is a real image fetched from
-  `flagcdn.com` and cached in memory, not the Unicode flag emoji — some Android system
-  images/devices lack flag glyphs in their emoji font and fall back to showing the bare
-  two-letter code, the same gap Windows has structurally, see §11.3). A circular connect
+  `Mobile.ping` gomobile binding, polled every 6s independently per tile), and an optional
+  country label taken from the config's own `country`/`country_code` fields (§8), rendered
+  as a flag emoji via `countryCodeToFlag` (modern Android has the flag glyphs) - no network
+  geo lookup (§13.6). A circular connect
   button (`ConnectButton.kt`, reused at a smaller `size` for tiles) sits on the right of
   each tile; the currently-connected tile additionally gets a purple→pink→blue gradient
   border (`Modifier.border(width, Brush, shape)`). Header has a "+" button (always adds
@@ -566,7 +615,7 @@ A Wails v2 app: Go backend (`App` struct in `app.go`, methods bound to
 `window.go.main.App.*` in JS) + plain HTML/CSS/JS frontend (`frontend/`, no framework) in
 the OS's native WebView2 control. Visually mirrors the Android app (same palette, same
 tile layout, same gradient-border-when-connected treatment) since both are driven by
-the same underlying data shape (`SavedConfig{id, yaml}`, ping/geo polling per tile).
+the same underlying data shape (`SavedConfig{id, yaml}`, live ping polling per tile).
 
 ### 11.1 Why a second, heavier client alongside `cmd/client`
 
@@ -642,11 +691,12 @@ Same `SavedConfig{ID, Yaml}` list shape as Android, persisted as JSON
 pre-multi-config single `client.yaml` file. `App` exposes `ListConfigs`/`AddConfig`/
 `UpdateConfig`/`DeleteConfig`/`Connect(id, yaml)`/`Disconnect`/`Status`/`Ping`/`ReadLog`
 to the frontend. `Ping` wraps `internal/pingcheck.Ping` (§9.1) the same way `mobile.Ping`
-does. The frontend (`main.js`) fetches country/flag from `ipapi.co`/`flagcdn.com`
-directly (not through Go) — real flag *images*, not emoji, since Windows' Segoe UI Emoji
-font has no flag glyphs at all and would otherwise show the bare two-letter country code
-(a deliberate, longstanding Microsoft choice, not a WebView2 bug — confirmed by testing,
-not assumed).
+does. The optional country label comes from the config's own `country`/`country_code`
+fields (§8) shown as text - no network geo lookup (§13.6). Unlike Android it isn't shown as
+a flag emoji: Windows' Segoe UI Emoji font (and Chromium/WebView2 on Windows) has no flag
+glyphs and would render the emoji as the bare two-letter code (a deliberate, longstanding
+Microsoft choice, not a WebView2 bug), which is exactly why the old code fetched flag
+*images* from a CDN - the dependency §13.6 removed.
 
 ### 11.4 System tray (`tray.go`)
 
@@ -683,11 +733,15 @@ out to be platform-neutral.
 
 ## 13. Known gaps / residual risks
 
-1. **Single VPS IP is a single point of failure.** CDN fronting (the standard fix for
-   this — terminating the outer TLS at real, hard-to-block infrastructure like
-   Cloudflare) was explicitly declined for this deployment to avoid a third-party
-   dependency on the VPN path itself. Blocking the server's IP still stops everything,
-   regardless of how good the wire-level disguise is.
+1. **Single VPS IP is a single point of failure — partially mitigated.** The client
+   config now accepts a `servers:` failover list (§8): multiple address:port endpoints,
+   all serving the same domain/cert/psk, tried with last-good memory
+   (`transport.NewFailoverDialer`), so blocking one IP/port no longer takes the tunnel
+   down as long as another endpoint is reachable. This is client-side spreading across
+   the operator's *own* IPs, not blocking-resistant fronting: CDN fronting (terminating
+   the outer TLS at real, hard-to-block infrastructure like Cloudflare) was still
+   explicitly declined to avoid a third-party dependency on the VPN path. An adversary who
+   can enumerate and block *all* of the operator's endpoints still stops everything.
 2. **The outer TLS ClientHello carries a post-quantum hybrid key share
    (`X25519MLKEM768`, via the `chrome131`/`chrome133` fingerprints - §6.1), but
    Phantom's own inner handshake does not.** The disguised handshake's session-key
@@ -701,19 +755,27 @@ out to be platform-neutral.
 3. **No ICMP support** in either mobile tunnel (Android or Windows) — only TCP and UDP
    are registered with the gVisor stack (§9), so ping-through-the-tunnel doesn't work
    end-to-end on either app.
-4. **Semi-static ECDH, not fully ephemeral-ephemeral** — see the forward-secrecy caveat
-   in §5.1: a future compromise of the server's long-term private key combined with
-   recorded traffic could still decrypt past sessions, same limitation Reality has.
+4. **Semi-static ECDH — resolved via the ephemeral-ephemeral upgrade (§5.1/§5.2a).** New
+   client↔server pairs now mix an ephemeral-ephemeral secret into the tunnel key, so a
+   future compromise of the server's long-term private key plus recorded traffic no longer
+   decrypts past sessions. The residual is only interop: when a new peer talks to an
+   *older* one (either direction) it transparently falls back to the static-only key,
+   which still has the original semi-static caveat until both ends are upgraded. The
+   ephemeral-ephemeral ECDH is classical X25519, so it does not address the separate
+   post-quantum gap in item 2.
 5. **`FrameSettings`/`FramePadding` frame types are vestigial** — parsed and ignored,
    never emitted by any sender. Not a security risk (they're simply never triggered),
    but worth knowing about if extending the multiplexer later. (The v1 prototype's
    in-band `FrameAuth` path was removed outright in this rewrite — see §4.3.)
-6. **Both GUI apps call a third-party geo-IP/flag service (`ipapi.co`, `flagcdn.com`)
-   directly from the client**, purely to show a cosmetic country name + flag image next
-   to each saved server. This is the only network dependency in either app that isn't
-   the user's own Phantom server — it leaks the *server's* IP (not the user's own) to
-   that third party on a timer. Easy to strip out if that tradeoff isn't wanted; nothing
-   else about the tunnel depends on it.
+6. **Third-party geo-IP/flag lookup — removed.** The GUI apps used to resolve each
+   server's country from its IP via a public geo-IP service (`ipwho.is`) and fetch a flag
+   image from `flagcdn.com`, which leaked the *server's* IP to those services on a timer -
+   the only network dependency in either app that wasn't the user's own Phantom server.
+   Both are gone: the cosmetic location label now comes from optional `country`/
+   `country_code` fields the operator can put in the client config (§8), rendered as a
+   flag emoji on Android and as text on Windows (Windows/Chromium can't render flag
+   emoji). Nothing is looked up over the network anymore; the apps contact only the user's
+   own server.
 7. **Windows routing/interface setup shells out to `route`/`netsh`** (§11.2) rather than
    using the native IP Helper API (`iphlpapi.dll` via `CreateUnicastIpAddressEntry`/
    `CreateIpForwardEntry2`, the approach `winipcfg`-based tools like WireGuard-Windows
