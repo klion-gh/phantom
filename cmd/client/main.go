@@ -4,13 +4,11 @@ import (
 	"context"
 	"flag"
 	"log"
-	"net"
 	"os"
 	"os/signal"
 	"syscall"
 
 	"phantom/internal/config"
-	"phantom/internal/protocol"
 	"phantom/internal/proxy"
 	"phantom/internal/transport"
 	"phantom/internal/tunnel"
@@ -52,13 +50,12 @@ func main() {
 		Domain:      cfg.Domain,
 		Fingerprint: cfg.Fingerprint,
 		ServerAddr:  cfg.Server,
+		ServerAddrs: cfg.ServerList(),
 		PSK:         psk,
 		ServerPub:   serverPub,
 	}
 
-	pool := transport.NewConnPool(cfg.PoolSize, func(ctx context.Context) (net.Conn, *protocol.SessionCrypto, error) {
-		return transport.Dial(ctx, tlsCfg)
-	})
+	pool := transport.NewConnPool(cfg.PoolSize, transport.NewFailoverDialer(tlsCfg))
 	defer pool.Close()
 
 	mux, err := pool.Get(ctx)

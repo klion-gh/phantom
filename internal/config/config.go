@@ -9,15 +9,22 @@ import (
 )
 
 type ClientConfig struct {
-	Server          string `yaml:"server"`            // VPS address:port, e.g. "1.2.3.4:443"
-	Domain          string `yaml:"domain"`            // real domain the server has a CA-signed cert for; used as SNI and as the Host header in the disguised handshake
-	Fingerprint     string `yaml:"fingerprint"`       // uTLS ClientHello mimicry: chrome133/chrome131 (post-quantum X25519MLKEM768 key share)/chrome120/firefox120/safari16
-	PSK             string `yaml:"psk"`               // shared secret (hex, 32 bytes) - one of several HKDF inputs, must match server's psk
-	ServerPublicKey string `yaml:"server_public_key"` // server's static X25519 public key (hex, 32 bytes) - for real per-session ECDH
-	Listen          string `yaml:"listen"`            // SOCKS5 proxy, desktop only
-	ListenHTTP      string `yaml:"listen_http"`       // HTTP CONNECT proxy, desktop only
-	PoolSize        int    `yaml:"pool_size"`
-	LogLevel        string `yaml:"log_level"`
+	Server          string   `yaml:"server"`            // VPS address:port, e.g. "1.2.3.4:443". Primary endpoint; see servers for failover.
+	Servers         []string `yaml:"servers"`           // optional list of address:port endpoints, all serving the same domain/cert/psk. Tried with failover (see ServerList/transport.NewFailoverDialer); if set, takes precedence over server. Blocking one IP/port no longer kills everything.
+	Domain          string   `yaml:"domain"`            // real domain the server has a CA-signed cert for; used as SNI and as the Host header in the disguised handshake
+	Fingerprint     string   `yaml:"fingerprint"`       // uTLS ClientHello mimicry: chrome133/chrome131 (post-quantum X25519MLKEM768 key share)/chrome120/firefox120/safari16
+	PSK             string   `yaml:"psk"`               // shared secret (hex, 32 bytes) - one of several HKDF inputs, must match server's psk
+	ServerPublicKey string   `yaml:"server_public_key"` // server's static X25519 public key (hex, 32 bytes) - for real per-session ECDH
+	Listen          string   `yaml:"listen"`            // SOCKS5 proxy, desktop only
+	ListenHTTP      string   `yaml:"listen_http"`       // HTTP CONNECT proxy, desktop only
+	PoolSize        int      `yaml:"pool_size"`
+	LogLevel        string   `yaml:"log_level"`
+	// Optional cosmetic location label the GUI apps show for this server's tile
+	// (the apps read these straight from the yaml). Deliberately operator-set, not
+	// looked up from the IP - that lookup used to leak the server IP to a
+	// third-party geo/flag service. country_code is a two-letter ISO code.
+	Country     string `yaml:"country"`
+	CountryCode string `yaml:"country_code"`
 }
 
 type ServerConfig struct {
@@ -67,9 +74,22 @@ func ParseClientConfig(data []byte) (*ClientConfig, error) {
 	return cfg, nil
 }
 
+// ServerList returns the endpoints to try, newest-style servers list first,
+// falling back to the single server field. All share the same domain/cert/psk;
+// they're just alternative address:port pairs for failover.
+func (c *ClientConfig) ServerList() []string {
+	if len(c.Servers) > 0 {
+		return c.Servers
+	}
+	if c.Server != "" {
+		return []string{c.Server}
+	}
+	return nil
+}
+
 func (c *ClientConfig) Validate() error {
-	if c.Server == "" {
-		return errors.New("server is required")
+	if len(c.ServerList()) == 0 {
+		return errors.New("server (or servers) is required")
 	}
 	if c.Domain == "" {
 		return errors.New("domain is required")

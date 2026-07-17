@@ -33,7 +33,6 @@ import (
 	"phantom/internal/config"
 	"phantom/internal/netstack"
 	"phantom/internal/pingcheck"
-	"phantom/internal/protocol"
 	"phantom/internal/proxy"
 	"phantom/internal/transport"
 	"phantom/internal/tunnel"
@@ -88,6 +87,7 @@ func Start(configYAML string, tunFD int, mtu int, protector Protector) (*Tunnel,
 		Domain:      cfg.Domain,
 		Fingerprint: cfg.Fingerprint,
 		ServerAddr:  cfg.Server,
+		ServerAddrs: cfg.ServerList(),
 		PSK:         psk,
 		ServerPub:   serverPub,
 	}
@@ -102,9 +102,7 @@ func Start(configYAML string, tunFD int, mtu int, protector Protector) (*Tunnel,
 
 	ctx, cancel := context.WithCancel(context.Background())
 
-	pool := transport.NewConnPool(poolSize, func(ctx context.Context) (net.Conn, *protocol.SessionCrypto, error) {
-		return transport.Dial(ctx, tlsCfg)
-	})
+	pool := transport.NewConnPool(poolSize, transport.NewFailoverDialer(tlsCfg))
 
 	dialCtx, dialCancel := context.WithTimeout(ctx, 15*time.Second)
 	mux, err := pool.Get(dialCtx)
@@ -261,6 +259,7 @@ func StartProxy(configYAML string, requestedPort int, protector Protector) (*Pro
 		Domain:      cfg.Domain,
 		Fingerprint: cfg.Fingerprint,
 		ServerAddr:  cfg.Server,
+		ServerAddrs: cfg.ServerList(),
 		PSK:         psk,
 		ServerPub:   serverPub,
 	}
@@ -273,9 +272,7 @@ func StartProxy(configYAML string, requestedPort int, protector Protector) (*Pro
 		poolSize = 4
 	}
 
-	pool := transport.NewConnPool(poolSize, func(ctx context.Context) (net.Conn, *protocol.SessionCrypto, error) {
-		return transport.Dial(ctx, tlsCfg)
-	})
+	pool := transport.NewConnPool(poolSize, transport.NewFailoverDialer(tlsCfg))
 
 	dialCtx, dialCancel := context.WithTimeout(context.Background(), 15*time.Second)
 	mux, err := pool.Get(dialCtx)

@@ -14,7 +14,6 @@ import (
 
 	"phantom/internal/config"
 	"phantom/internal/netstack"
-	"phantom/internal/protocol"
 	"phantom/internal/transport"
 	"phantom/internal/tunnel"
 
@@ -36,10 +35,14 @@ func runNetCmd(name string, args ...string) (string, error) {
 	cmd := exec.Command(name, args...)
 	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
 	out, err := cmd.CombinedOutput()
+	// Decode from the console OEM code page for the log line only (see
+	// oemToUTF8) - route/netsh emit localized text in CP866/CP850/etc., which
+	// logged verbatim was mojibake. The returned raw bytes are unchanged, since
+	// callers parse them on ASCII-only patterns.
 	if err != nil {
-		log.Printf("net cmd FAILED: %s %s -> %v: %s", name, strings.Join(args, " "), err, strings.TrimSpace(string(out)))
+		log.Printf("net cmd FAILED: %s %s -> %v: %s", name, strings.Join(args, " "), err, strings.TrimSpace(oemToUTF8(out)))
 	} else {
-		log.Printf("net cmd ok: %s %s -> %s", name, strings.Join(args, " "), strings.TrimSpace(string(out)))
+		log.Printf("net cmd ok: %s %s -> %s", name, strings.Join(args, " "), strings.TrimSpace(oemToUTF8(out)))
 	}
 	return string(out), err
 }
@@ -65,7 +68,7 @@ type WinTunnel struct {
 	tunDevice tun.Device
 	linkEP    *channel.Endpoint
 
-	bypassServerIP string // host route added via the original gateway; "" if none was added
+	bypassServerIPs []string // /32 host routes added via the original gateway (one per endpoint IP); empty if none
 }
 
 // StartWindows parses configYAML, establishes the Phantom session, and routes
@@ -105,23 +108,51 @@ func StartWindows(configYAML string, onNetworkChanged func()) (*WinTunnel, error
 		return nil, fmt.Errorf("server_public_key: %w", err)
 	}
 
-	host, _, err := net.SplitHostPort(cfg.Server)
-	if err != nil {
-		return nil, fmt.Errorf("invalid server address %q: %w", cfg.Server, err)
+	// Resolve every configured endpoint (cfg.ServerList - one primary or a
+	// failover list, all serving the same domain/cert). Each distinct IP needs
+	// its own /32 bypass route below, since the failover dialer may connect to
+	// any of them and whichever it picks must escape the tunnel it's building.
+	endpoints := cfg.ServerList()
+	var serverIPs []string // distinct IPs to add /32 bypass routes for
+	var dialAddrs []string // ip:port the failover dialer will use (see below)
+	seen := map[string]bool{}
+	for _, ep := range endpoints {
+		host, port, splitErr := net.SplitHostPort(ep)
+		if splitErr != nil {
+			return nil, fmt.Errorf("invalid server address %q: %w", ep, splitErr)
+		}
+		// LookupIP with "ip4" (rather than net.LookupHost, which resolves both
+		// families) skips the AAAA query entirely - on this network the AAAA
+		// lookup for the server's domain was stalling for several seconds before
+		// falling back to A, which was most of the total connect time. The
+		// explicit timeout keeps a slow/unresponsive resolver from stalling
+		// connect indefinitely either way.
+		resolveCtx, resolveCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		ips, resolveErr := net.DefaultResolver.LookupIP(resolveCtx, "ip4", host)
+		resolveCancel()
+		if resolveErr != nil {
+			log.Printf("resolve endpoint %q failed (skipping): %v", ep, resolveErr)
+			continue
+		}
+		for _, ip := range ips {
+			s := ip.String()
+			// The dialer connects to these resolved IPs directly (not the
+			// hostname) so every address it can pick is guaranteed to have a
+			// /32 bypass route below - otherwise a hostname re-resolving to a
+			// different IP at dial time (DNS round-robin/TTL) would land on an
+			// IP with no bypass route and get captured by the tunnel. SNI/Host
+			// stay cfg.Domain regardless of the dial address, so the real cert
+			// still validates.
+			dialAddrs = append(dialAddrs, net.JoinHostPort(s, port))
+			if !seen[s] {
+				seen[s] = true
+				serverIPs = append(serverIPs, s)
+			}
+		}
 	}
-	// LookupIP with "ip4" (rather than net.LookupHost, which resolves both
-	// families) skips the AAAA query entirely - on this network the AAAA
-	// lookup for the server's domain was stalling for several seconds before
-	// falling back to A, which was most of the total connect time. The
-	// explicit timeout keeps a slow/unresponsive resolver from stalling
-	// connect indefinitely either way.
-	resolveCtx, resolveCancel := context.WithTimeout(context.Background(), 5*time.Second)
-	serverIPs, err := net.DefaultResolver.LookupIP(resolveCtx, "ip4", host)
-	resolveCancel()
-	if err != nil || len(serverIPs) == 0 {
-		return nil, fmt.Errorf("resolve server address %q: %w", host, err)
+	if len(serverIPs) == 0 {
+		return nil, fmt.Errorf("resolve server address: no endpoint resolved")
 	}
-	serverIP := serverIPs[0].String()
 
 	gateway, err := findDefaultGateway()
 	if err != nil {
@@ -133,22 +164,27 @@ func StartWindows(configYAML string, onNetworkChanged func()) (*WinTunnel, error
 	// own interface instead of the real one split-tunneled apps need to dial
 	// out through. A failure here isn't fatal to the tunnel itself, just to
 	// split tunneling (excluded apps' connections will fall back to being
-	// tunneled - see openRemote in internal/netstack).
-	physicalIfIndex, physicalIfErr := bestInterfaceIndex(serverIP)
+	// tunneled - see openRemote in internal/netstack). The physical interface
+	// is the same for every endpoint, so the first resolved IP is enough.
+	physicalIfIndex, physicalIfErr := bestInterfaceIndex(serverIPs[0])
 	if physicalIfErr != nil {
 		log.Printf("split tunneling unavailable: %v", physicalIfErr)
 	}
 
-	if err := addHostRoute(serverIP, gateway); err != nil {
-		return nil, fmt.Errorf("add bypass route for %s via %s: %w", serverIP, gateway, err)
+	w := &WinTunnel{}
+	for _, ip := range serverIPs {
+		if err := addHostRoute(ip, gateway); err != nil {
+			w.removeBypassRoutes() // undo the ones we did add before failing
+			return nil, fmt.Errorf("add bypass route for %s via %s: %w", ip, gateway, err)
+		}
+		w.bypassServerIPs = append(w.bypassServerIPs, ip)
 	}
-
-	w := &WinTunnel{bypassServerIP: serverIP}
 
 	tlsCfg := &transport.TLSClientConfig{
 		Domain:      cfg.Domain,
 		Fingerprint: cfg.Fingerprint,
 		ServerAddr:  cfg.Server,
+		ServerAddrs: dialAddrs,
 		PSK:         psk,
 		ServerPub:   serverPub,
 	}
@@ -161,9 +197,7 @@ func StartWindows(configYAML string, onNetworkChanged func()) (*WinTunnel, error
 	ctx, cancel := context.WithCancel(context.Background())
 	w.cancel = cancel
 
-	pool := transport.NewConnPool(poolSize, func(ctx context.Context) (net.Conn, *protocol.SessionCrypto, error) {
-		return transport.Dial(ctx, tlsCfg)
-	})
+	pool := transport.NewConnPool(poolSize, transport.NewFailoverDialer(tlsCfg))
 	w.pool = pool
 
 	dialCtx, dialCancel := context.WithTimeout(ctx, 15*time.Second)
@@ -284,11 +318,17 @@ func (w *WinTunnel) Stop() {
 	if w.pool != nil {
 		w.pool.Close()
 	}
-	if w.bypassServerIP != "" {
-		// Not tied to the tunnel interface, so it does NOT get cleaned up
-		// automatically - must remove it explicitly.
-		removeHostRoute(w.bypassServerIP)
+	// The bypass /32 routes are via the *physical* gateway, not tied to the
+	// tunnel interface's lifetime the way the 0.0.0.0/0 route is, so Windows
+	// doesn't drop them automatically - remove each explicitly.
+	w.removeBypassRoutes()
+}
+
+func (w *WinTunnel) removeBypassRoutes() {
+	for _, ip := range w.bypassServerIPs {
+		removeHostRoute(ip)
 	}
+	w.bypassServerIPs = nil
 }
 
 func (w *WinTunnel) Stats() string {

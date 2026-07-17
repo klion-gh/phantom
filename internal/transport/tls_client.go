@@ -5,6 +5,7 @@ import (
 	"crypto/tls"
 	"fmt"
 	"net"
+	"sync"
 	"syscall"
 	"time"
 
@@ -17,7 +18,8 @@ import (
 type TLSClientConfig struct {
 	Domain      string // real domain the server has a CA-signed cert for - used as SNI and Host header
 	Fingerprint string
-	ServerAddr  string
+	ServerAddr  string   // single endpoint; used by Dial and as the fallback for NewFailoverDialer when ServerAddrs is empty
+	ServerAddrs []string // optional multi-endpoint failover list (see NewFailoverDialer); all share Domain/PSK/ServerPub
 	PSK         []byte
 	ServerPub   []byte // server's static X25519 public key
 
@@ -31,13 +33,69 @@ type TLSClientConfig struct {
 
 const defaultTimeout = 10 * time.Second
 
-// Dial establishes the outer TLS 1.3 connection (SNI = cfg.Domain, ClientHello
-// mimicked via uTLS to look like a real browser - since cfg.Domain has a real,
-// CA-signed certificate now, this connection is byte-for-byte indistinguishable
-// from a real browser visiting a real site, unlike v1's self-signed-cert
-// masquerade), then performs the disguised handshake (internal/handshake) to
-// authenticate and derive per-session keys with forward secrecy.
+// Dial connects to cfg.ServerAddr (a single endpoint). Callers with a failover
+// list use NewFailoverDialer instead; this stays the single-endpoint primitive
+// (pingcheck uses it directly to time one specific address).
 func Dial(ctx context.Context, cfg *TLSClientConfig) (net.Conn, *protocol.SessionCrypto, error) {
+	return dialAddr(ctx, cfg, cfg.ServerAddr)
+}
+
+// NewFailoverDialer returns a pool dial function that tries cfg's endpoints
+// (cfg.ServerAddrs, or [cfg.ServerAddr] if that's empty) until one connects,
+// remembering the last one that worked and trying it first next time - so a
+// dead primary IP/port costs a single failed-connect timeout once, not on every
+// pooled redial afterward. This is what makes blocking one of the operator's
+// IPs/ports no longer take the whole tunnel down (see config.ServerList).
+func NewFailoverDialer(cfg *TLSClientConfig) func(context.Context) (net.Conn, *protocol.SessionCrypto, error) {
+	addrs := cfg.ServerAddrs
+	if len(addrs) == 0 {
+		addrs = []string{cfg.ServerAddr}
+	}
+	return newFailoverDialer(addrs, func(ctx context.Context, addr string) (net.Conn, *protocol.SessionCrypto, error) {
+		return dialAddr(ctx, cfg, addr)
+	})
+}
+
+// dialOneFn dials a single address - the real one is dialAddr bound to a cfg;
+// tests substitute a fake to exercise the failover ordering deterministically.
+type dialOneFn func(ctx context.Context, addr string) (net.Conn, *protocol.SessionCrypto, error)
+
+// newFailoverDialer is the ordering/last-good core of NewFailoverDialer, split
+// out so it can be tested without a real server. It tries addrs starting from
+// the last one that worked, rotating through the rest, and returns the first
+// success (updating the preferred index) or the last error.
+func newFailoverDialer(addrs []string, dialOne dialOneFn) func(context.Context) (net.Conn, *protocol.SessionCrypto, error) {
+	var mu sync.Mutex
+	preferred := 0
+
+	return func(ctx context.Context) (net.Conn, *protocol.SessionCrypto, error) {
+		mu.Lock()
+		start := preferred
+		mu.Unlock()
+
+		var lastErr error
+		for i := 0; i < len(addrs); i++ {
+			idx := (start + i) % len(addrs)
+			conn, crypto, err := dialOne(ctx, addrs[idx])
+			if err == nil {
+				mu.Lock()
+				preferred = idx
+				mu.Unlock()
+				return conn, crypto, nil
+			}
+			lastErr = err
+		}
+		return nil, nil, lastErr
+	}
+}
+
+// dialAddr establishes the outer TLS 1.3 connection to addr (SNI = cfg.Domain,
+// ClientHello mimicked via uTLS to look like a real browser - since cfg.Domain
+// has a real, CA-signed certificate now, this connection is byte-for-byte
+// indistinguishable from a real browser visiting a real site, unlike v1's
+// self-signed-cert masquerade), then performs the disguised handshake
+// (internal/handshake) to authenticate and derive per-session keys.
+func dialAddr(ctx context.Context, cfg *TLSClientConfig, addr string) (net.Conn, *protocol.SessionCrypto, error) {
 	dialer := &net.Dialer{Timeout: defaultTimeout}
 	if cfg.ProtectFD != nil {
 		dialer.Control = func(network, address string, c syscall.RawConn) error {
@@ -53,7 +111,7 @@ func Dial(ctx context.Context, cfg *TLSClientConfig) (net.Conn, *protocol.Sessio
 		}
 	}
 
-	conn, err := dialer.DialContext(ctx, "tcp", cfg.ServerAddr)
+	conn, err := dialer.DialContext(ctx, "tcp", addr)
 	if err != nil {
 		return nil, nil, fmt.Errorf("tcp dial: %w", err)
 	}

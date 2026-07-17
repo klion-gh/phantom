@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"phantom/internal/config"
-	"phantom/internal/protocol"
 	"phantom/internal/proxy"
 	"phantom/internal/transport"
 	"phantom/internal/tunnel"
@@ -82,6 +81,7 @@ func startConfigProxy(configID string, configYAML string, requestedPort int) (in
 		Domain:      cfg.Domain,
 		Fingerprint: cfg.Fingerprint,
 		ServerAddr:  cfg.Server,
+		ServerAddrs: cfg.ServerList(),
 		PSK:         psk,
 		ServerPub:   serverPub,
 	}
@@ -91,9 +91,7 @@ func startConfigProxy(configID string, configYAML string, requestedPort int) (in
 		poolSize = 4
 	}
 
-	pool := transport.NewConnPool(poolSize, func(ctx context.Context) (net.Conn, *protocol.SessionCrypto, error) {
-		return transport.Dial(ctx, tlsCfg)
-	})
+	pool := transport.NewConnPool(poolSize, transport.NewFailoverDialer(tlsCfg))
 
 	dialCtx, dialCancel := context.WithTimeout(context.Background(), 15*time.Second)
 	mux, err := pool.Get(dialCtx)
