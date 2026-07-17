@@ -35,6 +35,23 @@ const (
 // the next multiple of the largest bucket instead of being sent unpadded.
 var BucketSizes = []int{256, 512, 1024, 2048, 4096}
 
+// maxPadJitter is the random extra added on top of the bucket floor (see
+// chooseSize). Bucketing alone made every DATA frame's wire size exactly one of
+// a few discrete values - itself a distinguisher, since real HTTPS record sizes
+// are continuously distributed. The jitter is larger than the smallest
+// inter-bucket gap (256) so adjacent low buckets' jittered ranges overlap and a
+// given observed size no longer maps back to a single bucket, and it's
+// byte-granular (not quantized) so the size carries no alignment tell. Bounded
+// so overhead stays small.
+const maxPadJitter = 512
+
+// maxPaddedPlaintext is the largest padded plaintext that still fits a single
+// frame once encrypted: the encrypted frame body is nonce(24) + padded +
+// poly1305 tag(16), and the frame header's length field is a uint16, so
+// padded + 40 must be <= 65535. Padding is clamped to this; a payload already
+// at/above it (only near-max-size UDP datagrams) simply can't be padded.
+const maxPaddedPlaintext = 65535 - (24 + 16)
+
 const FrameHeaderSize = 6
 
 // lengthPrefixSize is the 2-byte real-length prefix inside a padded DATA frame
@@ -89,13 +106,16 @@ func Decode(data []byte) (*Frame, error) {
 // encrypted frame's wire size doesn't reveal the real payload size.
 func PadPlaintext(payload []byte) ([]byte, error) {
 	total := lengthPrefixSize + len(payload)
-	bucket := chooseBucket(total)
+	size, err := chooseSize(total)
+	if err != nil {
+		return nil, err
+	}
 
-	padded := make([]byte, bucket)
+	padded := make([]byte, size)
 	binary.BigEndian.PutUint16(padded[0:lengthPrefixSize], uint16(len(payload)))
 	copy(padded[lengthPrefixSize:total], payload)
 
-	if bucket > total {
+	if size > total {
 		if _, err := rand.Read(padded[total:]); err != nil {
 			return nil, err
 		}
@@ -124,4 +144,30 @@ func chooseBucket(n int) int {
 	}
 	largest := BucketSizes[len(BucketSizes)-1]
 	return ((n + largest - 1) / largest) * largest
+}
+
+// chooseSize is chooseBucket (the size floor that hides a frame's magnitude)
+// plus a random jitter (that breaks the discrete-bucket fingerprint - see
+// maxPadJitter), clamped so the padded plaintext plus AEAD overhead still fits
+// one frame's 16-bit length (see maxPaddedPlaintext). A payload already at or
+// past that ceiling (only near-max-size UDP datagrams) can't be padded and is
+// returned as-is.
+func chooseSize(n int) (int, error) {
+	base := chooseBucket(n)
+
+	room := maxPaddedPlaintext - base
+	if room <= 0 {
+		return n, nil
+	}
+	maxJ := maxPadJitter
+	if room < maxJ {
+		maxJ = room
+	}
+
+	var b [2]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return 0, err
+	}
+	jitter := int(binary.BigEndian.Uint16(b[:])) % (maxJ + 1)
+	return base + jitter, nil
 }

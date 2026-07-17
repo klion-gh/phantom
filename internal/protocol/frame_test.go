@@ -136,18 +136,17 @@ func TestPadUnpadPlaintext(t *testing.T) {
 			t.Fatalf("PadPlaintext() error = %v", err)
 		}
 
-		// wire size must not reveal the real size: same-bucket payloads should
-		// produce a padded size from the fixed bucket list (or a multiple of
-		// the largest bucket beyond that).
-		foundBucket := false
-		for _, b := range BucketSizes {
-			if len(padded) == b {
-				foundBucket = true
-			}
+		// wire size must not reveal the real size: padding lifts it to at least
+		// the bucket floor (hiding magnitude) plus up to maxPadJitter random
+		// extra (breaking the discrete-bucket fingerprint), and never less than
+		// the payload it has to carry.
+		total := lengthPrefixSize + len(payload)
+		floor := chooseBucket(total)
+		if len(padded) < floor {
+			t.Errorf("padded size %d below the bucket floor %d (magnitude not hidden)", len(padded), floor)
 		}
-		largest := BucketSizes[len(BucketSizes)-1]
-		if !foundBucket && len(padded)%largest != 0 {
-			t.Errorf("padded size %d is neither a bucket nor a multiple of %d", len(padded), largest)
+		if len(padded) > floor+maxPadJitter {
+			t.Errorf("padded size %d exceeds floor+jitter %d (unbounded overhead)", len(padded), floor+maxPadJitter)
 		}
 
 		unpadded, err := UnpadPlaintext(padded)
@@ -160,16 +159,30 @@ func TestPadUnpadPlaintext(t *testing.T) {
 	}
 }
 
-func TestPadPlaintextSameSizeDifferentPayloads(t *testing.T) {
-	a, err := PadPlaintext([]byte("x"))
-	if err != nil {
-		t.Fatal(err)
+func TestPadPlaintextRandomizesWithinBucketBand(t *testing.T) {
+	// A 1-byte and a 200-byte payload both land in the 256 bucket, so their
+	// padded sizes are drawn from the same band [256, 256+maxPadJitter] - an
+	// observer can't tell them apart by size. And repeated padding of the same
+	// payload must vary (randomized), not collapse to a single bucket value.
+	const bucket = 256
+	sizes := map[int]bool{}
+	for i := 0; i < 128; i++ {
+		a, err := PadPlaintext([]byte("x"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		b, err := PadPlaintext(make([]byte, 200))
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, s := range []int{len(a), len(b)} {
+			if s < bucket || s > bucket+maxPadJitter {
+				t.Fatalf("padded size %d outside expected band [%d,%d]", s, bucket, bucket+maxPadJitter)
+			}
+		}
+		sizes[len(a)] = true
 	}
-	b, err := PadPlaintext(make([]byte, 200))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(a) != len(b) {
-		t.Errorf("expected same bucket size for both small payloads, got %d and %d", len(a), len(b))
+	if len(sizes) < 2 {
+		t.Error("padding size is not randomized (same value every time)")
 	}
 }

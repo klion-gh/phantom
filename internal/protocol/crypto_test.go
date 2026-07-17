@@ -73,21 +73,37 @@ func TestEncryptDecryptFrame(t *testing.T) {
 	}
 }
 
-func TestEncryptFrameHidesPlaintextLength(t *testing.T) {
+func TestEncryptFramePadsRandomlyWithinBand(t *testing.T) {
 	keys := testKeys(t)
 	header := []byte{0x00, 0x00, 0x01, 0x00, 0x00, 0x0B}
 
-	short, err := keys.EncryptFrame(header, []byte("x"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	longer, err := keys.EncryptFrame(header, make([]byte, 200))
-	if err != nil {
-		t.Fatal(err)
-	}
+	// Encrypted frame body = XChaCha20 nonce (24) + padded plaintext + Poly1305
+	// tag (16). A 1-byte and a 200-byte payload both land in the 256 bucket, so
+	// both wire sizes fall in the same band and can't be told apart; and the
+	// size varies run to run (randomized padding), so it's not a fixed value.
+	const aead = 24 + 16
+	const bucket = 256
+	lo, hi := bucket+aead, bucket+maxPadJitter+aead
 
-	if len(short) != len(longer) {
-		t.Errorf("wire sizes should match for payloads in the same padding bucket: got %d and %d", len(short), len(longer))
+	sizes := map[int]bool{}
+	for i := 0; i < 128; i++ {
+		short, err := keys.EncryptFrame(header, []byte("x"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		longer, err := keys.EncryptFrame(header, make([]byte, 200))
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, ln := range []int{len(short), len(longer)} {
+			if ln < lo || ln > hi {
+				t.Fatalf("wire size %d outside the shared band [%d,%d] - magnitude leaked", ln, lo, hi)
+			}
+		}
+		sizes[len(short)] = true
+	}
+	if len(sizes) < 2 {
+		t.Error("wire size is not randomized")
 	}
 }
 
