@@ -1,4 +1,11 @@
 server: "your-domain.example:8443"
+# Optional failover list: additional address:port endpoints, all serving the
+# same domain/cert/psk (e.g. several VPS IPs, or the same host on alternate
+# ports). Tried in order with last-good memory, so blocking one IP/port doesn't
+# take the tunnel down. If set, takes precedence over the single "server" above.
+# servers:
+#   - "203.0.113.10:8443"
+#   - "198.51.100.20:443"
 domain: "your-domain.example"
 fingerprint: "chrome133"
 psk: "REPLACE_WITH_PSK_FROM_KEYGEN"
@@ -7,3 +14,10 @@ listen: "127.0.0.1:1080"
 listen_http: "127.0.0.1:1081"
 pool_size: 4
 log_level: "info"
+# Optional, cosmetic: a location label the GUI apps show next to this server's
+# tile. Purely a static hint the operator sets - the apps no longer look the
+# server's country up from its IP (that used to hit a third-party geo/flag
+# service, leaking the server IP to it). country_code is a two-letter ISO code;
+# on Android it renders as a flag emoji, on Windows as text.
+# country: "Germany"
+# country_code: "DE"
