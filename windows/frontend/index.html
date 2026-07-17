@@ -11,8 +11,8 @@
         <div class="header">
           <img src="./src/assets/images/phantom-emblem.png" class="emblem" alt="" />
           <div class="title">Phantom</div>
-          <button id="btn-gear" class="icon-btn" title="Настройки">&#9881;</button>
-          <button id="btn-update" class="icon-btn update-btn hidden" title="Доступно обновление">&#11015;</button>
+          <button id="btn-gear" class="icon-btn" data-i18n-title="settings" title="Настройки">&#9881;</button>
+          <button id="btn-update" class="icon-btn update-btn hidden" data-i18n-title="update_available" title="Доступно обновление">&#11015;</button>
           <div class="spacer"></div>
         </div>
 
@@ -21,14 +21,14 @@
         <div class="main-body">
           <div class="main-col">
             <div class="panel-header">
-              <div class="panel-title">Конфигурации</div>
-              <button id="btn-add" class="icon-btn" title="Добавить конфигурацию">&#43;</button>
+              <div class="panel-title" data-i18n="configs">Конфигурации</div>
+              <button id="btn-add" class="icon-btn" data-i18n-title="add_config" title="Добавить конфигурацию">&#43;</button>
             </div>
             <div id="config-list" class="config-list"></div>
 
             <div id="empty-state" class="empty-state hidden">
-              <div class="empty-title">Нет добавленной конфигурации</div>
-              <div class="empty-hint">Нажмите + чтобы добавить client.yaml</div>
+              <div class="empty-title" data-i18n="no_configs">Нет добавленной конфигурации</div>
+              <div class="empty-hint" data-i18n="no_configs_hint">Нажмите + чтобы добавить client.yaml</div>
             </div>
 
             <div id="error-text" class="error-text hidden"></div>
@@ -36,8 +36,8 @@
 
           <div class="main-col main-col-resources">
             <div class="panel-header">
-              <div class="panel-title">Доступность ресурсов</div>
-              <button id="btn-add-resource" class="icon-btn" title="Добавить ресурс">&#43;</button>
+              <div class="panel-title" data-i18n="resources">Доступность ресурсов</div>
+              <button id="btn-add-resource" class="icon-btn" data-i18n-title="add_resource" title="Добавить ресурс">&#43;</button>
             </div>
             <div id="resource-list" class="resource-list"></div>
           </div>
@@ -48,14 +48,14 @@
       <div id="screen-config" class="screen hidden">
         <div class="header">
           <button id="btn-back-config" class="icon-btn">&#8592;</button>
-          <div id="config-screen-title" class="title">Добавить конфигурацию</div>
+          <div id="config-screen-title" class="title" data-i18n="add_config">Добавить конфигурацию</div>
         </div>
         <div class="content">
-          <div class="label">Вставьте содержимое client.yaml целиком:</div>
+          <div class="label" data-i18n="paste_yaml">Вставьте содержимое client.yaml целиком:</div>
           <textarea id="config-textarea" placeholder='server: "1.2.3.4:8443"&#10;domain: "your-domain.example"&#10;...'></textarea>
           <div class="row">
-            <button id="btn-save" class="btn btn-primary">Сохранить</button>
-            <button id="btn-delete" class="btn btn-danger hidden">Удалить</button>
+            <button id="btn-save" class="btn btn-primary" data-i18n="save">Сохранить</button>
+            <button id="btn-delete" class="btn btn-danger hidden" data-i18n="delete">Удалить</button>
           </div>
         </div>
       </div>
@@ -64,11 +64,18 @@
       <div id="screen-settings" class="screen hidden">
         <div class="header">
           <button id="btn-back-settings" class="icon-btn">&#8592;</button>
-          <div class="title">Настройки</div>
+          <div class="title" data-i18n="settings">Настройки</div>
         </div>
         <div class="content">
-          <button id="btn-view-log" class="btn btn-outline">Посмотреть лог</button>
-          <button id="btn-open-split-tunnel" class="btn btn-outline">Раздельное туннелирование</button>
+          <div class="lang-row">
+            <div class="lang-label" data-i18n="language">Язык</div>
+            <div class="lang-options">
+              <button id="btn-lang-ru" class="btn btn-outline lang-btn">Русский</button>
+              <button id="btn-lang-en" class="btn btn-outline lang-btn">English</button>
+            </div>
+          </div>
+          <button id="btn-view-log" class="btn btn-outline" data-i18n="view_log">Посмотреть лог</button>
+          <button id="btn-open-split-tunnel" class="btn btn-outline" data-i18n="split_tunnel">Раздельное туннелирование</button>
         </div>
       </div>
 
@@ -76,11 +83,11 @@
       <div id="screen-log" class="screen hidden">
         <div class="header">
           <button id="btn-back-log" class="icon-btn">&#8592;</button>
-          <div class="title">Лог</div>
+          <div class="title" data-i18n="log">Лог</div>
         </div>
         <div class="content">
           <pre id="log-text" class="log-text"></pre>
-          <button id="btn-copy-log" class="btn btn-primary">Скопировать</button>
+          <button id="btn-copy-log" class="btn btn-primary" data-i18n="copy">Скопировать</button>
         </div>
       </div>
 
@@ -88,20 +95,20 @@
       <div id="screen-split-tunnel" class="screen hidden">
         <div class="header">
           <button id="btn-back-split-tunnel" class="icon-btn">&#8592;</button>
-          <div class="title">Раздельное туннелирование</div>
+          <div class="title" data-i18n="split_tunnel">Раздельное туннелирование</div>
         </div>
         <div class="content">
           <div class="panel-header">
-            <div class="panel-title">Приложения</div>
-            <button id="btn-add-excluded-app" class="icon-btn" title="Добавить приложение">&#43;</button>
+            <div class="panel-title" data-i18n="apps">Приложения</div>
+            <button id="btn-add-excluded-app" class="icon-btn" data-i18n-title="add_app" title="Добавить приложение">&#43;</button>
           </div>
-          <div class="settings-hint">
+          <div class="settings-hint" data-i18n="split_tunnel_hint">
             Эти приложения будут работать напрямую, в обход VPN, даже при активном подключении.
           </div>
           <div id="excluded-app-list" class="resource-list"></div>
           <div id="excluded-app-empty" class="empty-state hidden">
-            <div class="empty-title">Список пуст</div>
-            <div class="empty-hint">Нажмите + чтобы выбрать .exe</div>
+            <div class="empty-title" data-i18n="empty_list">Список пуст</div>
+            <div class="empty-hint" data-i18n="empty_apps_hint">Нажмите + чтобы выбрать .exe</div>
           </div>
         </div>
       </div>
@@ -109,11 +116,11 @@
       <!-- Delete confirmation overlay -->
       <div id="delete-confirm" class="overlay hidden">
         <div class="dialog">
-          <div class="dialog-title">Удалить конфигурацию?</div>
-          <div class="dialog-text">Придётся снова вставить client.yaml, чтобы подключиться этим профилем.</div>
+          <div class="dialog-title" data-i18n="delete_config_q">Удалить конфигурацию?</div>
+          <div class="dialog-text" data-i18n="delete_config_text">Придётся снова вставить client.yaml, чтобы подключиться этим профилем.</div>
           <div class="dialog-row">
-            <button id="btn-delete-cancel" class="btn btn-outline">Отмена</button>
-            <button id="btn-delete-confirm" class="btn btn-danger">Удалить</button>
+            <button id="btn-delete-cancel" class="btn btn-outline" data-i18n="cancel">Отмена</button>
+            <button id="btn-delete-confirm" class="btn btn-danger" data-i18n="delete">Удалить</button>
           </div>
         </div>
       </div>
@@ -121,12 +128,12 @@
       <!-- Add resource overlay -->
       <div id="add-resource-overlay" class="overlay hidden">
         <div class="dialog">
-          <div class="dialog-title">Добавить ресурс</div>
-          <input id="resource-name-input" class="text-input" placeholder="Название, например Netflix" />
+          <div class="dialog-title" data-i18n="add_resource">Добавить ресурс</div>
+          <input id="resource-name-input" class="text-input" data-i18n-placeholder="resource_name_ph" placeholder="Название, например Netflix" />
           <input id="resource-url-input" class="text-input" placeholder="https://example.com" />
           <div class="dialog-row">
-            <button id="btn-resource-cancel" class="btn btn-outline">Отмена</button>
-            <button id="btn-resource-save" class="btn btn-primary">Добавить</button>
+            <button id="btn-resource-cancel" class="btn btn-outline" data-i18n="cancel">Отмена</button>
+            <button id="btn-resource-save" class="btn btn-primary" data-i18n="add">Добавить</button>
           </div>
         </div>
       </div>

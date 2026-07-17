@@ -1,5 +1,6 @@
 import './style.css';
-import { Connect, Disconnect, Status, ReadLog, ListConfigs, AddConfig, UpdateConfig, DeleteConfig, SetConfigGeo, Ping, ListResources, AddResource, DeleteResource, ListExcludedApps, PickExcludedAppExe, AddExcludedApp, DeleteExcludedApp, ApplyUpdate, StartProxy, StopProxy } from '../wailsjs/go/main/App';
+import { Connect, Disconnect, Status, ReadLog, ListConfigs, AddConfig, UpdateConfig, DeleteConfig, SetConfigGeo, Ping, ListResources, AddResource, DeleteResource, ListExcludedApps, PickExcludedAppExe, AddExcludedApp, DeleteExcludedApp, ApplyUpdate, StartProxy, StopProxy, GetLanguage, SetLanguage } from '../wailsjs/go/main/App';
+import { t, getLang, setLang, applyStaticTranslations } from './i18n.js';
 
 const screens = {
   main: document.getElementById('screen-main'),
@@ -67,33 +68,22 @@ function parseYamlField(yaml, key) {
   return bare ? bare[1].trim() : '';
 }
 
-// ipwho.is rather than ipapi.co - the latter's free tier rate-limited itself into 429s
-// during development from repeated polling across both this app and the Android one.
-// Only called once, right after a config is added/edited (see resolveConfigGeo) - not
-// on every ping cycle, since a saved server's location essentially never changes.
-async function fetchGeo(ip) {
-  try {
-    const resp = await fetch(`https://ipwho.is/${ip}`);
-    const data = await resp.json();
-    if (data.success !== false && data.country && data.country_code) {
-      return { country: data.country, countryCode: data.country_code };
-    }
-  } catch (e) {
-    console.error(e);
-  }
-  return null;
-}
-
-// Resolves and persists a config's server IP/country/flag exactly once (via
-// SetConfigGeo), then re-renders so the tile picks it up. Called after every
-// Add/UpdateConfig - Update clears the old cached geo first (see
-// windows/configstore.go) since the edited yaml may point at a new server.
+// Resolves and persists a config's server IP once (a local DNS + disguised
+// handshake via Ping - no third party), plus the optional country/country_code
+// the operator put in the client.yaml, then re-renders so the tile picks it up.
+// Called after every Add/UpdateConfig.
+//
+// There is deliberately NO IP->country geo lookup here: that used to hit a
+// third-party service (ipwho.is) and a flag CDN (flagcdn.com), which leaked the
+// server's IP to those services on a timer. The country label is now purely a
+// static field an operator can put in the config they hand out.
 async function resolveConfigGeo(id, yaml) {
   try {
     const ping = JSON.parse(await Ping(yaml));
     if (!ping.ip) return;
-    const geo = await fetchGeo(ping.ip);
-    await SetConfigGeo(id, ping.ip, geo?.country || '', geo?.countryCode || '');
+    const country = parseYamlField(yaml, 'country');
+    const countryCode = parseYamlField(yaml, 'country_code');
+    await SetConfigGeo(id, ping.ip, country, countryCode);
     await reloadConfigs();
   } catch (e) {
     console.error(e);
@@ -129,22 +119,17 @@ function updateTileMeta(id) {
 
   const info = pingData.get(id) || {};
   card.querySelector('.config-ip').textContent = info.ip || config.ip || parseYamlField(config.yaml, 'server') || '—';
-  card.querySelector('.ping-text').textContent = info.latencyMs != null ? `Пинг: ${info.latencyMs} мс` : 'Пинг: —';
+  card.querySelector('.ping-text').textContent = info.latencyMs != null ? `${t('ping')}: ${info.latencyMs} ${t('ms')}` : `${t('ping')}: —`;
 
-  // Country/flag come from the config's own cached fields (resolved once at
-  // save time via resolveConfigGeo/SetConfigGeo), not from the live ping.
+  // Country label comes from the operator-provided country/country_code in the
+  // config (see resolveConfigGeo) - no third-party geo/flag lookup anymore. The
+  // flag <img> stays hidden: a real flag would need a CDN (the leak we removed)
+  // or bundled images, and Windows/Chromium can't render flag emoji either, so
+  // we show the country name/code as text instead.
   const flagImg = card.querySelector('.geo-flag');
   const geoText = card.querySelector('.geo-text');
-  if (config.countryCode) {
-    // Windows' Segoe UI Emoji has no flag glyphs (shows the bare letter pair
-    // instead) - a real flag image is the only reliable way to show one.
-    flagImg.src = `https://flagcdn.com/24x18/${config.countryCode.toLowerCase()}.png`;
-    flagImg.classList.remove('hidden');
-    geoText.textContent = config.country || '';
-  } else {
-    flagImg.classList.add('hidden');
-    geoText.textContent = '';
-  }
+  flagImg.classList.add('hidden');
+  geoText.textContent = config.country || config.countryCode || '';
 }
 
 // Checks one resource tile via a plain fetch() from this page's own network
@@ -163,10 +148,10 @@ async function checkResource(resource) {
   try {
     await fetch(resource.url, { mode: 'no-cors', signal: AbortSignal.timeout(5000) });
     const ms = Math.round(performance.now() - start);
-    statusEl.textContent = `Доступен, ${ms} мс`;
+    statusEl.textContent = `${t('available')}, ${ms} ${t('ms')}`;
     statusEl.className = 'resource-status reachable';
   } catch (e) {
-    statusEl.textContent = 'Недоступен';
+    statusEl.textContent = t('unavailable');
     statusEl.className = 'resource-status unreachable';
   }
 }
@@ -219,9 +204,9 @@ function renderResourceList() {
     card.className = 'resource-card';
     card.dataset.id = resource.id;
     card.innerHTML = `
-      <button class="resource-remove-btn" title="Удалить">&times;</button>
+      <button class="resource-remove-btn" title="${t('remove')}">&times;</button>
       <div class="resource-name">${escapeHtml(resource.name)}</div>
-      <div class="resource-status">Проверка...</div>
+      <div class="resource-status">${t('checking')}</div>
     `;
     card.querySelector('.resource-remove-btn').addEventListener('click', async () => {
       await DeleteResource(resource.id);
@@ -253,7 +238,7 @@ function renderExcludedAppList() {
     card.className = 'resource-card';
     card.dataset.id = app.id;
     card.innerHTML = `
-      <button class="resource-remove-btn" title="Удалить">&times;</button>
+      <button class="resource-remove-btn" title="${t('remove')}">&times;</button>
       <div class="resource-name">${escapeHtml(app.name)}</div>
       <div class="excluded-app-path">${escapeHtml(app.exePath)}</div>
     `;
@@ -290,24 +275,24 @@ function renderConfigList() {
         <div class="config-domain">${escapeHtml(domain)}</div>
         <div class="config-ip"></div>
         <div class="config-meta">
-          <span class="ping-text">Пинг: —</span>
+          <span class="ping-text">${t('ping')}: —</span>
           <img class="geo-flag hidden" alt="" />
           <span class="geo-text"></span>
         </div>
       </div>
-      <button class="config-edit-btn" title="Редактировать">&#9881;</button>
+      <button class="config-edit-btn" title="${t('edit')}">&#9881;</button>
       <div class="proxy-block">
-        <button class="proxy-toggle" title="Независимый SOCKS5-прокси">PROXY</button>
+        <button class="proxy-toggle" title="${t('proxy_tooltip')}">PROXY</button>
         <input
           class="proxy-port-input"
           type="text"
           inputmode="numeric"
-          placeholder="порт"
+          placeholder="${t('port_ph')}"
           value="${config.proxyPort || ''}"
-          title="Порт независимого прокси - редактируется, пока прокси выключен"
+          title="${t('proxy_port_title')}"
         />
       </div>
-      <button class="power-btn idle" title="Подключить">
+      <button class="power-btn idle" title="${t('connect')}">
         <svg viewBox="0 0 24 24" class="power-icon">
           <path d="M12 2v9" stroke-linecap="round" />
           <path d="M6.5 5.5a8 8 0 1 0 11 0" stroke-linecap="round" fill="none" />
@@ -353,7 +338,7 @@ async function toggleProxy(config) {
   if (rawPort) {
     requestedPort = Number(rawPort);
     if (!Number.isInteger(requestedPort) || requestedPort < 1 || requestedPort > 65535) {
-      errorText.textContent = `Некорректный порт: ${rawPort}`;
+      errorText.textContent = t('bad_port', { port: rawPort });
       errorText.classList.remove('hidden');
       return;
     }
@@ -367,7 +352,7 @@ async function toggleProxy(config) {
       errorText.classList.add('hidden');
       config.proxyPort = resp.port; // keep in sync so a later re-render still shows it
     } else {
-      errorText.textContent = `Не удалось включить прокси на порту ${rawPort || '(любой)'}: ${resp.error}`;
+      errorText.textContent = t('proxy_failed', { port: rawPort || t('proxy_any'), error: resp.error });
       errorText.classList.remove('hidden');
     }
   } finally {
@@ -386,8 +371,8 @@ function refreshProxyToggle(configId) {
 
   btn.classList.toggle('active', running);
   btn.title = running
-    ? `Независимый SOCKS5-прокси — 127.0.0.1:${state.port}`
-    : 'Независимый SOCKS5-прокси';
+    ? t('proxy_tooltip_active', { port: state.port })
+    : t('proxy_tooltip');
 
   portInput.disabled = running;
   if (running) portInput.value = state.port;
@@ -462,7 +447,7 @@ async function reloadConfigs() {
 function openEditScreen(config) {
   editingId = config.id;
   configTextarea.value = config.yaml;
-  configScreenTitle.textContent = 'Редактировать конфигурацию';
+  configScreenTitle.textContent = t('edit_config_title');
   btnDelete.classList.remove('hidden');
   showScreen('config');
 }
@@ -470,7 +455,7 @@ function openEditScreen(config) {
 document.getElementById('btn-add').addEventListener('click', () => {
   editingId = null;
   configTextarea.value = '';
-  configScreenTitle.textContent = 'Добавить конфигурацию';
+  configScreenTitle.textContent = t('add_config');
   btnDelete.classList.add('hidden');
   showScreen('config');
 });
@@ -509,6 +494,31 @@ document.getElementById('btn-delete-confirm').addEventListener('click', async ()
 
 document.getElementById('btn-gear').addEventListener('click', () => showScreen('settings'));
 document.getElementById('btn-back-settings').addEventListener('click', () => showScreen('main'));
+
+// applyLanguage re-labels everything for the given language: the static markup
+// (data-i18n attributes) plus the dynamically-built lists whose strings are
+// baked into innerHTML at render time. Cheap enough to just re-render them,
+// since switching language is a rare, explicit action.
+function applyLanguage(lang) {
+  setLang(lang);
+  applyStaticTranslations();
+  renderConfigList();
+  renderResourceList();
+  renderExcludedAppList();
+  refreshTileStatuses();
+  configScreenTitle.textContent = editingId ? t('edit_config_title') : t('add_config');
+  document.getElementById('btn-lang-ru').classList.toggle('active', getLang() === 'ru');
+  document.getElementById('btn-lang-en').classList.toggle('active', getLang() === 'en');
+}
+
+document.getElementById('btn-lang-ru').addEventListener('click', async () => {
+  await SetLanguage('ru'); // persisted Go-side so the tray menu matches too
+  applyLanguage('ru');
+});
+document.getElementById('btn-lang-en').addEventListener('click', async () => {
+  await SetLanguage('en');
+  applyLanguage('en');
+});
 
 document.getElementById('btn-view-log').addEventListener('click', async () => {
   logText.textContent = await ReadLog();
@@ -569,17 +579,17 @@ btnUpdate.addEventListener('click', async () => {
 // happens once the user clicks that button.
 if (window.runtime) {
   window.runtime.EventsOn('update:available', (tag) => {
-    btnUpdate.title = `Доступно обновление ${tag} — нажмите, чтобы установить`;
+    btnUpdate.title = t('update_btn_title', { tag });
     btnUpdate.classList.remove('hidden');
-    updateBanner.textContent = `Доступно обновление ${tag} — нажмите зелёную стрелку рядом с настройками, чтобы установить.`;
+    updateBanner.textContent = t('update_banner_available', { tag });
     updateBanner.classList.remove('hidden');
   });
   window.runtime.EventsOn('update:downloading', (tag) => {
-    updateBanner.textContent = `Установка обновления ${tag} — скачивание и перезапуск...`;
+    updateBanner.textContent = t('update_installing', { tag });
     updateBanner.classList.remove('hidden');
   });
   window.runtime.EventsOn('update:failed', (message) => {
-    updateBanner.textContent = `Не удалось обновиться: ${message}`;
+    updateBanner.textContent = t('update_failed', { message });
     updateBanner.classList.remove('hidden');
     btnUpdate.disabled = false;
   });
@@ -589,7 +599,7 @@ if (window.runtime) {
   // disconnected-then-reconnected transition on the tile itself, this banner
   // just explains *why* rather than leaving it looking like a random drop.
   window.runtime.EventsOn('tunnel:reconnecting', () => {
-    updateBanner.textContent = 'Смена сети — переподключение...';
+    updateBanner.textContent = t('reconnecting');
     updateBanner.classList.remove('hidden');
     setTimeout(() => updateBanner.classList.add('hidden'), 4000);
   });
@@ -598,14 +608,27 @@ if (window.runtime) {
 setInterval(refreshStatus, 4000);
 
 (async () => {
+  // Load the persisted language before the first render so every dynamically
+  // built string starts out in the right language, then translate the static
+  // markup and mark the active language button.
+  try {
+    setLang(await GetLanguage());
+  } catch (e) {
+    // default (ru) stays if the Go call fails
+  }
+  applyStaticTranslations();
+  document.getElementById('btn-lang-ru').classList.toggle('active', getLang() === 'ru');
+  document.getElementById('btn-lang-en').classList.toggle('active', getLang() === 'en');
+
   await reloadConfigs();
   await refreshStatus();
   await reloadResources();
   await reloadExcludedApps();
 
-  // Configs saved before this per-config geo cache existed have no country/flag yet -
-  // backfill them once on launch rather than leaving those tiles blank forever.
+  // Backfill the cached server IP (and any country field from the yaml) once for
+  // configs that don't have it yet - keyed on the IP, not the country, so a
+  // config whose yaml simply has no country doesn't re-Ping on every launch.
   for (const config of configs) {
-    if (!config.countryCode) resolveConfigGeo(config.id, config.yaml);
+    if (!config.ip) resolveConfigGeo(config.id, config.yaml);
   }
 })();

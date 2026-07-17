@@ -38,6 +38,10 @@ export function Disconnect() {
   return window['go']['main']['App']['Disconnect']();
 }
 
+export function GetLanguage() {
+  return window['go']['main']['App']['GetLanguage']();
+}
+
 export function ListConfigs() {
   return window['go']['main']['App']['ListConfigs']();
 }
@@ -64,6 +68,10 @@ export function ReadLog() {
 
 export function SetConfigGeo(arg1, arg2, arg3, arg4) {
   return window['go']['main']['App']['SetConfigGeo'](arg1, arg2, arg3, arg4);
+}
+
+export function SetLanguage(arg1) {
+  return window['go']['main']['App']['SetLanguage'](arg1);
 }
 
 export function StartProxy(arg1, arg2, arg3) {

@@ -495,3 +495,22 @@ textarea::placeholder { color: var(--text-secondary); }
 .dialog-text { font-size: 13px; color: var(--text-secondary); }
 .dialog-row { display: flex; gap: 10px; justify-content: flex-end; margin-top: 6px; }
 .dialog-row .btn { padding: 10px 16px; }
+
+/* --- Language selector (Settings screen) --- */
+.lang-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    margin-bottom: 4px;
+}
+.lang-label { color: var(--text-secondary); font-size: 14px; }
+.lang-options { display: flex; gap: 8px; }
+.lang-btn { padding: 8px 14px; }
+.lang-btn.active {
+    color: var(--text-primary);
+    border: 1px solid transparent;
+    background:
+        linear-gradient(var(--bg-surface), var(--bg-surface)) padding-box,
+        linear-gradient(120deg, #A78BFA, #F472B6, #7DD3FC) border-box;
+}

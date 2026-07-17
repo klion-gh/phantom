@@ -3,6 +3,7 @@ package main
 import (
 	_ "embed"
 	"encoding/json"
+	"fmt"
 	"log"
 	"os"
 	"time"
@@ -17,6 +18,8 @@ var trayIconBytes []byte
 var (
 	trayStatusItem *systray.MenuItem
 	trayToggleItem *systray.MenuItem
+	trayOpenItem   *systray.MenuItem
+	trayQuitItem   *systray.MenuItem
 )
 
 // runTray starts the system tray icon and blocks until systray.Quit() is
@@ -38,18 +41,22 @@ func onTrayReady(app *App) {
 		}
 	})
 
-	trayStatusItem = systray.AddMenuItem("VPN: отключён · Proxy: отключён", "")
+	setTrayLang(loadLanguage())
+
+	// Labels are set by refreshTrayLanguage below (and re-set live by
+	// pollTrayStatus for the state-dependent ones); created empty here.
+	trayStatusItem = systray.AddMenuItem("", "")
 	trayStatusItem.Disable()
 
 	systray.AddSeparator()
 
-	trayToggleItem = systray.AddMenuItem("Подключить", "Подключить/отключить последний активный профиль")
+	trayToggleItem = systray.AddMenuItem("", "")
 	trayToggleItem.Click(func() {
 		go handleTrayToggle(app)
 	})
 
-	openItem := systray.AddMenuItem("Открыть", "Открыть окно Phantom")
-	openItem.Click(func() {
+	trayOpenItem = systray.AddMenuItem("", "")
+	trayOpenItem.Click(func() {
 		if app.ctx != nil {
 			runtime.WindowShow(app.ctx)
 		}
@@ -57,14 +64,33 @@ func onTrayReady(app *App) {
 
 	systray.AddSeparator()
 
-	quitItem := systray.AddMenuItem("Выход", "Полностью закрыть Phantom")
-	quitItem.Click(func() {
+	trayQuitItem = systray.AddMenuItem("", "")
+	trayQuitItem.Click(func() {
 		app.Disconnect()
 		systray.Quit()
 		os.Exit(0)
 	})
 
+	refreshTrayLanguage()
 	go pollTrayStatus(app)
+}
+
+// refreshTrayLanguage re-labels the tray items that don't depend on connection
+// state (open/quit and all tooltips) for the current trayLang. Called at
+// startup and whenever the user switches language in the WebView
+// (App.SetLanguage). The status label and connect/disconnect toggle depend on
+// live state, so pollTrayStatus owns those and picks up the new language on its
+// next tick (~2s). Safe to call before the menu exists (no-op).
+func refreshTrayLanguage() {
+	if trayToggleItem == nil {
+		return
+	}
+	lang := getTrayLang()
+	trayToggleItem.SetTooltip(trayT(lang, "toggle_tip"))
+	trayOpenItem.SetTitle(trayT(lang, "open"))
+	trayOpenItem.SetTooltip(trayT(lang, "open_tip"))
+	trayQuitItem.SetTitle(trayT(lang, "quit"))
+	trayQuitItem.SetTooltip(trayT(lang, "quit_tip"))
 }
 
 // handleTrayToggle mirrors the notification-driven reconnect logic the
@@ -104,17 +130,18 @@ func pollTrayStatus(app *App) {
 		// Two independent facts on one line, mirroring the Android notification's
 		// "VPN: … | Proxy: …": the full-tunnel VPN and the standalone per-config
 		// proxies are unrelated features that can each be on or off separately.
-		vpnPart := "VPN: отключён"
+		lang := getTrayLang()
+		vpnState := trayT(lang, "vpn_off")
 		if status.Connected {
-			vpnPart = "VPN: подключён"
-			trayToggleItem.SetTitle("Отключить")
+			vpnState = trayT(lang, "vpn_on")
+			trayToggleItem.SetTitle(trayT(lang, "disconnect"))
 		} else {
-			trayToggleItem.SetTitle("Подключить")
+			trayToggleItem.SetTitle(trayT(lang, "connect"))
 		}
-		proxyPart := "Proxy: отключён"
+		proxyState := trayT(lang, "proxy_off")
 		if anyConfigProxyRunning() {
-			proxyPart = "Proxy: активен"
+			proxyState = trayT(lang, "proxy_on")
 		}
-		trayStatusItem.SetTitle(vpnPart + " · " + proxyPart)
+		trayStatusItem.SetTitle(fmt.Sprintf("VPN: %s · Proxy: %s", vpnState, proxyState))
 	}
 }

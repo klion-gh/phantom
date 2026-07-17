@@ -1,8 +1,6 @@
 package com.phantom.vpn
 
-import android.graphics.BitmapFactory
 import androidx.compose.foundation.ExperimentalFoundationApi
-import androidx.compose.foundation.Image
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
@@ -31,8 +29,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.ImageBitmap
-import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -47,8 +43,6 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.withContext
 import mobile.Mobile
 import org.json.JSONObject
-import java.net.HttpURLConnection
-import java.net.URL
 
 /** Snapshot of what a config tile shows about its server: live latency only - country/flag
  * are resolved once and cached on the SavedConfig itself, not polled on a timer. */
@@ -69,25 +63,17 @@ fun parseYamlField(yaml: String, key: String): String? {
     return bare?.groupValues?.get(1)?.trim()
 }
 
-private val flagBitmapCache = mutableMapOf<String, ImageBitmap?>()
-
-/**
- * Fetches a small flag image for a two-letter ISO country code, cached in memory.
- * Uses a real image rather than the Unicode flag emoji (regional indicator pair) since
- * that renders as bare letters on some devices/system images that lack flag glyphs in
- * their emoji font - the same gap that showed up on Windows for this exact feature.
- */
-suspend fun fetchFlagBitmap(countryCode: String): ImageBitmap? = withContext(Dispatchers.IO) {
-    flagBitmapCache[countryCode]?.let { return@withContext it }
-    val bitmap = runCatching {
-        val conn = URL("https://flagcdn.com/48x36/${countryCode.lowercase()}.png").openConnection() as HttpURLConnection
-        conn.connectTimeout = 4000
-        conn.readTimeout = 4000
-        conn.inputStream.use { BitmapFactory.decodeStream(it) }
-    }.getOrNull()
-    val imageBitmap = bitmap?.asImageBitmap()
-    flagBitmapCache[countryCode] = imageBitmap
-    imageBitmap
+// countryCodeToFlag turns a two-letter ISO code ("RU") into its flag emoji
+// (regional-indicator pair, "🇷🇺") - rendered as a real flag on
+// modern Android. Returns "" for anything that isn't two A-Z letters. This
+// replaces the old flagcdn.com image fetch, removing that third-party call.
+fun countryCodeToFlag(code: String): String {
+    if (code.length != 2) return ""
+    val cc = code.uppercase()
+    if (!cc.all { it in 'A'..'Z' }) return ""
+    val a = Character.toChars(0x1F1E6 + (cc[0] - 'A'))
+    val b = Character.toChars(0x1F1E6 + (cc[1] - 'A'))
+    return String(a) + String(b)
 }
 
 /**
@@ -102,30 +88,6 @@ suspend fun fetchPing(yaml: String): Pair<String, Long>? = withContext(Dispatche
         val ip = json.optString("ip").takeIf { it.isNotBlank() } ?: return@withContext null
         val latency = json.optLong("latency_ms", -1L).takeIf { it >= 0 } ?: return@withContext null
         ip to latency
-    }.getOrNull()
-}
-
-/**
- * Looks up the country for the server's IP via a public geo-IP API - this is the one
- * place in the app that calls a third party, purely for the cosmetic country/flag label.
- * Best-effort: any failure (offline, rate limit) just leaves the location blank. Uses
- * ipwho.is rather than ipapi.co - the latter's free tier rate-limited itself into 429s
- * during development from repeated polling across both this app and the Windows one.
- * Only called once, right after a config is added/edited (see MainActivity's Save
- * handler) - not on a timer, since a saved server's location essentially never changes.
- */
-suspend fun fetchGeo(ip: String): Pair<String, String>? = withContext(Dispatchers.IO) {
-    runCatching {
-        val conn = URL("https://ipwho.is/$ip").openConnection() as HttpURLConnection
-        conn.connectTimeout = 4000
-        conn.readTimeout = 4000
-        conn.requestMethod = "GET"
-        val body = conn.inputStream.bufferedReader().use { it.readText() }
-        val json = JSONObject(body)
-        if (!json.optBoolean("success", true)) return@withContext null
-        val name = json.optString("country").takeIf { it.isNotBlank() }
-        val code = json.optString("country_code").takeIf { it.isNotBlank() }
-        if (name != null && code != null) name to code else null
     }.getOrNull()
 }
 
@@ -164,11 +126,6 @@ fun ConfigInfoCard(
     val domain = parseYamlField(config.yaml, "domain") ?: ""
     val server = parseYamlField(config.yaml, "server") ?: ""
     val info = pingInfo
-
-    var flagBitmap by remember(config.id) { mutableStateOf<ImageBitmap?>(null) }
-    LaunchedEffect(config.countryCode) {
-        flagBitmap = config.countryCode?.takeIf { it.isNotBlank() }?.let { fetchFlagBitmap(it) }
-    }
 
     // The port field mirrors whatever's actually running once it starts (in case it
     // had to fall back... it doesn't anymore - see ProxyManager - but this also covers
@@ -223,30 +180,19 @@ fun ConfigInfoCard(
                 )
                 Spacer(modifier = Modifier.height(6.dp))
                 Text(
-                    text = info?.latencyMs?.let { "Пинг: $it мс" } ?: "Пинг: —",
+                    text = info?.latencyMs?.let { "${I18n.t("ping")}: $it ${I18n.t("ms")}" } ?: "${I18n.t("ping")}: —",
                     color = TextSecondary,
                     fontSize = 13.sp,
                 )
-                if (!config.countryCode.isNullOrBlank()) {
+                val countryLabel = config.country ?: config.countryCode
+                if (!countryLabel.isNullOrBlank()) {
                     Spacer(modifier = Modifier.height(4.dp))
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        flagBitmap?.let { bitmap ->
-                            Image(
-                                bitmap = bitmap,
-                                contentDescription = null,
-                                modifier = Modifier
-                                    .width(20.dp)
-                                    .height(15.dp)
-                                    .clip(RoundedCornerShape(2.dp)),
-                            )
-                            Spacer(modifier = Modifier.width(6.dp))
-                        }
-                        Text(
-                            text = config.country ?: "",
-                            color = TextSecondary,
-                            fontSize = 13.sp,
-                        )
-                    }
+                    val flag = config.countryCode?.let { countryCodeToFlag(it) } ?: ""
+                    Text(
+                        text = if (flag.isNotEmpty()) "$flag $countryLabel" else countryLabel,
+                        color = TextSecondary,
+                        fontSize = 13.sp,
+                    )
                 }
             }
             Spacer(modifier = Modifier.width(8.dp))
@@ -333,7 +279,7 @@ private fun ProxyBlock(
         Spacer(modifier = Modifier.height(4.dp))
         Box(contentAlignment = Alignment.Center) {
             if (portText.isEmpty()) {
-                Text("порт", color = TextSecondary.copy(alpha = 0.6f), fontSize = 10.sp)
+                Text(I18n.t("port_ph"), color = TextSecondary.copy(alpha = 0.6f), fontSize = 10.sp)
             }
             BasicTextField(
                 value = portText,

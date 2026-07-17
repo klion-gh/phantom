@@ -140,9 +140,9 @@ fun ResourceCard(
                         fontWeight = FontWeight.SemiBold,
                     )
                     val statusText = when {
-                        result == null -> "Проверка..."
-                        result?.reachable == true -> "Доступен, ${result?.latencyMs} мс"
-                        else -> "Недоступен"
+                        result == null -> I18n.t("checking")
+                        result?.reachable == true -> "${I18n.t("available")}, ${result?.latencyMs} ${I18n.t("ms")}"
+                        else -> I18n.t("unavailable")
                     }
                     val statusColor = when {
                         result == null -> TextSecondary

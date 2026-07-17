@@ -274,10 +274,11 @@ func (a *App) ListExcludedApps() string {
 // to an .exe, returning its path (or "" if cancelled/failed) - the frontend
 // follows this up with AddExcludedApp using the picked path.
 func (a *App) PickExcludedAppExe() string {
+	lang := getTrayLang()
 	path, err := runtime.OpenFileDialog(a.ctx, runtime.OpenDialogOptions{
-		Title: "Выбрать приложение",
+		Title: trayT(lang, "pick_app_title"),
 		Filters: []runtime.FileFilter{
-			{DisplayName: "Программы (*.exe)", Pattern: "*.exe"},
+			{DisplayName: trayT(lang, "programs_filter"), Pattern: "*.exe"},
 		},
 	})
 	if err != nil || path == "" {
@@ -341,6 +342,21 @@ func (a *App) StartProxy(configID string, configYAML string, requestedPort int) 
 func (a *App) StopProxy(configID string) string {
 	stopConfigProxy(configID)
 	return ""
+}
+
+// GetLanguage returns the persisted UI language ("ru" or "en") - the frontend
+// reads it once on load to pick the initial language.
+func (a *App) GetLanguage() string {
+	return loadLanguage()
+}
+
+// SetLanguage persists the chosen UI language and re-labels the tray menu to
+// match (the WebView side re-renders itself). "ru" or "en"; anything else is
+// stored as "ru".
+func (a *App) SetLanguage(lang string) {
+	saveLanguage(lang)
+	setTrayLang(lang)
+	refreshTrayLanguage()
 }
 
 // ApplyUpdate downloads and installs whatever release checkAndSelfUpdate

@@ -19,6 +19,8 @@ export function DeleteResource(arg1:string):Promise<string>;
 
 export function Disconnect():Promise<void>;
 
+export function GetLanguage():Promise<string>;
+
 export function ListConfigs():Promise<string>;
 
 export function ListExcludedApps():Promise<string>;
@@ -32,6 +34,8 @@ export function Ping(arg1:string):Promise<string>;
 export function ReadLog():Promise<string>;
 
 export function SetConfigGeo(arg1:string,arg2:string,arg3:string,arg4:string):Promise<string>;
+
+export function SetLanguage(arg1:string):Promise<void>;
 
 export function StartProxy(arg1:string,arg2:string,arg3:number):Promise<string>;
 

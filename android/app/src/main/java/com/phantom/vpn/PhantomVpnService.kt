@@ -516,22 +516,22 @@ class PhantomVpnService : VpnService() {
         // and the standalone proxy are unrelated features that just share this one
         // notification (one process, one foreground exemption - see the class docs).
         val vpnText = when (status) {
-            ConnectionStatus.CONNECTED -> "активен"
-            ConnectionStatus.CONNECTING -> "подключение..."
-            ConnectionStatus.ERROR -> "ошибка"
-            ConnectionStatus.IDLE -> "неактивен"
+            ConnectionStatus.CONNECTED -> I18n.t("active")
+            ConnectionStatus.CONNECTING -> I18n.t("connecting")
+            ConnectionStatus.ERROR -> I18n.t("error_short")
+            ConnectionStatus.IDLE -> I18n.t("inactive")
         }
         val proxyRunning = ProxyManager.hasAnyRunning()
-        val text = "VPN: $vpnText | Proxy: ${if (proxyRunning) "активен" else "неактивен"}"
+        val text = "VPN: $vpnText | Proxy: ${if (proxyRunning) I18n.t("active") else I18n.t("inactive")}"
 
         val vpnAction = when (status) {
-            ConnectionStatus.CONNECTED -> "Отключить VPN" to disconnectPendingIntent()
-            ConnectionStatus.CONNECTING -> "Отменить" to disconnectPendingIntent()
-            else -> "Подключить VPN" to connectPendingIntent()
+            ConnectionStatus.CONNECTED -> I18n.t("disconnect_vpn") to disconnectPendingIntent()
+            ConnectionStatus.CONNECTING -> I18n.t("cancel_action") to disconnectPendingIntent()
+            else -> I18n.t("connect_vpn") to connectPendingIntent()
         }
         val proxyAction =
-            if (proxyRunning) "Отключить Proxy" to proxyDisconnectPendingIntent()
-            else "Подключить Proxy" to proxyConnectPendingIntent()
+            if (proxyRunning) I18n.t("disconnect_proxy") to proxyDisconnectPendingIntent()
+            else I18n.t("connect_proxy") to proxyConnectPendingIntent()
 
         val openAppIntent = PendingIntent.getActivity(
             this, 0,

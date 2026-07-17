@@ -182,7 +182,7 @@ private fun PhantomApp(
             val ok = downloadAndInstallUpdate(context, info)
             isUpdating = false
             if (!ok) {
-                Toast.makeText(context, "Не удалось скачать обновление", Toast.LENGTH_LONG).show()
+                Toast.makeText(context, I18n.t("download_failed"), Toast.LENGTH_LONG).show()
             }
         }
     }
@@ -221,7 +221,7 @@ private fun PhantomApp(
         if (trimmed.isNotEmpty()) {
             requestedPort = trimmed.toIntOrNull() ?: -1
             if (requestedPort !in 1..65535) {
-                Toast.makeText(context, "Некорректный порт: $trimmed", Toast.LENGTH_SHORT).show()
+                Toast.makeText(context, I18n.t("bad_port", trimmed), Toast.LENGTH_SHORT).show()
                 return
             }
         }
@@ -236,29 +236,33 @@ private fun PhantomApp(
                 .onFailure { e ->
                     Toast.makeText(
                         context,
-                        "Не удалось включить прокси на порту ${trimmed.ifEmpty { "(любой)" }}: ${e.message}",
+                        I18n.t("proxy_failed", trimmed.ifEmpty { I18n.t("proxy_any") }, e.message ?: ""),
                         Toast.LENGTH_LONG,
                     ).show()
                 }
         }
     }
 
-    // Resolves and persists a config's server IP/country/flag exactly once (via
-    // ConfigStore.setGeo), then refreshes so the tile picks it up - see the "why once,
-    // not on a timer" note on SavedConfig.
+    // Persists a config's server IP once (a local Ping - no third party) plus the
+    // optional country/country_code the operator put in the yaml, then refreshes so
+    // the tile picks it up. There is deliberately no IP->country lookup anymore: it
+    // used to hit a third-party geo/flag service (ipwho.is/flagcdn), leaking the
+    // server IP to it - the country is now just a static field in the config.
     fun resolveGeoInBackground(id: String, yaml: String) {
         coroutineScope.launch {
             val (ip, _) = fetchPing(yaml) ?: return@launch
-            val geo = fetchGeo(ip)
-            ConfigStore.setGeo(context, id, ip, geo?.first, geo?.second)
+            val country = parseYamlField(yaml, "country")
+            val countryCode = parseYamlField(yaml, "country_code")
+            ConfigStore.setGeo(context, id, ip, country, countryCode)
             refreshConfigs()
         }
     }
 
-    // Configs saved before this per-config geo cache existed have no country/flag yet -
-    // backfill them once on launch rather than leaving those tiles blank forever.
+    // Backfill the cached server IP (and any country field from the yaml) once for
+    // configs missing it - keyed on the IP, not the country, so a config whose yaml
+    // simply has no country doesn't re-Ping on every launch.
     LaunchedEffect(Unit) {
-        configs.filter { it.countryCode == null }.forEach { resolveGeoInBackground(it.id, it.yaml) }
+        configs.filter { it.ip == null }.forEach { resolveGeoInBackground(it.id, it.yaml) }
     }
 
     when (screen) {
@@ -500,7 +504,7 @@ private fun ConfigsPage(
     Column(modifier = Modifier.fillMaxSize()) {
         Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
             Text(
-                "Конфигурации",
+                I18n.t("configs"),
                 color = TextSecondary,
                 fontSize = 13.sp,
                 fontWeight = FontWeight.SemiBold,
@@ -548,14 +552,14 @@ private fun ConfigsPage(
                 verticalArrangement = Arrangement.Center,
             ) {
                 Text(
-                    text = "Нет добавленной конфигурации",
+                    text = I18n.t("no_configs"),
                     color = TextPrimary,
                     fontSize = 16.sp,
                     fontWeight = FontWeight.Medium,
                 )
                 Spacer(modifier = Modifier.height(8.dp))
                 Text(
-                    text = "Нажмите + чтобы добавить client.yaml",
+                    text = I18n.t("no_configs_hint"),
                     color = TextSecondary,
                     fontSize = 13.sp,
                 )
@@ -574,7 +578,7 @@ private fun ResourcesPage(
     Column(modifier = Modifier.fillMaxSize()) {
         Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
             Text(
-                "Доступность ресурсов",
+                I18n.t("resources"),
                 color = TextSecondary,
                 fontSize = 13.sp,
                 fontWeight = FontWeight.SemiBold,
@@ -607,14 +611,14 @@ private fun ResourcesPage(
                 verticalArrangement = Arrangement.Center,
             ) {
                 Text(
-                    text = "Нет добавленных ресурсов",
+                    text = I18n.t("no_resources"),
                     color = TextPrimary,
                     fontSize = 16.sp,
                     fontWeight = FontWeight.Medium,
                 )
                 Spacer(modifier = Modifier.height(8.dp))
                 Text(
-                    text = "Нажмите + чтобы добавить сайт для проверки",
+                    text = I18n.t("no_resources_hint"),
                     color = TextSecondary,
                     fontSize = 13.sp,
                 )
@@ -641,13 +645,13 @@ private fun AddResourceDialog(
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("Добавить ресурс") },
+        title = { Text(I18n.t("add_resource")) },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 OutlinedTextField(
                     value = name,
                     onValueChange = { name = it },
-                    placeholder = { Text("Название, например Netflix", color = TextSecondary) },
+                    placeholder = { Text(I18n.t("resource_name_ph"), color = TextSecondary) },
                     singleLine = true,
                     colors = fieldColors,
                     modifier = Modifier.fillMaxWidth(),
@@ -674,10 +678,10 @@ private fun AddResourceDialog(
                     "https://$trimmedUrl"
                 }
                 onSave(trimmedName, fullUrl)
-            }) { Text("Добавить", color = AccentLavender) }
+            }) { Text(I18n.t("add"), color = AccentLavender) }
         },
         dismissButton = {
-            TextButton(onClick = onDismiss) { Text("Отмена") }
+            TextButton(onClick = onDismiss) { Text(I18n.t("cancel")) }
         },
         containerColor = BgSurface,
         titleContentColor = TextPrimary,
@@ -708,7 +712,7 @@ private fun ConfigScreen(
                 Text("←", fontSize = 22.sp, color = TextPrimary)
             }
             Text(
-                if (isEditing) "Редактировать конфигурацию" else "Добавить конфигурацию",
+                if (isEditing) I18n.t("edit_config_title") else I18n.t("add_config_title"),
                 color = TextPrimary,
                 fontSize = 20.sp,
                 fontWeight = FontWeight.SemiBold,
@@ -716,7 +720,7 @@ private fun ConfigScreen(
         }
 
         Text(
-            "Вставьте содержимое client.yaml целиком:",
+            I18n.t("paste_yaml"),
             color = TextSecondary,
             fontSize = 13.sp,
         )
@@ -744,7 +748,7 @@ private fun ConfigScreen(
             colors = ButtonDefaults.buttonColors(containerColor = AccentLavender, contentColor = BgDeep),
             modifier = Modifier.fillMaxWidth(),
         ) {
-            Text("Сохранить")
+            Text(I18n.t("save"))
         }
 
         if (isEditing) {
@@ -753,7 +757,7 @@ private fun ConfigScreen(
                 colors = ButtonDefaults.outlinedButtonColors(contentColor = StatusError),
                 modifier = Modifier.fillMaxWidth(),
             ) {
-                Text("Удалить конфигурацию")
+                Text(I18n.t("delete_config"))
             }
         }
     }
@@ -761,16 +765,16 @@ private fun ConfigScreen(
     if (showDeleteConfirm) {
         AlertDialog(
             onDismissRequest = { showDeleteConfirm = false },
-            title = { Text("Удалить конфигурацию?") },
-            text = { Text("Придётся снова вставить client.yaml, чтобы подключиться этим профилем.") },
+            title = { Text(I18n.t("delete_config_q")) },
+            text = { Text(I18n.t("delete_config_text")) },
             confirmButton = {
                 TextButton(onClick = {
                     showDeleteConfirm = false
                     onDelete()
-                }) { Text("Удалить", color = StatusError) }
+                }) { Text(I18n.t("delete"), color = StatusError) }
             },
             dismissButton = {
-                TextButton(onClick = { showDeleteConfirm = false }) { Text("Отмена") }
+                TextButton(onClick = { showDeleteConfirm = false }) { Text(I18n.t("cancel")) }
             },
             containerColor = BgSurface,
             titleContentColor = TextPrimary,
@@ -794,13 +798,44 @@ private fun SettingsScreen(
             IconButton(onClick = onBack) {
                 Text("←", fontSize = 22.sp, color = TextPrimary)
             }
-            Text("Настройки", color = TextPrimary, fontSize = 20.sp, fontWeight = FontWeight.SemiBold)
+            Text(I18n.t("settings"), color = TextPrimary, fontSize = 20.sp, fontWeight = FontWeight.SemiBold)
+        }
+
+        // Language selector - reading I18n.lang here recomposes the whole app
+        // (every screen goes through I18n.t) when it changes.
+        val context = LocalContext.current
+        Text(I18n.t("language"), color = TextSecondary, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            LangButton("Русский", I18n.lang == Lang.RU) { setAppLanguage(context, Lang.RU) }
+            LangButton("English", I18n.lang == Lang.EN) { setAppLanguage(context, Lang.EN) }
         }
 
         OutlinedButton(onClick = onViewLog, modifier = Modifier.fillMaxWidth()) {
-            Text("Посмотреть лог")
+            Text(I18n.t("view_log"))
         }
     }
+}
+
+@Composable
+private fun LangButton(label: String, active: Boolean, onClick: () -> Unit) {
+    if (active) {
+        Button(
+            onClick = onClick,
+            colors = ButtonDefaults.buttonColors(containerColor = AccentLavender, contentColor = BgDeep),
+        ) { Text(label) }
+    } else {
+        OutlinedButton(onClick = onClick) { Text(label) }
+    }
+}
+
+// setAppLanguage persists the choice and re-posts the persistent notification so
+// its already-shown text/actions switch language immediately too, not just the
+// Compose UI.
+private fun setAppLanguage(context: android.content.Context, lang: Lang) {
+    I18n.set(context, lang)
+    context.startService(Intent(context, PhantomVpnService::class.java).apply {
+        action = PhantomVpnService.ACTION_SHOW_STATUS
+    })
 }
 
 @Composable
@@ -818,7 +853,7 @@ private fun LogScreen(onClose: () -> Unit) {
             IconButton(onClick = onClose) {
                 Text("←", fontSize = 22.sp, color = TextPrimary)
             }
-            Text("Лог (${FileLog.path()})", color = TextPrimary, fontSize = 15.sp)
+            Text(I18n.t("log_title", FileLog.path()), color = TextPrimary, fontSize = 15.sp)
         }
 
         Text(
@@ -843,7 +878,7 @@ private fun LogScreen(onClose: () -> Unit) {
             colors = ButtonDefaults.buttonColors(containerColor = AccentLavender, contentColor = BgDeep),
             modifier = Modifier.fillMaxWidth(),
         ) {
-            Text("Поделиться")
+            Text(I18n.t("share"))
         }
     }
 }
