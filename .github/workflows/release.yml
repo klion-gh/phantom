@@ -9,7 +9,7 @@ permissions:
   contents: write
 
 jobs:
-  build:
+  server:
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -20,6 +20,9 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: "1.26"
+
+      - name: Run tests
+        run: go test ./internal/... ./cmd/...
 
       - name: Build phantom-server
         env:
@@ -41,14 +44,156 @@ jobs:
             phantom-keygen-linux-${{ matrix.arch }}
           retention-days: 1
 
+  # The Windows client, built the same way the README documents (wails build).
+  # Its updater looks for an asset named exactly "phantom.exe" in the latest
+  # release, so the artifact name is not cosmetic.
+  windows-client:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Install Wails
+        run: go install github.com/wailsapp/wails/v2/cmd/wails@v2.12.0
+
+      - name: Build phantom.exe
+        working-directory: windows
+        run: wails build -platform windows/amd64
+
+      - name: Check the version the updater will compare against
+        shell: bash
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          got=$(grep -oE '"[0-9]+\.[0-9]+\.[0-9]+"' windows/version.go | tr -d '"')
+          echo "tag=$tag AppVersion=$got"
+          if [ "$tag" != "$got" ]; then
+            echo "::error::windows/version.go AppVersion ($got) does not match the tag ($tag);"\
+                 "the updater compares these, so a mismatch means clients either never update"\
+                 "or update in a loop"
+            exit 1
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-client
+          path: windows/build/bin/phantom.exe
+          retention-days: 1
+
+  # The Android client. Two things make this heavier than the others: the Go core
+  # has to be cross-compiled into an .aar via gomobile first (android/app/libs is
+  # gitignored, so it doesn't exist in a fresh checkout), and the APK must be
+  # signed with the *same* key as previous releases or Android refuses to install
+  # it as an update. The signing material therefore comes from repository secrets
+  # rather than the gitignored android/keystore.properties.
+  android-client:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26"
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - uses: android-actions/setup-android@v3
+
+      - name: Install NDK
+        run: sdkmanager --install "ndk;26.1.10909125" "platforms;android-34" "build-tools;34.0.0"
+
+      - name: Build the Go core (mobile.aar)
+        env:
+          ANDROID_NDK_HOME: ${{ env.ANDROID_SDK_ROOT }}/ndk/26.1.10909125
+        run: |
+          go install golang.org/x/mobile/cmd/gomobile@latest
+          go install golang.org/x/mobile/cmd/gobind@latest
+          gomobile init
+          gomobile bind -target=android -androidapi 24 -o android/app/libs/mobile.aar ./mobile
+
+      - name: Check the version the updater will compare against
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          got=$(grep -oE 'versionName = "[0-9]+\.[0-9]+\.[0-9]+"' android/app/build.gradle.kts | grep -oE '[0-9]+\.[0-9]+\.[0-9]+')
+          echo "tag=$tag versionName=$got"
+          if [ "$tag" != "$got" ]; then
+            echo "::error::android versionName ($got) does not match the tag ($tag); UpdateChecker compares these"
+            exit 1
+          fi
+
+      - name: Restore the release signing key
+        env:
+          KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          STORE_PASSWORD: ${{ secrets.ANDROID_STORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          if [ -z "$KEYSTORE_BASE64" ]; then
+            echo "::error::ANDROID_KEYSTORE_BASE64 secret is not set. Without the original"\
+                 "signing key the APK cannot install over an existing one, so publishing it"\
+                 "would strand every current user on the old version."
+            exit 1
+          fi
+          echo "$KEYSTORE_BASE64" | base64 -d > android/phantom-release.keystore
+          cat > android/keystore.properties <<EOF
+          storeFile=phantom-release.keystore
+          storePassword=$STORE_PASSWORD
+          keyAlias=$KEY_ALIAS
+          keyPassword=$KEY_PASSWORD
+          EOF
+
+      - name: Build phantom.apk
+        working-directory: android
+        run: ./gradlew --no-daemon assembleRelease
+
+      - name: Verify the APK really is signed
+        run: |
+          apk=android/app/build/outputs/apk/release/app-release.apk
+          "$ANDROID_SDK_ROOT"/build-tools/34.0.0/apksigner verify --print-certs "$apk"
+          cp "$apk" phantom.apk
+
+      - name: Wipe the signing material
+        if: always()
+        run: rm -f android/phantom-release.keystore android/keystore.properties
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: android-client
+          path: phantom.apk
+          retention-days: 1
+
+  # Depends on every build job on purpose. A release carrying the server binaries
+  # but not phantom.exe/phantom.apk is the one genuinely dangerous outcome: the
+  # clients' updaters would see a newer tag, find no asset they recognise, and
+  # stay on the old version - while an operator, seeing a published release,
+  # upgrades the server. With a wire-format change that strands every user. If any
+  # client fails to build, nothing is published at all.
   release:
-    needs: build
+    needs: [server, windows-client, android-client]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4
         with:
           path: dist
           merge-multiple: true
+
+      - name: Fail if a client artifact is missing
+        run: |
+          missing=0
+          for f in phantom.exe phantom.apk phantom-server-linux-amd64 phantom-server-linux-arm64; do
+            if [ ! -f "dist/$f" ]; then echo "::error::dist/$f is missing"; missing=1; fi
+          done
+          [ "$missing" = 0 ]
+          ls -la dist/
 
       - name: Release
         uses: softprops/action-gh-release@v2
