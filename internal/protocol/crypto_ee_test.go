@@ -67,21 +67,36 @@ func TestDeriveInnerKeyEE(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if keyFromClient != keyFromServer {
-		t.Error("client and server derived different ephemeral-ephemeral InnerKeys")
+	if !bytes.Equal(keyFromClient, keyFromServer) {
+		t.Error("client and server derived different ephemeral-ephemeral tunnel keys")
 	}
 
-	staticCrypto, err := DeriveSessionKeys(es, psk, clientPub, serverStaticPub)
+	staticCrypto, err := DeriveSessionKeys(es, psk, clientPub, serverStaticPub, RoleClient)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if keyFromClient == staticCrypto.InnerKey {
-		t.Error("ephemeral-ephemeral InnerKey equals the static-only InnerKey - ee not mixed in")
+
+	// Mixing ee in has to actually change the key. Compared through the
+	// directional split both sides really use: install the ee base key on a
+	// client-role copy and check its send key differs from the static-only one.
+	eeCrypto, err := DeriveSessionKeys(es, psk, clientPub, serverStaticPub, RoleClient)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := eeCrypto.SetInnerKey(keyFromClient, RoleClient); err != nil {
+		t.Fatal(err)
+	}
+	if eeCrypto.SendKey == staticCrypto.SendKey {
+		t.Error("ephemeral-ephemeral key equals the static-only key - ee not mixed in")
 	}
 
-	// The auth key is derived from es only and must be identical regardless of
-	// the ephemeral-ephemeral step (that's what keeps auth interop-compatible).
-	staticCrypto2, err := DeriveSessionKeys(es, psk, clientPub, serverStaticPub)
+	// The auth key is derived from es only and must not move when the
+	// ephemeral-ephemeral step installs a new tunnel key.
+	if eeCrypto.AuthKey != staticCrypto.AuthKey {
+		t.Error("AuthKey changed across the ephemeral-ephemeral upgrade")
+	}
+
+	staticCrypto2, err := DeriveSessionKeys(es, psk, clientPub, serverStaticPub, RoleClient)
 	if err != nil {
 		t.Fatal(err)
 	}

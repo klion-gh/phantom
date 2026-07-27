@@ -5,10 +5,15 @@
 // log.Printf directly, so an operator can quiet routine per-connection chatter
 // down to warnings/errors, or turn it up to debug when diagnosing.
 //
-// Deliberately narrow: client-shared internal packages (the multiplexer,
-// connpool, etc.) still log unconditionally via the standard log package -
-// only server-side code that repeats per connection was moved over, to keep
-// the change small and avoid touching the mobile/Windows log paths.
+// Anything that names a connection's *destination* must log through here at
+// Debug and never at Info. On the server those lines amounted to a per-user
+// browsing history in the journal, unconditionally and with no way to switch it
+// off; the level default (Info) now means an untouched config records no
+// destinations at all. See the note in internal/proxy/direct.go.
+//
+// Still deliberately narrow otherwise: connpool and the platform clients keep
+// logging unconditionally via the standard log package, since their output lands
+// on the user's own device rather than on shared infrastructure.
 package logx
 
 import (

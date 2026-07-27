@@ -148,7 +148,7 @@ Frame types:
 | Value | Name | Used for |
 |-------|------|----------|
 | 0x00 | `FrameData`    | Stream payload (encrypted + padded) |
-| 0x01 | `FrameOpen`    | Open a new logical stream; payload = target `"host:port"` |
+| 0x01 | `FrameOpen`    | Open a new logical stream; payload = target `"host:port"` (**encrypted + padded** since wire v2) |
 | 0x02 | `FrameClose`   | Close a logical stream |
 | 0x03 | `FramePing`    | Keepalive; echoed back verbatim |
 | 0x04 | `FrameSettings`| Received and ignored - vestigial, no sender ever emits it |
@@ -156,9 +156,32 @@ Frame types:
 
 Flags: only `FlagUDP = 0x04` (marks a stream as UDP-relay rather than TCP-relay, see §7).
 
+`FrameType.IsEncrypted()` decides which payloads are sealed: `FrameData` and
+`FrameOpen`. The rest carry nothing worth hiding (`FrameClose`/`FrameSettings` are
+empty, `FramePing` is a fixed token, `FramePadding` is random by definition).
+
+Payload length is capped at three levels so it can never wrap the 16-bit length
+field (`MaxFramePayload`): `Encode` refuses an oversized payload outright,
+`PadPlaintext` refuses a plaintext past `MaxDataPlaintext` (65493 = 65535 − 2 − 24 −
+16), and `Stream.Write` splits byte streams at `DataChunkSize` (61438, the largest
+plaintext padding can still fully cover). A UDP datagram can't be split without
+destroying its boundary, so one larger than `MaxDataPlaintext` is dropped with
+`tunnel.ErrDatagramTooLarge` - the same thing a real network does to a packet that
+doesn't fit - rather than tearing the flow down.
+
+### 4.1a Additional authenticated data
+
+Each sealed frame is bound to its header via `FrameAAD(type, flags, streamID)` - a
+4-byte AAD covering every header field except the length, which is only known
+after sealing. Earlier only the stream id was covered, leaving type and flags
+unauthenticated: an attacker able to modify the byte stream could flip `FlagUDP`
+or relabel an `OPEN` as a `DATA` and the AEAD would still verify. The outer TLS
+makes that unreachable in practice; this closes it at the layer that claims to
+authenticate the frame.
+
 ### 4.2 Padding
 
-`PadPlaintext`/`UnpadPlaintext` wrap every `FrameData` plaintext as
+`PadPlaintext`/`UnpadPlaintext` wrap every encrypted frame's plaintext as
 `[2-byte real length][real payload][random padding]`. The padded size is a **bucket
 floor plus a random jitter** (`chooseSize`): first rounded up to the nearest of
 `BucketSizes = []int{256, 512, 1024, 2048, 4096}` (or, past 4096, the next multiple of
@@ -175,9 +198,27 @@ plus AEAD overhead still fits one frame's 16-bit length field.
 
 This is applied *inside* `SessionCrypto.EncryptFrame`/`DecryptFrame`
 (`internal/protocol/crypto.go`), so it's transparent to the multiplexer and every
-caller - and it's wire-compatible in both directions with no versioning, since the
-receiver reads the real length from the 2-byte prefix and ignores however much padding
-the sender chose to add.
+caller - the receiver reads the real length from the 2-byte prefix and ignores however
+much padding the sender chose to add.
+
+### 4.2a Directional keys and the wire version
+
+`SetInnerKey` splits the tunnel key into two independent directional keys
+(`Phantom-inner-c2s` / `Phantom-inner-s2c`) and assigns them by `Role`: what one side
+sends with is what the other receives with. Previously a single `InnerKey` served both
+directions with each side counting from zero over it - safe in practice only because 16
+of XChaCha20's 24 nonce bytes are random, and it left no room to ever reject a replayed
+frame, since a frame from either direction decrypted fine in the other. Separate keys
+also make reflection structurally impossible.
+
+`protocol.WireVersion` (currently **2**) is mixed into the handshake's auth tag
+(§5.3), so two peers on different versions simply fail to authenticate and the
+connection lands on the decoy site. That is the version gate: it costs no extra bytes
+or cookies on the wire, so it doesn't alter the request's shape, and a mismatch fails
+as an ordinary rejected probe rather than as two ends agreeing on keys and then
+disagreeing about how to parse frames. **v2 is not interoperable with v1** - it changed
+the encrypted-frame set, the AAD, the key schedule, and made the ephemeral-ephemeral
+exchange mandatory, all at once.
 
 ### 4.3 No in-band authentication
 
@@ -207,25 +248,27 @@ This is the actual security core of the project.
   connection** (including every `Ping`) and computes
   `ecdhSecret = X25519(clientEphemeralPriv, serverStaticPub)`. The server computes the
   same value the other way: `X25519(serverStaticPriv, clientEphemeralPub)`.
-- `protocol.DeriveSessionKeys(ecdhSecret, psk, clientEphemeralPub, serverStaticPub)`
+- `protocol.DeriveSessionKeys(ecdhSecret, psk, clientEphemeralPub, serverStaticPub, role)`
   (`internal/protocol/crypto.go`) mixes the ECDH secret **and** a long-term PSK **and**
-  both public keys through HKDF-SHA256 to produce `InnerKey` (frame encryption) and
-  `AuthKey` (the handshake proof HMAC - §5.2/§5.3).
+  both public keys through HKDF-SHA256 to produce the tunnel keys (frame encryption, split
+  per direction - §4.2a) and `AuthKey` (the handshake proof HMAC - §5.2/§5.3).
 - **Forward secrecy**: because `ecdhSecret` is different on every connection, compromising
   the long-term PSK alone is not enough to decrypt a previously captured session.
-- **Full forward secrecy (ephemeral-ephemeral upgrade)**: the `es = clientEphemeral x
-  serverStatic` secret above still *authenticates* the client and is the basis for the
-  key when talking to an older peer, but by itself it leaves the semi-static caveat that
-  Reality also has - if the *server's* long-term private key is later compromised and the
-  traffic was recorded, past sessions become computable. To close that, the server also
-  generates a **per-connection ephemeral keypair** and both sides mix
-  `ee = clientEphemeral x serverEphemeral` into the tunnel encryption key
-  (`protocol.DeriveInnerKeyEE`, a distinct HKDF label from the static-only `InnerKey`).
-  Now decrypting a recorded session needs one of the two *ephemeral* private keys, which
-  neither side ever persists - a later compromise of the server's static key no longer
-  suffices. Only the `InnerKey` changes; `AuthKey` stays `es`-derived, which is what keeps
-  authentication (and interop) unchanged. See §5.2a for the wire mechanism and its
-  backward compatibility.
+- **Full forward secrecy (ephemeral-ephemeral, mandatory since wire v2)**: the
+  `es = clientEphemeral x serverStatic` secret above *authenticates* the client, but by
+  itself it leaves the semi-static caveat that Reality also has - if the *server's*
+  long-term private key is later compromised and the traffic was recorded, past sessions
+  become computable. To close that, the server **always** generates a per-connection
+  ephemeral keypair and both sides mix `ee = clientEphemeral x serverEphemeral` into the
+  tunnel key (`protocol.DeriveInnerKeyEE`, a distinct HKDF label). Decrypting a recorded
+  session then needs one of the two *ephemeral* private keys, which neither side ever
+  persists - a later compromise of the server's static key no longer suffices.
+  `AuthKey` stays `es`-derived and does not move across the upgrade.
+
+  In v1 this was *negotiated* via a capability cookie, so a peer that simply omitted it
+  got the weaker semi-static key. v2 removes the negotiation and the fallback: the client
+  **refuses** a server that sends no ephemeral key (`ErrAuthFailed`), and the server
+  always sends one. There is no longer a downgrade to be talked into. See §5.2a.
 
 ### 5.2 Disguise shape
 
@@ -261,37 +304,37 @@ Sec-WebSocket-Accept: <correctly computed per RFC 6455>
 protocol-correct HTTP/1.1 WebSocket-upgrade messages; nothing about their *shape*
 betrays the tunnel.
 
-### 5.2a Ephemeral-ephemeral upgrade on the wire (backward-compatible)
+### 5.2a Ephemeral-ephemeral exchange on the wire (mandatory since v2)
 
-The full-forward-secrecy step (§5.1) is negotiated inside the same request/response,
-entirely backward-compatibly in both directions:
+The full-forward-secrecy step (§5.1) rides inside the same request/response:
 
-- The client adds a **second cookie** whose *presence* (not value - it's random) signals
-  it supports the upgrade: `Cookie: session=<...>; csrf=<random base64url>`. `session +
-  csrf` is one of the most common cookie pairs on the web, so it adds no distinctive
-  shape, and the random value means it's not a constant tell.
-- A server that supports it generates its ephemeral keypair, derives the
-  ephemeral-ephemeral `InnerKey`, and returns its ephemeral public key in a
+- The server generates its ephemeral keypair unconditionally, derives the
+  ephemeral-ephemeral tunnel key, and returns its ephemeral public key in a
   **`Set-Cookie`** header on the 101 response
   (`Set-Cookie: sid=<base64url(serverEphemeralPub)>; Path=/; HttpOnly`). The client reads
-  it back (`readServerEphPub`) and derives the matching key.
-- **All four old/new combinations interoperate** (verified by
-  `TestHandshakeEE_NewClientOldServer` / `TestHandshakeEE_OldClientNewServer`): an old
-  server ignores the `csrf` cookie and never sends `sid`, so a new client sees no server
-  ephemeral and falls back to the static-only key; an old client never sends `csrf`, so a
-  new server stays on the static-only key and sends no `sid`. Rollout order (clients vs
-  server) therefore doesn't matter. A network attacker can't force a downgrade either -
-  the whole exchange rides inside the real, server-authenticated outer TLS, so it can't be
-  read or modified without the server's certificate key; the worst a downgrade achieves is
-  the *current* (semi-static) security level, never weaker.
-- Minor tradeoff: a `Set-Cookie` on a 101 response is slightly less common than on an
-  ordinary page load (a returning visitor's cookies are usually already set), a small
+  it back (`readServerEphPub`) and derives the matching key; if it's absent the client
+  **fails with `ErrAuthFailed`** rather than continuing on a weaker key.
+- The client still sends a second cookie `csrf=<random base64url>`, but purely as
+  camouflage now that nothing needs signalling: `session + csrf` is one of the most
+  common cookie pairs on the web, so a lone `session` cookie would be the slightly more
+  distinctive shape. Its value stays random so it isn't a constant tell.
+- **v1 interop was removed deliberately.** In v1 the upgrade was negotiated and both
+  ends fell back to the static-only key when either didn't ask, which meant a peer that
+  simply omitted a cookie silently got weaker forward secrecy. The version gate (§4.2a,
+  §5.3) makes the mismatch explicit instead: a v1-shaped client fails the auth tag and is
+  served the decoy (`TestV1ClientIsRejectedToDecoy`), and a v2 client refuses a server
+  that sends no ephemeral key (`TestClientRefusesServerWithoutEphemeralKey`). Rollout
+  order therefore *does* matter now - clients and server must both be on v2, and mismatched
+  peers behave exactly like an unauthenticated stranger, i.e. they see a normal website.
+- Minor tradeoff, unchanged: a `Set-Cookie` on a 101 response is slightly less common than
+  on an ordinary page load (a returning visitor's cookies are usually already set), a small
   response-side fingerprint accepted in exchange for full forward secrecy.
 
 ### 5.3 Replay protection (channel binding)
 
-The HMAC tag is computed over `clientEphemeralPub || tlsExporterValue`, where
-`tlsExporterValue` comes from **TLS 1.3 exported keying material** (RFC 5705):
+The HMAC tag is computed over `clientEphemeralPub || tlsExporterValue || wireVersion`,
+where `tlsExporterValue` comes from **TLS 1.3 exported keying material** (RFC 5705)
+and `wireVersion` is the 2-byte `protocol.WireVersion` that gates the format (§4.2a):
 
 ```go
 state := conn.ConnectionState()
@@ -755,18 +798,31 @@ out to be platform-neutral.
 3. **No ICMP support** in either mobile tunnel (Android or Windows) — only TCP and UDP
    are registered with the gVisor stack (§9), so ping-through-the-tunnel doesn't work
    end-to-end on either app.
-4. **Semi-static ECDH — resolved via the ephemeral-ephemeral upgrade (§5.1/§5.2a).** New
-   client↔server pairs now mix an ephemeral-ephemeral secret into the tunnel key, so a
+4. **Semi-static ECDH — fully resolved in wire v2 (§5.1/§5.2a).** The
+   ephemeral-ephemeral secret is now mixed into the tunnel key unconditionally, so a
    future compromise of the server's long-term private key plus recorded traffic no longer
-   decrypts past sessions. The residual is only interop: when a new peer talks to an
-   *older* one (either direction) it transparently falls back to the static-only key,
-   which still has the original semi-static caveat until both ends are upgraded. The
-   ephemeral-ephemeral ECDH is classical X25519, so it does not address the separate
-   post-quantum gap in item 2.
+   decrypts past sessions. The interop residual is gone with the fallback itself: there is
+   no static-only path left for either side to end up on. The ephemeral-ephemeral ECDH is
+   classical X25519, so it does not address the separate post-quantum gap in item 2.
 5. **`FrameSettings`/`FramePadding` frame types are vestigial** — parsed and ignored,
    never emitted by any sender. Not a security risk (they're simply never triggered),
    but worth knowing about if extending the multiplexer later. (The v1 prototype's
    in-band `FrameAuth` path was removed outright in this rewrite — see §4.3.)
+   `FrameSettings` is the natural carrier for the flow-control credits item 9 needs.
+9. **No protocol-level flow control.** There is no per-stream window and no credit
+   frames, so a receiver cannot ask a sender to slow down for one stream in particular.
+   The multiplexer has a single `readLoop`, so a local reader that stops consuming used to
+   block *every* stream on that connection indefinitely. The interim mitigation
+   (`streamStallTimeout`, 5s) bounds that: transient stalls are absorbed as before, and a
+   reader still stuck after the timeout loses its own stream (`ErrStreamStalled`) instead
+   of freezing the others. Proper credit-based windowing is the remaining work — it needs
+   a wire change, so it belongs in the next version bump rather than a patch.
+10. **Stream ids are per-connection and finite.** One pooled connection carries every
+   stream for its lifetime, and the initiating side has 32768 ids (odd values; 0 is
+   reserved for session-level frames). `allocStreamID` now skips ids that are still live
+   rather than wrapping onto them, and returns `ErrStreamIDsExhausted` if all are in use —
+   which in practice would mean streams are being leaked, not that a real workload needs
+   more. Long-lived connections no longer risk splicing unrelated streams together.
 6. **Third-party geo-IP/flag lookup — removed.** The GUI apps used to resolve each
    server's country from its IP via a public geo-IP service (`ipwho.is`) and fetch a flag
    image from `flagcdn.com`, which leaked the *server's* IP to those services on a timer -

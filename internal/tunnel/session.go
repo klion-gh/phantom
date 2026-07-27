@@ -2,9 +2,9 @@ package tunnel
 
 import (
 	"context"
-	"log"
 	"time"
 
+	"phantom/internal/logx"
 	"phantom/internal/protocol"
 )
 
@@ -61,7 +61,7 @@ func (s *Session) HandleIncoming(ctx context.Context, handler func(stream *Strea
 			if s.mux.IsClosed() {
 				return
 			}
-			log.Printf("[session] accept error: %v", err)
+			logx.Warnf("[session] accept error: %v", err)
 			continue
 		}
 

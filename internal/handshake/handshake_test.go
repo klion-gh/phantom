@@ -58,7 +58,7 @@ func TestHandshakeRoundTrip(t *testing.T) {
 			done <- clientResult{err: err}
 			return
 		}
-		done <- clientResult{crypto: crypto.InnerKey[:]}
+		done <- clientResult{crypto: crypto.SendKey[:]}
 	}()
 
 	result, req, err := ServerHandshake(serverConn, psk, serverPriv, serverPub, fakeExporter(0x42))
@@ -77,8 +77,9 @@ func TestHandshakeRoundTrip(t *testing.T) {
 		t.Fatalf("ClientHandshake() error = %v", clientRes.err)
 	}
 
-	if !bytes.Equal(result.Crypto.InnerKey[:], clientRes.crypto) {
-		t.Error("client and server derived different InnerKeys for the same handshake")
+	// Crosswise: what the client sends with is what the server receives with.
+	if !bytes.Equal(result.Crypto.RecvKey[:], clientRes.crypto) {
+		t.Error("client's send key and server's receive key differ for the same handshake")
 	}
 }
 

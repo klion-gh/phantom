@@ -43,7 +43,11 @@ type ServerConfig struct {
 	// not dropped, so throttling stays invisible.
 	HandshakeRatePerSec float64 `yaml:"handshake_rate_per_sec"`
 	HandshakeBurst      float64 `yaml:"handshake_burst"`
-	LogLevel            string  `yaml:"log_level"` // debug|info|warn|error; controls internal/logx (server-side logging)
+	// debug|info|warn|error; controls internal/logx (server-side logging).
+	// Note that debug is the level that logs each stream's destination
+	// host:port - i.e. turning it on starts recording what users visit, which
+	// nothing else does. Leave it at info (the default) outside diagnosis.
+	LogLevel string `yaml:"log_level"`
 }
 
 func LoadClientConfig(path string) (*ClientConfig, error) {

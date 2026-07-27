@@ -13,6 +13,7 @@ package netstack
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -278,6 +279,11 @@ func (t *Tunnel) spliceUDP(local *gonet.UDPConn, remote io.ReadWriteCloser) {
 			break
 		}
 		if _, err := remote.Write(buf[:n]); err != nil {
+			// One oversized datagram is dropped, not fatal to the flow - the same
+			// thing a real network does to a packet that doesn't fit.
+			if errors.Is(err, tunnel.ErrDatagramTooLarge) {
+				continue
+			}
 			break
 		}
 		atomic.AddInt64(&t.bytesUp, int64(n))

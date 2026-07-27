@@ -9,6 +9,7 @@ import (
 	"os"
 	"sync"
 
+	"golang.org/x/crypto/acme"
 	"golang.org/x/crypto/acme/autocert"
 
 	"phantom/internal/handshake"
@@ -87,6 +88,20 @@ func ListenAndServe(ctx context.Context, cfg *TLSServerConfig, handler func(net.
 		}()
 
 		tlsConfig = certManager.TLSConfig()
+		// autocert's TLSConfig advertises h2 ahead of http/1.1, and Go's server
+		// picks by *server* preference - so every real-browser ClientHello (which
+		// offers h2, http/1.1) negotiated HTTP/2. Nothing here speaks HTTP/2: the
+		// disguised handshake sends an HTTP/1.1 upgrade request and the decoy site
+		// answers in plain HTTP/1.1 text. To a passive observer that's invisible,
+		// but to the one thing this whole design is meant to survive - an active
+		// prober simply opening https://domain/ in a browser or curl - the "real
+		// website" cover story collapsed into an HTTP/2 protocol error. Offering
+		// only http/1.1 keeps the decoy's answer valid for whatever asked.
+		//
+		// acme.ALPNProto stays in the list because autocert.Manager.GetCertificate
+		// answers tls-alpn-01 challenge probes itself (see the acme-tls/1 check in
+		// handleConnection); a client offering only that still gets it.
+		tlsConfig.NextProtos = []string{"http/1.1", acme.ALPNProto}
 	}
 
 	tlsConfig.MinVersion = tls.VersionTLS13
@@ -133,7 +148,16 @@ func newStaticCertConfig(certFile, keyFile string) (*tls.Config, error) {
 	if _, err := reloader.load(); err != nil {
 		return nil, err
 	}
-	return &tls.Config{GetCertificate: reloader.getCertificate}, nil
+	return &tls.Config{
+		GetCertificate: reloader.getCertificate,
+		// Answer ALPN explicitly rather than leaving it unset. With no NextProtos
+		// Go negotiates nothing at all, and a browser offering h2/http1.1 falls
+		// back to HTTP/1.1 on its own - which happens to work, but "server ignores
+		// ALPN entirely" is not what any real web server on a CA-signed domain
+		// looks like. Only http/1.1 for the same reason as the ACME path above:
+		// it's the one protocol the decoy can actually speak.
+		NextProtos: []string{"http/1.1"},
+	}, nil
 }
 
 type certReloader struct {
