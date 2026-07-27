@@ -4,6 +4,11 @@ on:
   push:
     tags:
       - "v*"
+  # Lets the whole build be exercised without publishing anything - useful before
+  # a release that clients auto-update into, and the only way to find out whether
+  # the Windows and Android jobs work without burning a tag on it. The release job
+  # below is gated on a tag, so a manual run builds and stops.
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -68,6 +73,8 @@ jobs:
         run: wails build -platform windows/amd64
 
       - name: Check the version the updater will compare against
+        # Only meaningful on a tag; on a manual run GITHUB_REF_NAME is a branch.
+        if: startsWith(github.ref, 'refs/tags/')
         shell: bash
         run: |
           tag="${GITHUB_REF_NAME#v}"
@@ -121,6 +128,7 @@ jobs:
           gomobile bind -target=android -androidapi 24 -o android/app/libs/mobile.aar ./mobile
 
       - name: Check the version the updater will compare against
+        if: startsWith(github.ref, 'refs/tags/')
         run: |
           tag="${GITHUB_REF_NAME#v}"
           got=$(grep -oE 'versionName = "[0-9]+\.[0-9]+\.[0-9]+"' android/app/build.gradle.kts | grep -oE '[0-9]+\.[0-9]+\.[0-9]+')
@@ -179,6 +187,7 @@ jobs:
   # client fails to build, nothing is published at all.
   release:
     needs: [server, windows-client, android-client]
+    if: startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4
