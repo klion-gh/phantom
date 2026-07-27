@@ -74,7 +74,24 @@ func main() {
 	log.Printf("[client] SOCKS5 on %s", cfg.Listen)
 	log.Printf("[client] HTTP   on %s", httpAddr)
 
+	// Let both proxies pull a fresh session when the one they were handed dies.
+	// Without this the desktop client never recovered from a dropped connection:
+	// the session captured above was the only one it would ever use, so a brief
+	// Wi-Fi blip or a server restart meant every subsequent request failed for
+	// the rest of the process's life and the user had to restart the proxy by
+	// hand - even though the ConnPool underneath had already redialed
+	// successfully. The Android bridge (mobile/mobile.go) and the Windows client
+	// (windows/proxymanager.go) both did this; only this client didn't.
+	refresh := func() (*tunnel.Session, error) {
+		freshMux, err := pool.Get(ctx)
+		if err != nil {
+			return nil, err
+		}
+		return tunnel.NewSessionFromMux(freshMux), nil
+	}
+
 	httpProxy := proxy.NewHTTPProxyServer(httpAddr, session)
+	httpProxy.SetSessionRefresher(refresh)
 	go func() {
 		if err := httpProxy.Start(); err != nil {
 			log.Fatalf("HTTP proxy error: %v", err)
@@ -82,6 +99,7 @@ func main() {
 	}()
 
 	socks5 := proxy.NewSOCKS5Server(cfg.Listen, session)
+	socks5.SetSessionRefresher(refresh)
 	if err := socks5.Start(); err != nil {
 		log.Fatalf("SOCKS5 server error: %v", err)
 	}

@@ -7,13 +7,19 @@ import (
 	"net"
 	"net/http"
 	"strings"
+	"sync"
+	"time"
 
 	"phantom/internal/tunnel"
 )
 
 type HTTPProxyServer struct {
-	addr    string
-	session *tunnel.Session
+	addr string
+
+	sessionMu          sync.Mutex
+	session            *tunnel.Session
+	refreshSession     func() (*tunnel.Session, error)
+	lastRefreshAttempt time.Time
 }
 
 func NewHTTPProxyServer(addr string, session *tunnel.Session) *HTTPProxyServer {
@@ -21,6 +27,43 @@ func NewHTTPProxyServer(addr string, session *tunnel.Session) *HTTPProxyServer {
 		addr:    addr,
 		session: session,
 	}
+}
+
+// SetSessionRefresher is the HTTP proxy's copy of SOCKS5Server.SetSessionRefresher,
+// which see. Until this existed the CONNECT proxy had no recovery path at all on
+// any platform: it captured one *tunnel.Session at construction and held it
+// forever, so the first time that connection died every request answered 502 for
+// the rest of the process's life - even though the underlying ConnPool had
+// already redialed a healthy replacement.
+func (s *HTTPProxyServer) SetSessionRefresher(fn func() (*tunnel.Session, error)) {
+	s.sessionMu.Lock()
+	s.refreshSession = fn
+	s.sessionMu.Unlock()
+}
+
+// currentSession returns the proxy's session, transparently replacing a dead one.
+// Mirrors SOCKS5Server.currentSession, including the cooldown that keeps a
+// prolonged outage from turning every request into its own redial attempt.
+func (s *HTTPProxyServer) currentSession() *tunnel.Session {
+	s.sessionMu.Lock()
+	defer s.sessionMu.Unlock()
+
+	if s.session != nil && s.session.IsAlive() {
+		return s.session
+	}
+	if s.refreshSession == nil || time.Since(s.lastRefreshAttempt) < sessionRefreshCooldown {
+		return s.session
+	}
+
+	s.lastRefreshAttempt = time.Now()
+	fresh, err := s.refreshSession()
+	if err != nil {
+		log.Printf("[http-proxy] session refresh failed: %v", err)
+		return s.session
+	}
+	log.Printf("[http-proxy] recovered with a fresh session after the previous one died")
+	s.session = fresh
+	return s.session
 }
 
 func (s *HTTPProxyServer) Start() error {
@@ -64,7 +107,7 @@ func (s *HTTPProxyServer) handleConnect(conn net.Conn, req *http.Request) {
 		target = target + ":443"
 	}
 
-	stream, err := s.session.Open(target)
+	stream, err := s.currentSession().Open(target)
 	if err != nil {
 		fmt.Fprintf(conn, "HTTP/1.1 502 Bad Gateway\r\n\r\n")
 		return
@@ -82,7 +125,7 @@ func (s *HTTPProxyServer) handleHTTP(conn net.Conn, req *http.Request) {
 		host = host + ":80"
 	}
 
-	stream, err := s.session.Open(host)
+	stream, err := s.currentSession().Open(host)
 	if err != nil {
 		fmt.Fprintf(conn, "HTTP/1.1 502 Bad Gateway\r\n\r\n")
 		return
