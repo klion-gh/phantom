@@ -6,14 +6,46 @@ on:
       - "v*"
   # Lets the whole build be exercised without publishing anything - useful before
   # a release that clients auto-update into, and the only way to find out whether
-  # the Windows and Android jobs work without burning a tag on it. The release job
-  # below is gated on a tag, so a manual run builds and stops.
+  # the Windows job works without burning a tag on it. The release job below is
+  # gated on a tag, so a manual run builds and stops.
   workflow_dispatch:
 
 permissions:
   contents: write
 
 jobs:
+  # Cheap and first: the updaters compare these against the release tag, so a
+  # forgotten bump means clients either never update or update in a loop. Worth
+  # catching before anyone builds anything - including before the operator builds
+  # the APK locally.
+  versions:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check every version declaration matches the tag
+        run: |
+          if [ "${GITHUB_REF_TYPE}" != "tag" ]; then
+            echo "Not a tag build - nothing to compare against."
+            exit 0
+          fi
+          tag="${GITHUB_REF_NAME#v}"
+          fail=0
+
+          win=$(grep -oE 'AppVersion = "[0-9]+\.[0-9]+\.[0-9]+"' windows/version.go | grep -oE '[0-9]+\.[0-9]+\.[0-9]+')
+          wails=$(grep -oE '"productVersion": "[0-9]+\.[0-9]+\.[0-9]+"' windows/wails.json | grep -oE '[0-9]+\.[0-9]+\.[0-9]+')
+          andr=$(grep -oE 'versionName = "[0-9]+\.[0-9]+\.[0-9]+"' android/app/build.gradle.kts | grep -oE '[0-9]+\.[0-9]+\.[0-9]+')
+
+          for pair in "windows/version.go:$win" "windows/wails.json:$wails" "android/app/build.gradle.kts:$andr"; do
+            file="${pair%%:*}"; got="${pair##*:}"
+            if [ "$got" != "$tag" ]; then
+              echo "::error file=$file::version $got does not match tag $tag"
+              fail=1
+            fi
+          done
+          [ "$fail" = 0 ] && echo "all three match $tag"
+          exit $fail
+
   server:
     runs-on: ubuntu-latest
     strategy:
@@ -49,9 +81,9 @@ jobs:
             phantom-keygen-linux-${{ matrix.arch }}
           retention-days: 1
 
-  # The Windows client, built the same way the README documents (wails build).
-  # Its updater looks for an asset named exactly "phantom.exe" in the latest
-  # release, so the artifact name is not cosmetic.
+  # The Windows client, built the way the README documents. Its updater looks for
+  # an asset named exactly "phantom.exe" in the latest release, so the artifact
+  # name is not cosmetic.
   windows-client:
     runs-on: windows-latest
     steps:
@@ -72,125 +104,23 @@ jobs:
         working-directory: windows
         run: wails build -platform windows/amd64
 
-      - name: Check the version the updater will compare against
-        # Only meaningful on a tag; on a manual run GITHUB_REF_NAME is a branch.
-        if: startsWith(github.ref, 'refs/tags/')
-        shell: bash
-        run: |
-          tag="${GITHUB_REF_NAME#v}"
-          got=$(grep -oE '"[0-9]+\.[0-9]+\.[0-9]+"' windows/version.go | tr -d '"')
-          echo "tag=$tag AppVersion=$got"
-          if [ "$tag" != "$got" ]; then
-            echo "::error::windows/version.go AppVersion ($got) does not match the tag ($tag);"\
-                 "the updater compares these, so a mismatch means clients either never update"\
-                 "or update in a loop"
-            exit 1
-          fi
-
       - uses: actions/upload-artifact@v4
         with:
           name: windows-client
           path: windows/build/bin/phantom.exe
           retention-days: 1
 
-  # The Android client. Two things make this heavier than the others: the Go core
-  # has to be cross-compiled into an .aar via gomobile first (android/app/libs is
-  # gitignored, so it doesn't exist in a fresh checkout), and the APK must be
-  # signed with the *same* key as previous releases or Android refuses to install
-  # it as an update. The signing material therefore comes from repository secrets
-  # rather than the gitignored android/keystore.properties.
-  android-client:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-go@v5
-        with:
-          go-version: "1.26"
-
-      - uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: "17"
-
-      - uses: android-actions/setup-android@v3
-
-      - name: Install NDK
-        run: sdkmanager --install "ndk;26.1.10909125" "platforms;android-34" "build-tools;34.0.0"
-
-      - name: Build the Go core (mobile.aar)
-        env:
-          ANDROID_NDK_HOME: ${{ env.ANDROID_SDK_ROOT }}/ndk/26.1.10909125
-        run: |
-          # Pinned to the same x/mobile revision go.mod already resolves, rather
-          # than @latest: this is the combination known to produce a working
-          # mobile.aar locally (with NDK 26.1.10909125 above), and a drifting
-          # toolchain is not something to discover on a release tag.
-          go install golang.org/x/mobile/cmd/gomobile@v0.0.0-20260611195102-4dd8f1dbf5d2
-          go install golang.org/x/mobile/cmd/gobind@v0.0.0-20260611195102-4dd8f1dbf5d2
-          gomobile init
-          gomobile bind -target=android -androidapi 24 -o android/app/libs/mobile.aar ./mobile
-
-      - name: Check the version the updater will compare against
-        if: startsWith(github.ref, 'refs/tags/')
-        run: |
-          tag="${GITHUB_REF_NAME#v}"
-          got=$(grep -oE 'versionName = "[0-9]+\.[0-9]+\.[0-9]+"' android/app/build.gradle.kts | grep -oE '[0-9]+\.[0-9]+\.[0-9]+')
-          echo "tag=$tag versionName=$got"
-          if [ "$tag" != "$got" ]; then
-            echo "::error::android versionName ($got) does not match the tag ($tag); UpdateChecker compares these"
-            exit 1
-          fi
-
-      - name: Restore the release signing key
-        env:
-          KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
-          STORE_PASSWORD: ${{ secrets.ANDROID_STORE_PASSWORD }}
-          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
-          KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
-        run: |
-          if [ -z "$KEYSTORE_BASE64" ]; then
-            echo "::error::ANDROID_KEYSTORE_BASE64 secret is not set. Without the original"\
-                 "signing key the APK cannot install over an existing one, so publishing it"\
-                 "would strand every current user on the old version."
-            exit 1
-          fi
-          echo "$KEYSTORE_BASE64" | base64 -d > android/phantom-release.keystore
-          cat > android/keystore.properties <<EOF
-          storeFile=phantom-release.keystore
-          storePassword=$STORE_PASSWORD
-          keyAlias=$KEY_ALIAS
-          keyPassword=$KEY_PASSWORD
-          EOF
-
-      - name: Build phantom.apk
-        working-directory: android
-        run: ./gradlew --no-daemon assembleRelease
-
-      - name: Verify the APK really is signed
-        run: |
-          apk=android/app/build/outputs/apk/release/app-release.apk
-          "$ANDROID_SDK_ROOT"/build-tools/34.0.0/apksigner verify --print-certs "$apk"
-          cp "$apk" phantom.apk
-
-      - name: Wipe the signing material
-        if: always()
-        run: rm -f android/phantom-release.keystore android/keystore.properties
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: android-client
-          path: phantom.apk
-          retention-days: 1
-
-  # Depends on every build job on purpose. A release carrying the server binaries
-  # but not phantom.exe/phantom.apk is the one genuinely dangerous outcome: the
-  # clients' updaters would see a newer tag, find no asset they recognise, and
-  # stay on the old version - while an operator, seeing a published release,
-  # upgrades the server. With a wire-format change that strands every user. If any
-  # client fails to build, nothing is published at all.
+  # Publishes a DRAFT. Android's signing key deliberately never enters CI - it
+  # cannot be rotated without stranding every existing install, so it stays on the
+  # operator's machine and the APK keeps being built there, as it always has been.
+  #
+  # A draft is invisible to GitHub's /releases/latest endpoint, which is exactly
+  # what both client updaters query. So the dangerous state - a published release
+  # whose assets the clients can't use, prompting a server upgrade that then
+  # strands everyone - cannot occur: until the operator attaches phantom.apk and
+  # presses Publish, no client sees anything at all.
   release:
-    needs: [server, windows-client, android-client]
+    needs: [versions, server, windows-client]
     if: startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
     steps:
@@ -199,17 +129,25 @@ jobs:
           path: dist
           merge-multiple: true
 
-      - name: Fail if a client artifact is missing
+      - name: Fail if anything CI is responsible for is missing
         run: |
           missing=0
-          for f in phantom.exe phantom.apk phantom-server-linux-amd64 phantom-server-linux-arm64; do
+          for f in phantom.exe phantom-server-linux-amd64 phantom-server-linux-arm64 \
+                   phantom-keygen-linux-amd64 phantom-keygen-linux-arm64; do
             if [ ! -f "dist/$f" ]; then echo "::error::dist/$f is missing"; missing=1; fi
           done
           [ "$missing" = 0 ]
           ls -la dist/
 
-      - name: Release
+      - name: Draft release
         uses: softprops/action-gh-release@v2
         with:
           files: dist/*
+          draft: true
           generate_release_notes: true
+          append_body: true
+          body: |
+            > **This release is a draft.** Attach `phantom.apk` (built locally -
+            > the signing key is deliberately not in CI) and then press Publish.
+            > Until it is published, no client's updater can see it, which is what
+            > keeps a half-complete release from reaching anyone.
