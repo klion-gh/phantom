@@ -122,8 +122,12 @@ jobs:
         env:
           ANDROID_NDK_HOME: ${{ env.ANDROID_SDK_ROOT }}/ndk/26.1.10909125
         run: |
-          go install golang.org/x/mobile/cmd/gomobile@latest
-          go install golang.org/x/mobile/cmd/gobind@latest
+          # Pinned to the same x/mobile revision go.mod already resolves, rather
+          # than @latest: this is the combination known to produce a working
+          # mobile.aar locally (with NDK 26.1.10909125 above), and a drifting
+          # toolchain is not something to discover on a release tag.
+          go install golang.org/x/mobile/cmd/gomobile@v0.0.0-20260611195102-4dd8f1dbf5d2
+          go install golang.org/x/mobile/cmd/gobind@v0.0.0-20260611195102-4dd8f1dbf5d2
           gomobile init
           gomobile bind -target=android -androidapi 24 -o android/app/libs/mobile.aar ./mobile
 
