@@ -85,7 +85,12 @@ func main() {
 		session := tunnel.NewSessionFromMux(mux)
 		defer session.Close()
 
-		log.Printf("[server] new session established")
+		// Through logx so log_level actually governs it. It used to bypass the
+		// level filter entirely, which meant an operator who turned logging down
+		// still got one line per connection - and with the GUI clients' ~6s ping
+		// cadence that is thousands of lines a day per user, on the one machine
+		// where the less written down the better.
+		logx.Infof("[server] new session established")
 
 		session.HandleIncoming(ctx, func(stream *tunnel.Stream) {
 			direct.HandleStream(stream)

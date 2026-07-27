@@ -20,11 +20,14 @@ func makeTestPair(t *testing.T) (*Multiplexer, *Multiplexer) {
 	clientPub := []byte("client-ephemeral-pub-1234567890ab")
 	serverPub := []byte("server-static-pub-1234567890abcd")
 
-	crypto1, err := protocol.DeriveSessionKeys(ecdhSecret, psk, clientPub, serverPub)
+	// Opposite roles: since WireVersion 2 each direction has its own key, so a
+	// pair that both claimed the same role would fail to decrypt each other -
+	// m1 stands in for the client end, m2 for the server end.
+	crypto1, err := protocol.DeriveSessionKeys(ecdhSecret, psk, clientPub, serverPub, protocol.RoleClient)
 	if err != nil {
 		t.Fatal(err)
 	}
-	crypto2, err := protocol.DeriveSessionKeys(ecdhSecret, psk, clientPub, serverPub)
+	crypto2, err := protocol.DeriveSessionKeys(ecdhSecret, psk, clientPub, serverPub, protocol.RoleServer)
 	if err != nil {
 		t.Fatal(err)
 	}

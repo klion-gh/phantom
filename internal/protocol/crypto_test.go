@@ -11,18 +11,18 @@ func TestDeriveSessionKeys(t *testing.T) {
 	clientPub := []byte("client-ephemeral-pub-1234567890ab")
 	serverPub := []byte("server-static-pub-1234567890abcd")
 
-	keys1, err := DeriveSessionKeys(ecdh, psk, clientPub, serverPub)
+	keys1, err := DeriveSessionKeys(ecdh, psk, clientPub, serverPub, RoleClient)
 	if err != nil {
 		t.Fatalf("DeriveSessionKeys() error = %v", err)
 	}
 
-	keys2, err := DeriveSessionKeys(ecdh, psk, clientPub, serverPub)
+	keys2, err := DeriveSessionKeys(ecdh, psk, clientPub, serverPub, RoleClient)
 	if err != nil {
 		t.Fatalf("DeriveSessionKeys() error = %v", err)
 	}
 
-	if keys1.InnerKey != keys2.InnerKey {
-		t.Error("InnerKey should be deterministic given the same inputs")
+	if keys1.SendKey != keys2.SendKey || keys1.RecvKey != keys2.RecvKey {
+		t.Error("tunnel keys should be deterministic given the same inputs")
 	}
 	if keys1.AuthKey != keys2.AuthKey {
 		t.Error("AuthKey should be deterministic given the same inputs")
@@ -31,30 +31,97 @@ func TestDeriveSessionKeys(t *testing.T) {
 	// This is the crux of the forward-secrecy fix: a fresh ECDH shared secret
 	// (as produced by a fresh ephemeral key each connection) must change the
 	// derived key even when the long-term PSK is unchanged.
-	keys3, err := DeriveSessionKeys([]byte("different-ecdh-secret-abcdefghij"), psk, clientPub, serverPub)
+	keys3, err := DeriveSessionKeys([]byte("different-ecdh-secret-abcdefghij"), psk, clientPub, serverPub, RoleClient)
 	if err != nil {
 		t.Fatalf("DeriveSessionKeys() error = %v", err)
 	}
-	if keys1.InnerKey == keys3.InnerKey {
+	if keys1.SendKey == keys3.SendKey {
 		t.Error("different ECDH shared secrets must produce different keys even with the same PSK")
 	}
 
-	keys4, err := DeriveSessionKeys(ecdh, []byte("different-psk-bytes-abcdefghijkl"), clientPub, serverPub)
+	keys4, err := DeriveSessionKeys(ecdh, []byte("different-psk-bytes-abcdefghijkl"), clientPub, serverPub, RoleClient)
 	if err != nil {
 		t.Fatalf("DeriveSessionKeys() error = %v", err)
 	}
-	if keys1.InnerKey == keys4.InnerKey {
+	if keys1.SendKey == keys4.SendKey {
 		t.Error("different PSKs should produce different keys")
 	}
 }
 
-func TestEncryptDecryptFrame(t *testing.T) {
-	keys := testKeys(t)
+// TestDirectionalKeysMirror pins the directional key split: the two ends must
+// agree crosswise (what one sends, the other receives) and the two directions
+// must use genuinely different keys, so a frame can never be decrypted by a
+// reader on the same side that sent it.
+func TestDirectionalKeysMirror(t *testing.T) {
+	client, server := testPair(t)
 
-	header := []byte{0x00, 0x00, 0x01, 0x00, 0x00, 0x0B}
+	if client.SendKey != server.RecvKey {
+		t.Error("client's send key must equal the server's receive key")
+	}
+	if server.SendKey != client.RecvKey {
+		t.Error("server's send key must equal the client's receive key")
+	}
+	if client.SendKey == client.RecvKey {
+		t.Error("the two directions share one key - reflection is possible and per-direction replay checks impossible")
+	}
+}
+
+// TestFrameFromOneSideIsNotReadableBySameSide is the practical consequence: a
+// frame the client sealed must not open with the client's own receiving key.
+// Before the split both directions shared one key, so it would have.
+func TestFrameFromOneSideIsNotReadableBySameSide(t *testing.T) {
+	client, server := testPair(t)
+	aad := FrameAAD(FrameData, 0, 7)
+
+	sealed, err := client.EncryptFrame(aad, []byte("secret payload"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := client.DecryptFrame(aad, sealed); err == nil {
+		t.Fatal("a client-sent frame opened with the client's own receive key - directions are not separated")
+	}
+	if _, err := server.DecryptFrame(aad, sealed); err != nil {
+		t.Fatalf("the server could not open a client-sent frame: %v", err)
+	}
+}
+
+// TestAADCoversTypeAndFlags checks the widened additional data: relabelling a
+// frame's type or flipping its flags must break authentication, not pass
+// silently as it did when only the stream id was covered.
+func TestAADCoversTypeAndFlags(t *testing.T) {
+	client, server := testPair(t)
+
+	sealed, err := client.EncryptFrame(FrameAAD(FrameOpen, 0, 7), []byte("example.com:443"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, tc := range []struct {
+		name string
+		aad  []byte
+	}{
+		{"type relabelled OPEN->DATA", FrameAAD(FrameData, 0, 7)},
+		{"FlagUDP set", FrameAAD(FrameOpen, FlagUDP, 7)},
+		{"stream id changed", FrameAAD(FrameOpen, 0, 8)},
+	} {
+		if _, err := server.DecryptFrame(tc.aad, sealed); err == nil {
+			t.Errorf("%s: decryption succeeded, header field is not authenticated", tc.name)
+		}
+	}
+
+	if _, err := server.DecryptFrame(FrameAAD(FrameOpen, 0, 7), sealed); err != nil {
+		t.Fatalf("unmodified header failed to verify: %v", err)
+	}
+}
+
+func TestEncryptDecryptFrame(t *testing.T) {
+	client, server := testPair(t)
+
+	header := FrameAAD(FrameData, 0, 1)
 	plaintext := []byte("hello world")
 
-	ciphertext, err := keys.EncryptFrame(header, plaintext)
+	ciphertext, err := client.EncryptFrame(header, plaintext)
 	if err != nil {
 		t.Fatalf("EncryptFrame() error = %v", err)
 	}
@@ -63,7 +130,7 @@ func TestEncryptDecryptFrame(t *testing.T) {
 		t.Error("Ciphertext should differ from plaintext")
 	}
 
-	decrypted, err := keys.DecryptFrame(header, ciphertext)
+	decrypted, err := server.DecryptFrame(header, ciphertext)
 	if err != nil {
 		t.Fatalf("DecryptFrame() error = %v", err)
 	}
@@ -75,7 +142,7 @@ func TestEncryptDecryptFrame(t *testing.T) {
 
 func TestEncryptFramePadsRandomlyWithinBand(t *testing.T) {
 	keys := testKeys(t)
-	header := []byte{0x00, 0x00, 0x01, 0x00, 0x00, 0x0B}
+	header := FrameAAD(FrameData, 0, 1)
 
 	// Encrypted frame body = XChaCha20 nonce (24) + padded plaintext + Poly1305
 	// tag (16). A 1-byte and a 200-byte payload both land in the 256 bucket, so
@@ -110,7 +177,7 @@ func TestEncryptFramePadsRandomlyWithinBand(t *testing.T) {
 func TestEncryptFrameNonceIncrement(t *testing.T) {
 	keys := testKeys(t)
 
-	header := []byte{0x00, 0x00, 0x01, 0x00, 0x00, 0x0B}
+	header := FrameAAD(FrameData, 0, 1)
 	plaintext := []byte("hello world")
 
 	ct1, err := keys.EncryptFrame(header, plaintext)
@@ -129,34 +196,48 @@ func TestEncryptFrameNonceIncrement(t *testing.T) {
 }
 
 func TestDecryptFrameTampered(t *testing.T) {
-	keys := testKeys(t)
+	client, server := testPair(t)
 
-	header := []byte{0x00, 0x00, 0x01, 0x00, 0x00, 0x0B}
+	header := FrameAAD(FrameData, 0, 1)
 	plaintext := []byte("hello world")
 
-	ciphertext, err := keys.EncryptFrame(header, plaintext)
+	ciphertext, err := client.EncryptFrame(header, plaintext)
 	if err != nil {
 		t.Fatalf("EncryptFrame() error = %v", err)
 	}
 
 	ciphertext[len(ciphertext)-1] ^= 0xFF
 
-	_, err = keys.DecryptFrame(header, ciphertext)
+	_, err = server.DecryptFrame(header, ciphertext)
 	if err == nil {
 		t.Error("DecryptFrame() should fail on tampered ciphertext")
 	}
 }
 
+// testKeys is one end of a session, for tests that only seal.
 func testKeys(t *testing.T) *SessionCrypto {
 	t.Helper()
-	keys, err := DeriveSessionKeys(
-		[]byte("0123456789abcdef0123456789abcdef"),
-		[]byte("shared-psk-bytes-1234567890abcdef"),
-		[]byte("client-ephemeral-pub-1234567890ab"),
-		[]byte("server-static-pub-1234567890abcd"),
+	client, _ := testPair(t)
+	return client
+}
+
+// testPair builds both ends of one session. Sealing and opening now need
+// opposite roles, since each direction has its own key.
+func testPair(t *testing.T) (client, server *SessionCrypto) {
+	t.Helper()
+	const (
+		ecdh      = "0123456789abcdef0123456789abcdef"
+		psk       = "shared-psk-bytes-1234567890abcdef"
+		clientPub = "client-ephemeral-pub-1234567890ab"
+		serverPub = "server-static-pub-1234567890abcd"
 	)
+	client, err := DeriveSessionKeys([]byte(ecdh), []byte(psk), []byte(clientPub), []byte(serverPub), RoleClient)
 	if err != nil {
-		t.Fatalf("DeriveSessionKeys() error = %v", err)
+		t.Fatalf("DeriveSessionKeys(client) error = %v", err)
 	}
-	return keys
+	server, err = DeriveSessionKeys([]byte(ecdh), []byte(psk), []byte(clientPub), []byte(serverPub), RoleServer)
+	if err != nil {
+		t.Fatalf("DeriveSessionKeys(server) error = %v", err)
+	}
+	return client, server
 }
