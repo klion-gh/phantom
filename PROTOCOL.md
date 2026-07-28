@@ -150,7 +150,7 @@ Frame types:
 | 0x00 | `FrameData`    | Stream payload (encrypted + padded) |
 | 0x01 | `FrameOpen`    | Open a new logical stream; payload = target `"host:port"` (**encrypted + padded** since wire v2) |
 | 0x02 | `FrameClose`   | Close a logical stream |
-| 0x03 | `FramePing`    | Keepalive; echoed back verbatim |
+| 0x03 | `FramePing`    | Echoed back verbatim on receipt - but **nothing in this codebase sends one**, so there is no keepalive in practice (see item 11) |
 | 0x04 | `FrameSettings`| Received and ignored - vestigial, no sender ever emits it |
 | 0x05 | `FramePadding` | Received and ignored - vestigial, no sender ever emits it |
 
@@ -578,25 +578,60 @@ user is connected to it. `pingcheck.Ping(configYAML string) (Result, error)`:
 
 Returns `{IP, LatencyMs}`. `mobile.Ping` wraps this as a JSON string (gomobile-safe
 return type, same pattern as `Tunnel.Stats()`); the Windows `App.Ping` method does the
-same for its Wails binding. Both UIs poll this on a repeating timer (every ~6s) per
-saved config tile. The optional country label next to a tile comes straight from the
-config's own `country`/`country_code` fields (§8) - there is no network geo lookup; the
-apps contact only the user's own server (see §13.6).
+same for its Wails binding. Both UIs poll this per saved config tile on a **jittered**
+6-10s schedule - a flat interval put a perfectly periodic connection on the wire for as
+long as the app was open, which is exactly the shape traffic analysis looks for.
+
+### 9.2 Tile metadata (`internal/geoip`)
+
+A tile shows the server's IP and the country it sits in. Both are resolved **once per
+saved config and pinned** - a server does not move, so there is nothing to refresh.
+
+1. **Server IP** comes from a Ping to the operator's own server (§9.1).
+2. **Country and ISO code** are looked up from that IP via `internal/geoip`, unless the
+   config already names them.
+
+If either step fails it is retried with backoff (2s doubling to a 1-minute cap) until it
+succeeds, so a config added with no connectivity resolves itself later instead of showing
+a blank tile forever. Both apps also re-check on launch for anything still missing.
+
+**Precedence:** `country`/`country_code` in the config (§8) override the lookup entirely.
+A deployment that wants no third-party contact fills them in and `geoip.Lookup` is never
+called.
+
+#### The trade-off, stated plainly
+
+Asking a third party "which country is 203.0.113.10 in?" tells that party the address of
+the user's VPN server and links it to whoever asked. This was removed once for exactly
+that reason (§13.6) and is back by explicit choice - the difference from the version that
+was removed is that it now runs **once per config, never on a timer**. Recurring lookups
+were the part that turned a one-off disclosure into a continuous one.
+
+The query does not go through the tunnel: it happens when a config is saved, before there
+is a tunnel to use.
+
+`internal/geoip` tries three providers in order, first usable answer wins:
+`api.db-ip.com` and `ipwho.is` (both return a country name and an ISO code), then
+`ipinfo.io/<ip>/country` (code only, as a last resort - a bare two-letter response from a
+large, widely-reachable host is the most likely thing to still work when the others are
+blocked). All three are HTTPS with no API key, each attempt is capped at 8s, and the
+returned code is validated as two ASCII letters before it reaches the flag renderer.
+Rate limits are irrelevant at one lookup per config, ever.
 
 ---
 
 ## 10. Android app (`android/`, package `com.phantom.vpn`)
 
-Kotlin + Jetpack Compose, dark/purple theme (`Theme.kt`). Manual state-based screen
+Kotlin + Jetpack Compose (`Theme.kt`, see §10.3). Manual state-based screen
 switching (a `Screen` enum in `MainActivity.kt`; no `NavHost`) across four screens:
 
 - **Main** (`MainScreen` in `MainActivity.kt`): a scrollable list of saved-config tiles
   (`ConfigInfoCard`, `ConfigInfo.kt`), one per entry in `ConfigStore`. Each tile shows
   the config's domain, resolved IP, live ping (`fetchPing`/`pingcheck.Ping` via the
-  `Mobile.ping` gomobile binding, polled every 6s independently per tile), and an optional
-  country label taken from the config's own `country`/`country_code` fields (§8), rendered
-  as a flag emoji via `countryCodeToFlag` (modern Android has the flag glyphs) - no network
-  geo lookup (§13.6). A circular connect
+  `Mobile.ping` gomobile binding, polled on a jittered 6-10s schedule independently per
+  tile), and an optional country label taken from the config's own `country`/`country_code`
+  fields (§8, §9.2), rendered as a flag emoji via `countryCodeToFlag` - the emoji is built
+  locally from regional-indicator characters, nothing is downloaded. A circular connect
   button (`ConnectButton.kt`, reused at a smaller `size` for tiles) sits on the right of
   each tile; the currently-connected tile additionally gets a purple→pink→blue gradient
   border (`Modifier.border(width, Brush, shape)`). Header has a "+" button (always adds
@@ -605,8 +640,12 @@ switching (a `Screen` enum in `MainActivity.kt`; no `NavHost`) across four scree
   Save; reached either via "+" (blank, adds a new `SavedConfig`) or a long-press on an
   existing tile (pre-filled, edits that tile in place and offers a confirm-gated
   "Удалить конфигурацию" delete button).
-- **Settings** (`SettingsScreen`): just a "Посмотреть лог" button — config
-  management moved out of here into the dedicated add/edit screen above.
+- **Settings** (`SettingsScreen`): language toggle, theme toggle, accent-gradient
+  swatches (§10.3), a "Посмотреть лог" button, and the running version
+  (`BuildConfig.VERSION_NAME`) pinned at the bottom — config management moved out of here
+  into the dedicated add/edit screen above. The version is worth surfacing because the app
+  updates itself from GitHub releases, so "which build am I on" is the first question when
+  an update does or doesn't arrive.
 - **Log** (`LogScreen`): shows `FileLog`'s persisted plain-text log with a share button.
 
 ### 10.1 Config storage (`ConfigStore.kt`)
@@ -640,7 +679,30 @@ alone isn't sufficient starting with that API level.
 the service and the Compose UI; `VpnState` carries `status`/`message`/`activeConfigId`
 (the last reset to `null` whenever `status` goes back to `IDLE`).
 
-### 10.3 `Protector` / routing-loop prevention
+### 10.3 Theming (`Theme.kt`)
+
+Two independent choices, both persisted in the same plain `SharedPreferences` file the
+language toggle uses (neither is sensitive):
+
+- **Theme** — dark or light. Dark is the default and the original look, so an app that
+  is never touched appears exactly as it did before the switch existed.
+- **Accent** — which three-stop gradient paints the "this is on" outlines: a connected
+  config tile and a running proxy toggle. Four presets (`PINK`, `GREEN`, `BLUE`, `RED`),
+  pink being the original. Presets rather than a colour picker: these are hand-picked
+  ramps that stay legible against both backgrounds, which an arbitrary colour would not.
+
+The palette is exposed as *computed properties* (`val BgSurface: Color get() = ...`)
+rather than constants, so reading any colour inside a composable subscribes it to
+`Appearance.theme` - flipping the theme repaints the app with no other plumbing, and every
+existing call site was left unchanged. `Appearance` is loaded in
+`PhantomApplication.onCreate`, before anything composes, so the first frame is already in
+the chosen theme instead of flashing the default.
+
+The Windows client does the same thing with CSS: `:root[data-theme="light"]` and
+`:root[data-accent="…"]` override variables, so switching either is one attribute write on
+`<html>` and the whole window repaints without re-rendering a single component (§11.5).
+
+### 10.4 `Protector` / routing-loop prevention
 
 Once `VpnService.Builder.establish()` installs a `0.0.0.0/0`+`::/0` route through the
 TUN interface, the app's own outbound connection to the Phantom server would be
@@ -679,7 +741,7 @@ in its status output.
 
 Once a `0.0.0.0/0` route exists through the TUN interface, this process's own connection
 to the Phantom server would loop back into the tunnel it's building — the same class of
-bug as Android's routing loop (§10.3), but Windows has no per-socket exemption API, so
+bug as Android's routing loop (§10.4), but Windows has no per-socket exemption API, so
 the fix is routing-table specificity instead. `StartWindows` does, strictly in this
 order:
 
@@ -734,12 +796,16 @@ Same `SavedConfig{ID, Yaml}` list shape as Android, persisted as JSON
 pre-multi-config single `client.yaml` file. `App` exposes `ListConfigs`/`AddConfig`/
 `UpdateConfig`/`DeleteConfig`/`Connect(id, yaml)`/`Disconnect`/`Status`/`Ping`/`ReadLog`
 to the frontend. `Ping` wraps `internal/pingcheck.Ping` (§9.1) the same way `mobile.Ping`
-does. The optional country label comes from the config's own `country`/`country_code`
-fields (§8) shown as text - no network geo lookup (§13.6). Unlike Android it isn't shown as
-a flag emoji: Windows' Segoe UI Emoji font (and Chromium/WebView2 on Windows) has no flag
-glyphs and would render the emoji as the bare two-letter code (a deliberate, longstanding
-Microsoft choice, not a WebView2 bug), which is exactly why the old code fetched flag
-*images* from a CDN - the dependency §13.6 removed.
+does. `App.Version` returns `AppVersion` - the same constant the updater compares against
+the latest release tag - and the frontend shows it at the bottom of the settings panel, so
+what the user reads is exactly what decides whether an update is offered.
+
+The optional country label comes from the config's own `country`/`country_code` fields
+(§8, §9.2) shown as text. Unlike Android it is not rendered as a flag emoji: Windows' Segoe
+UI Emoji font (and Chromium/WebView2 on Windows) has no flag glyphs and would draw the bare
+two-letter code instead - a deliberate, longstanding Microsoft choice, not a WebView2 bug,
+and exactly why the old code fetched flag *images* from a CDN, the dependency §13.6
+removed.
 
 ### 11.4 System tray (`tray.go`)
 
@@ -757,6 +823,24 @@ Closing the main window (the X button) doesn't quit the app: `App.beforeClose`
 (`options.App.OnBeforeClose`) unconditionally calls `runtime.WindowHide` and returns
 `true` to cancel the default close-and-quit behavior, so the process (and any active
 tunnel) keeps running in the tray until "Выход" is chosen explicitly.
+
+### 11.5 Theming (`style.css`, `App.GetAppearance`/`SetAppearance`)
+
+The same two choices as Android (§10.3) — dark/light and one of four accent gradients —
+with the same defaults, so an untouched app looks exactly as it did before.
+
+Implemented entirely in CSS: `:root` holds the dark palette and the pink gradient,
+`:root[data-theme="light"]` and `:root[data-accent="…"]` override those variables, and
+every rule already referenced the variables rather than literal colours. Switching either
+is therefore one attribute write on `<html>` and the whole window repaints — no component
+re-renders, which is why `applyAppearance` doesn't touch `renderConfigList` and friends
+the way `applyLanguage` has to.
+
+Persistence is Go-side (`settings.go`) so the values survive a WebView reload and sit
+beside the language file. `GetAppearance` is read before the first paint, so the window
+doesn't flash the default theme on its way to the chosen one. `saveSetting` validates
+against the allowed set on both read and write: a hand-edited or no-longer-supported value
+degrades to the default rather than reaching the UI.
 
 ---
 
@@ -817,21 +901,44 @@ out to be platform-neutral.
    reader still stuck after the timeout loses its own stream (`ErrStreamStalled`) instead
    of freezing the others. Proper credit-based windowing is the remaining work — it needs
    a wire change, so it belongs in the next version bump rather than a patch.
-10. **Stream ids are per-connection and finite.** One pooled connection carries every
+10a. **The server refuses tunnelled connections to its own loopback and to
+   link-local addresses** (`proxy.blockedIP`/`resolveAllowed`). The PSK is shared by every user,
+   so without this any client holding it could reach services the operator
+   deliberately bound to 127.0.0.1, or fetch VPS credentials from the cloud
+   metadata endpoint at 169.254.169.254. RFC1918 ranges stay reachable on purpose -
+   using a personal VPN to reach one's own LAN is a real use case, and the PSK
+   holder is already inside that boundary. `AllowLocalTargets` opts out.
+11. **There is no keepalive.** `FramePing` is answered when it arrives, but nothing
+   ever sends one: the `Session.Ping` that used to was never called by any caller,
+   and measured how long it took to hand the frame to the write loop rather than a
+   round trip, so it was removed instead of preserved. An idle tunnel therefore has
+   no application-level liveness check - a NAT mapping that expires leaves a
+   connection that is neither closed nor usable until traffic is next attempted.
+   Whoever adds one should correlate the pong, and send it from somewhere other
+   than `readLoop` (`handlePing` answers synchronously, which would let a stalled
+   write path block reading).
+12. **Stream ids are per-connection and finite.** One pooled connection carries every
    stream for its lifetime, and the initiating side has 32768 ids (odd values; 0 is
    reserved for session-level frames). `allocStreamID` now skips ids that are still live
    rather than wrapping onto them, and returns `ErrStreamIDsExhausted` if all are in use —
    which in practice would mean streams are being leaked, not that a real workload needs
    more. Long-lived connections no longer risk splicing unrelated streams together.
-6. **Third-party geo-IP/flag lookup — removed.** The GUI apps used to resolve each
-   server's country from its IP via a public geo-IP service (`ipwho.is`) and fetch a flag
-   image from `flagcdn.com`, which leaked the *server's* IP to those services on a timer -
-   the only network dependency in either app that wasn't the user's own Phantom server.
-   Both are gone: the cosmetic location label now comes from optional `country`/
-   `country_code` fields the operator can put in the client config (§8), rendered as a
-   flag emoji on Android and as text on Windows (Windows/Chromium can't render flag
-   emoji). Nothing is looked up over the network anymore; the apps contact only the user's
-   own server.
+6. **Third-party geo-IP lookup — present, by choice, and the one network dependency in
+   either app that isn't the user's own server.** The GUI apps resolve a server's country
+   from its IP through a public geolocation service (§9.2), which necessarily tells that
+   service the server's address and links it to whoever asked.
+
+   This was removed once for that reason and deliberately reinstated. What changed is the
+   frequency, which was the real problem: the old code ran the lookup **on a repeating
+   timer** and also fetched a flag *image* from `flagcdn.com` on every render, so a server
+   address was handed out continuously for as long as an app was open. It now runs **once
+   per saved config**, the result is pinned, and the flag is built locally from
+   regional-indicator characters with nothing downloaded.
+
+   An operator who wants zero third-party contact sets `country`/`country_code` in the
+   config (§8); those take precedence and the lookup never runs. Anyone whose threat model
+   makes even a one-off disclosure unacceptable should do that - it is the reason the
+   fields still exist.
 7. **Windows routing/interface setup shells out to `route`/`netsh`** (§11.2) rather than
    using the native IP Helper API (`iphlpapi.dll` via `CreateUnicastIpAddressEntry`/
    `CreateIpForwardEntry2`, the approach `winipcfg`-based tools like WireGuard-Windows

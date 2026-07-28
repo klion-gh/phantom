@@ -6,6 +6,7 @@ import (
 	"log"
 	"sync"
 
+	"phantom/internal/geoip"
 	"phantom/internal/pingcheck"
 
 	"github.com/wailsapp/wails/v2/pkg/runtime"
@@ -171,11 +172,42 @@ func (a *App) UpdateConfig(id string, configYAML string) string {
 	return ""
 }
 
-// SetConfigGeo persists the one-time-resolved server IP/country/flag for a
-// saved config. Called by the frontend right after Add/UpdateConfig, once a
-// Ping and a geo-IP lookup (both done client-side in JS) have completed -
-// see internal/pingcheck and the "why once, not on a timer" note on
-// SavedConfig for the reasoning.
+// LookupCountry resolves which country a server IP sits in, for the location
+// label on a saved-config tile. Returns a JSON blob
+// {"country":"Netherlands","country_code":"NL"}, or an empty string on failure so
+// the frontend can retry rather than pin a blank label.
+//
+// This asks a third-party geolocation service and so tells it the address of the
+// user's server - see internal/geoip for the trade-off and the constraints:
+// resolved once per saved config and pinned, never polled.
+func (a *App) LookupCountry(ip string) string {
+	res, err := geoip.Lookup(context.Background(), ip)
+	if err != nil {
+		log.Printf("country lookup for a saved config failed: %v", err)
+		return ""
+	}
+	data, err := json.Marshal(struct {
+		Country     string `json:"country"`
+		CountryCode string `json:"country_code"`
+	}{Country: res.Country, CountryCode: res.CountryCode})
+	if err != nil {
+		return ""
+	}
+	return string(data)
+}
+
+// Version is the running build's version string, shown at the bottom of the
+// settings panel. Read from the same constant the updater compares against
+// GitHub's latest release tag, so what the user is shown is exactly what decides
+// whether an update is offered.
+func (a *App) Version() string {
+	return AppVersion
+}
+
+// SetConfigGeo persists a saved config's tile metadata. An empty argument means
+// "leave that field alone", so the country (a field in the yaml, no network) and
+// the IP (a Ping, needs connectivity) can be written independently - see
+// setConfigGeo for why that separation matters.
 func (a *App) SetConfigGeo(id string, ip string, country string, countryCode string) string {
 	if err := setConfigGeo(id, ip, country, countryCode); err != nil {
 		return err.Error()
@@ -348,6 +380,25 @@ func (a *App) StopProxy(configID string) string {
 // reads it once on load to pick the initial language.
 func (a *App) GetLanguage() string {
 	return loadLanguage()
+}
+
+// GetAppearance returns the persisted look as {"theme":"dark","accent":"pink"}.
+// Read once at startup and applied before the first paint, so the window doesn't
+// flash the default theme on its way to the chosen one.
+func (a *App) GetAppearance() string {
+	data, _ := json.Marshal(struct {
+		Theme  string `json:"theme"`
+		Accent string `json:"accent"`
+	}{Theme: loadTheme(), Accent: loadAccent()})
+	return string(data)
+}
+
+// SetAppearance persists the theme ("dark"/"light") and accent gradient
+// ("pink"/"green"/"blue"/"red"). Unrecognised values fall back to the defaults -
+// see saveSetting.
+func (a *App) SetAppearance(theme string, accent string) {
+	saveTheme(theme)
+	saveAccent(accent)
 }
 
 // SetLanguage persists the chosen UI language and re-labels the tray menu to

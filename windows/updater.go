@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -32,10 +34,15 @@ type githubRelease struct {
 // applyPendingUpdate when the user actually clicks the update button - the
 // app no longer installs an update on its own the moment it's found.
 var (
-	pendingUpdateMu  sync.Mutex
-	pendingUpdateTag string
-	pendingUpdateURL string
+	pendingUpdateMu   sync.Mutex
+	pendingUpdateTag  string
+	pendingUpdateURL  string
+	pendingUpdateSums string // SHA256SUMS asset for the same release
 )
+
+// sumsAssetName is the checksum manifest the release workflow publishes next to
+// the binaries. The updater refuses to install an exe it can't check against it.
+const sumsAssetName = "SHA256SUMS"
 
 // checkAndSelfUpdate runs once shortly after startup (called as its own
 // goroutine from App.startup, so it never blocks the window from showing).
@@ -49,7 +56,7 @@ var (
 func checkAndSelfUpdate(ctx context.Context) {
 	cleanupOldExe()
 
-	tag, downloadURL, ok := checkForUpdate()
+	tag, downloadURL, sumsURL, ok := checkForUpdate()
 	if !ok {
 		return
 	}
@@ -58,6 +65,7 @@ func checkAndSelfUpdate(ctx context.Context) {
 	pendingUpdateMu.Lock()
 	pendingUpdateTag = tag
 	pendingUpdateURL = downloadURL
+	pendingUpdateSums = sumsURL
 	pendingUpdateMu.Unlock()
 	runtime.EventsEmit(ctx, "update:available", tag)
 }
@@ -69,7 +77,7 @@ func checkAndSelfUpdate(ctx context.Context) {
 // exe and calls os.Exit itself.
 func applyPendingUpdate(ctx context.Context) string {
 	pendingUpdateMu.Lock()
-	tag, downloadURL := pendingUpdateTag, pendingUpdateURL
+	tag, downloadURL, sumsURL := pendingUpdateTag, pendingUpdateURL, pendingUpdateSums
 	pendingUpdateMu.Unlock()
 
 	if downloadURL == "" {
@@ -79,7 +87,7 @@ func applyPendingUpdate(ctx context.Context) string {
 	log.Printf("applying update %s (current %s)", tag, AppVersion)
 	runtime.EventsEmit(ctx, "update:downloading", tag)
 
-	if err := selfUpdate(downloadURL); err != nil {
+	if err := selfUpdate(downloadURL, sumsURL); err != nil {
 		log.Printf("self-update to %s failed: %v", tag, err)
 		runtime.EventsEmit(ctx, "update:failed", err.Error())
 		return err.Error()
@@ -87,45 +95,117 @@ func applyPendingUpdate(ctx context.Context) string {
 	return "" // unreachable - selfUpdate exits the process on success
 }
 
-// checkForUpdate asks GitHub for the latest release and returns its tag and
-// the phantom.exe asset's download URL, or ok=false if already current or
-// the check couldn't be completed for any reason.
-func checkForUpdate() (tag string, downloadURL string, ok bool) {
+// checkForUpdate asks GitHub for the latest release and returns its tag, the
+// phantom.exe asset's download URL and the SHA256SUMS asset's URL, or ok=false if
+// already current or the check couldn't be completed for any reason.
+func checkForUpdate() (tag string, downloadURL string, sumsURL string, ok bool) {
 	client := &http.Client{Timeout: 8 * time.Second}
 	req, err := http.NewRequest(http.MethodGet, githubReleasesAPI, nil)
 	if err != nil {
-		return "", "", false
+		return "", "", "", false
 	}
 	req.Header.Set("Accept", "application/vnd.github+json")
 
 	resp, err := client.Do(req)
 	if err != nil {
 		log.Printf("update check failed: %v", err)
-		return "", "", false
+		return "", "", "", false
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		log.Printf("update check: unexpected status %d", resp.StatusCode)
-		return "", "", false
+		return "", "", "", false
 	}
 
 	var release githubRelease
 	if err := json.NewDecoder(resp.Body).Decode(&release); err != nil {
 		log.Printf("update check: decode error: %v", err)
-		return "", "", false
+		return "", "", "", false
 	}
 
 	if !isNewerVersion(release.TagName, AppVersion) {
-		return "", "", false
+		return "", "", "", false
 	}
 
+	var exeURL string
 	for _, asset := range release.Assets {
-		if asset.Name == "phantom.exe" {
-			return release.TagName, asset.BrowserDownloadURL, true
+		switch asset.Name {
+		case "phantom.exe":
+			exeURL = asset.BrowserDownloadURL
+		case sumsAssetName:
+			sumsURL = asset.BrowserDownloadURL
 		}
 	}
-	log.Printf("update check: release %s has no phantom.exe asset", release.TagName)
-	return "", "", false
+	if exeURL == "" {
+		log.Printf("update check: release %s has no phantom.exe asset", release.TagName)
+		return "", "", "", false
+	}
+	if sumsURL == "" {
+		// Refused rather than installed unchecked. Every release the workflow
+		// builds publishes SHA256SUMS, so a release without one is not a release
+		// this updater should be swapping an elevated executable for.
+		log.Printf("update check: release %s has no %s - refusing to update unverified",
+			release.TagName, sumsAssetName)
+		return "", "", "", false
+	}
+	return release.TagName, exeURL, sumsURL, true
+}
+
+// fetchExpectedSum downloads the release's SHA256SUMS and returns the digest
+// listed for name.
+//
+// This binds the downloaded exe to what the release actually published. Worth
+// being clear about what it is and isn't: the manifest travels over the same
+// channel as the binary, so it defends against a truncated or corrupted transfer
+// and against being served the wrong asset - not against a release that is itself
+// malicious, and not against an adversary who can rewrite both. Real authenticity
+// for a Windows executable means Authenticode signing, which this project doesn't
+// have; until it does, this is the floor rather than the ceiling.
+func fetchExpectedSum(sumsURL, name string) (string, error) {
+	if sumsURL == "" {
+		return "", fmt.Errorf("release publishes no %s - refusing to install an unverified executable", sumsAssetName)
+	}
+
+	client := &http.Client{Timeout: 30 * time.Second}
+	resp, err := client.Get(sumsURL)
+	if err != nil {
+		return "", fmt.Errorf("download %s: %w", sumsAssetName, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("download %s: unexpected status %d", sumsAssetName, resp.StatusCode)
+	}
+
+	// Cap the read: this is parsed before anything is verified.
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if err != nil {
+		return "", fmt.Errorf("read %s: %w", sumsAssetName, err)
+	}
+
+	sum, err := sumFor(string(body), name)
+	if err != nil {
+		return "", err
+	}
+	return sum, nil
+}
+
+// sumFor parses sha256sum(1) output and returns the digest recorded for name.
+// The leading '*' some implementations write for binary mode is tolerated.
+func sumFor(manifest, name string) (string, error) {
+	for _, line := range strings.Split(manifest, "\n") {
+		fields := strings.Fields(line)
+		if len(fields) != 2 {
+			continue
+		}
+		if strings.TrimPrefix(fields[1], "*") == name {
+			sum := strings.ToLower(fields[0])
+			if len(sum) != sha256.Size*2 {
+				return "", fmt.Errorf("%s lists a malformed digest for %s", sumsAssetName, name)
+			}
+			return sum, nil
+		}
+	}
+	return "", fmt.Errorf("%s does not list %s", sumsAssetName, name)
 }
 
 // isNewerVersion compares two "vX.Y.Z"/"X.Y.Z" version strings numerically
@@ -164,7 +244,7 @@ func parseVersion(v string) [3]int {
 // The relaunched exe still carries the requireAdministrator manifest, so
 // Windows shows a fresh UAC prompt for it - unavoidable given the app's
 // elevation requirement, regardless of how the new process is started.
-func selfUpdate(downloadURL string) error {
+func selfUpdate(downloadURL, sumsURL string) error {
 	exePath, err := os.Executable()
 	if err != nil {
 		return fmt.Errorf("locate executable: %w", err)
@@ -172,6 +252,13 @@ func selfUpdate(downloadURL string) error {
 	dir := filepath.Dir(exePath)
 	newPath := filepath.Join(dir, "phantom_new.exe")
 	oldPath := filepath.Join(dir, "phantom_old.exe")
+
+	// Fetch the expected digest before downloading, so a release whose manifest
+	// can't be read costs nothing and changes nothing on disk.
+	wantSum, err := fetchExpectedSum(sumsURL, "phantom.exe")
+	if err != nil {
+		return err
+	}
 
 	client := &http.Client{Timeout: 120 * time.Second}
 	resp, err := client.Get(downloadURL)
@@ -187,12 +274,22 @@ func selfUpdate(downloadURL string) error {
 	if err != nil {
 		return fmt.Errorf("create temp file: %w", err)
 	}
-	if _, err := io.Copy(out, resp.Body); err != nil {
+	// Hash while writing rather than re-reading afterwards: what gets hashed is
+	// then exactly the bytes that were written.
+	hasher := sha256.New()
+	if _, err := io.Copy(io.MultiWriter(out, hasher), resp.Body); err != nil {
 		out.Close()
 		os.Remove(newPath)
 		return fmt.Errorf("write temp file: %w", err)
 	}
 	out.Close()
+
+	if got := hex.EncodeToString(hasher.Sum(nil)); got != wantSum {
+		os.Remove(newPath)
+		return fmt.Errorf("downloaded phantom.exe does not match the release checksum "+
+			"(expected %s, got %s) - not installing it", wantSum, got)
+	}
+	log.Printf("update: checksum verified")
 
 	os.Remove(oldPath) // clean up any previous leftover before reusing the name
 

@@ -46,9 +46,24 @@ func TestStreamWriteChunksLargeWrite(t *testing.T) {
 		t.Fatal("timed out waiting for the stream to be accepted")
 	}
 
+	// The write result comes back through a channel and is checked in the test
+	// body. Reporting it from inside the goroutine risks calling t.Errorf after
+	// the test has returned, which panics the whole run - and it only ever
+	// "worked" because Write used to block forever on a closing multiplexer
+	// instead of returning.
+	writeDone := make(chan error, 1)
 	go func() {
-		if _, err := s1.Write(payload); err != nil {
-			t.Errorf("Write(%d bytes): %v", len(payload), err)
+		_, err := s1.Write(payload)
+		writeDone <- err
+	}()
+	defer func() {
+		select {
+		case err := <-writeDone:
+			if err != nil {
+				t.Errorf("Write(%d bytes): %v", len(payload), err)
+			}
+		case <-time.After(10 * time.Second):
+			t.Error("the large write never completed")
 		}
 	}()
 
@@ -127,9 +142,21 @@ func TestUDPStreamRejectsOversizedDatagram(t *testing.T) {
 		t.Fatal("timed out waiting for the UDP stream to be accepted")
 	}
 
+	// Same as above: the result is checked in the test body, not from a goroutine
+	// that may outlive it.
+	writeDone := make(chan error, 1)
 	go func() {
-		if _, err := s.Write(payload); err != nil {
-			t.Errorf("Write(MaxDataPlaintext): %v", err)
+		_, err := s.Write(payload)
+		writeDone <- err
+	}()
+	defer func() {
+		select {
+		case err := <-writeDone:
+			if err != nil {
+				t.Errorf("Write(MaxDataPlaintext): %v", err)
+			}
+		case <-time.After(10 * time.Second):
+			t.Error("the max-size datagram write never completed")
 		}
 	}()
 

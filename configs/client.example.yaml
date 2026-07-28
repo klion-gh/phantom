@@ -14,10 +14,17 @@ listen: "127.0.0.1:1080"
 listen_http: "127.0.0.1:1081"
 pool_size: 4
 log_level: "info"
-# Optional, cosmetic: a location label the GUI apps show next to this server's
-# tile. Purely a static hint the operator sets - the apps no longer look the
-# server's country up from its IP (that used to hit a third-party geo/flag
-# service, leaking the server IP to it). country_code is a two-letter ISO code;
-# on Android it renders as a flag emoji, on Windows as text.
+# Optional location label for the GUI tile. Normally you don't need these: the
+# apps resolve the server's country from its IP automatically, once per saved
+# config, and pin the result.
+#
+# Set them to opt OUT of that. They take precedence, and when present no
+# geolocation service is contacted at all - which matters because such a query
+# tells a third party the address of this server. The automatic lookup runs once
+# rather than on a timer for the same reason, but once is still once.
+#
+# country_code is a two-letter ISO code. Android turns it into a flag emoji
+# locally (nothing is downloaded); Windows shows the text, because Chromium there
+# doesn't draw flag emoji.
 # country: "Germany"
 # country_code: "DE"

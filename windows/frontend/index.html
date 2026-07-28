@@ -74,8 +74,29 @@
               <button id="btn-lang-en" class="btn btn-outline lang-btn">English</button>
             </div>
           </div>
+          <div class="lang-row">
+            <div class="lang-label" data-i18n="theme">Тема</div>
+            <div class="lang-options">
+              <button id="btn-theme-dark" class="btn btn-outline lang-btn" data-i18n="theme_dark">Тёмная</button>
+              <button id="btn-theme-light" class="btn btn-outline lang-btn" data-i18n="theme_light">Светлая</button>
+            </div>
+          </div>
+          <div class="lang-row">
+            <div class="lang-label" data-i18n="accent">Акцент</div>
+            <!-- Swatches painted with the actual gradient rather than named
+                 buttons - what it looks like is the whole point. -->
+            <div class="accent-options">
+              <button class="accent-swatch" data-accent="pink"></button>
+              <button class="accent-swatch" data-accent="green"></button>
+              <button class="accent-swatch" data-accent="blue"></button>
+              <button class="accent-swatch" data-accent="red"></button>
+            </div>
+          </div>
           <button id="btn-view-log" class="btn btn-outline" data-i18n="view_log">Посмотреть лог</button>
           <button id="btn-open-split-tunnel" class="btn btn-outline" data-i18n="split_tunnel">Раздельное туннелирование</button>
+          <!-- Filled in at startup from the App.Version binding - the same
+               constant the updater compares against the latest release tag. -->
+          <div id="app-version" class="app-version"></div>
         </div>
       </div>
 

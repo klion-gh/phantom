@@ -11,12 +11,14 @@ import java.util.UUID
 /**
  * One saved client.yaml, shown as its own tile on the main screen.
  *
- * [ip]/[country]/[countryCode] are resolved once (a Ping + a geo-IP lookup)
- * right after the config is added or edited, not on every ping cycle - the
- * server behind a saved config essentially never moves, so re-resolving its
- * location every few seconds on a timer was just wasted third-party calls
- * (and is what rate-limited the geo-IP provider into 429s during
- * development). They're null until [ConfigStore.setGeo] is called once.
+ * [country]/[countryCode] are copied out of the config's own yaml - there is no
+ * geo-IP lookup anywhere in the app any more, since that used to hand the
+ * server's address to a third party on a timer. [ip] comes from a Ping to the
+ * operator's own server.
+ *
+ * They are resolved once and pinned, not refreshed on every ping cycle: the
+ * server behind a saved config essentially never moves. See
+ * [ConfigStore.setCountry] and [ConfigStore.setServerIP].
  */
 data class SavedConfig(
     val id: String,
@@ -42,29 +44,87 @@ object ConfigStore {
     private const val LEGACY_YAML_KEY = "client_yaml" // pre-multi-config single entry
     private const val LAST_ACTIVE_KEY = "last_active_config_id"
 
+    private const val SECURE_PREFS = "phantom_secure_prefs"
+    private const val PLAIN_PREFS = "phantom_plain_prefs"
+
     @Volatile
     private var cached: SharedPreferences? = null
+
+    /**
+     * True when configs are being kept in plain, unencrypted preferences because
+     * the Android Keystore refused to initialise.
+     *
+     * This matters more here than in most apps: a saved config holds the PSK and
+     * the server's address, and for a censorship-circumvention tool that pair is
+     * itself the evidence of use - it identifies the device as a client of a
+     * specific server. Anyone with access to the device's app-private storage (a
+     * rooted device, an ADB backup, a forensic image) reads it straight out of XML.
+     *
+     * The fallback still exists - refusing to start at all would be worse - but it
+     * is no longer silent: [MainActivity] surfaces this to the user.
+     */
+    @Volatile
+    var storageIsPlaintext: Boolean = false
+        private set
 
     @Synchronized
     private fun prefs(context: Context): SharedPreferences {
         cached?.let { return it }
-        // EncryptedSharedPreferences touches the Android Keystore and can throw on some
-        // devices/ROMs; fall back to plain prefs rather than taking the app down.
-        val opened = try {
+
+        // EncryptedSharedPreferences touches the Android Keystore and can throw on
+        // some devices/ROMs; fall back to plain prefs rather than taking the app down.
+        val secure = try {
             val masterKey = MasterKey.Builder(context)
                 .setKeyScheme(MasterKey.KeyScheme.AES256_GCM)
                 .build()
             EncryptedSharedPreferences.create(
-                context, "phantom_secure_prefs", masterKey,
+                context, SECURE_PREFS, masterKey,
                 EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
                 EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
             )
         } catch (t: Throwable) {
             FileLog.e("EncryptedSharedPreferences init failed, falling back to plain prefs", t)
             null
-        } ?: context.getSharedPreferences("phantom_plain_prefs", Context.MODE_PRIVATE)
+        }
+
+        val opened = if (secure != null) {
+            // Keystore is working now. If an earlier run degraded to plain storage,
+            // move everything back and wipe the plaintext copy - without this a
+            // single transient Keystore failure downgraded the app permanently,
+            // since nothing ever looked at the plain store again.
+            migratePlainToSecure(context, secure)
+            storageIsPlaintext = false
+            secure
+        } else {
+            storageIsPlaintext = true
+            context.getSharedPreferences(PLAIN_PREFS, Context.MODE_PRIVATE)
+        }
+
         cached = opened
         return opened
+    }
+
+    /** Moves any leftover plaintext entries into [secure] and erases the plain store. */
+    private fun migratePlainToSecure(context: Context, secure: SharedPreferences) {
+        val plain = context.getSharedPreferences(PLAIN_PREFS, Context.MODE_PRIVATE)
+        val all = plain.all
+        if (all.isEmpty()) return
+
+        FileLog.e("recovering ${all.size} entries from plaintext storage back into the Keystore-backed store", null)
+        val editor = secure.edit()
+        for ((key, value) in all) {
+            when (value) {
+                is String -> editor.putString(key, value)
+                is Boolean -> editor.putBoolean(key, value)
+                is Int -> editor.putInt(key, value)
+                is Long -> editor.putLong(key, value)
+                is Float -> editor.putFloat(key, value)
+            }
+        }
+        editor.apply()
+        // commit(), not apply(): the plaintext copy must actually be gone before
+        // this returns, not queued behind whatever else the app does next.
+        plain.edit().clear().commit()
     }
 
     fun loadAll(context: Context): List<SavedConfig> {
@@ -127,11 +187,25 @@ object ConfigStore {
         saveAll(context, loadAll(context).filterNot { it.id == id })
     }
 
-    /** Persists the one-time-resolved IP/country/flag for a saved config - called right
-     * after add/update, once a Ping and a geo-IP lookup have completed. */
-    fun setGeo(context: Context, id: String, ip: String, country: String?, countryCode: String?) {
+    /**
+     * Persists the country label and ISO code a config's yaml carries.
+     *
+     * Deliberately separate from [setServerIP]. These two values used to be written
+     * together, after a Ping - which meant the country, which comes straight out of
+     * the yaml and needs no network whatsoever, was silently discarded whenever that
+     * Ping failed. Add a config with no connectivity and the label was simply never
+     * stored, permanently, until the config happened to be edited again.
+     */
+    fun setCountry(context: Context, id: String, country: String?, countryCode: String?) {
         saveAll(context, loadAll(context).map {
-            if (it.id == id) it.copy(ip = ip, country = country, countryCode = countryCode) else it
+            if (it.id == id) it.copy(country = country, countryCode = countryCode) else it
+        })
+    }
+
+    /** Persists the server IP resolved by a Ping - the part that does need the network. */
+    fun setServerIP(context: Context, id: String, ip: String) {
+        saveAll(context, loadAll(context).map {
+            if (it.id == id) it.copy(ip = ip) else it
         })
     }
 

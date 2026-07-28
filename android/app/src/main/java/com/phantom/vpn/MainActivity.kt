@@ -1,5 +1,13 @@
 package com.phantom.vpn
 
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
 import android.Manifest
 import android.content.Intent
 import android.content.pm.PackageManager
@@ -34,11 +42,14 @@ import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
 private enum class Screen { MAIN, ADD_CONFIG, SETTINGS, LOG }
@@ -243,26 +254,86 @@ private fun PhantomApp(
         }
     }
 
-    // Persists a config's server IP once (a local Ping - no third party) plus the
-    // optional country/country_code the operator put in the yaml, then refreshes so
-    // the tile picks it up. There is deliberately no IP->country lookup anymore: it
-    // used to hit a third-party geo/flag service (ipwho.is/flagcdn), leaking the
-    // server IP to it - the country is now just a static field in the config.
-    fun resolveGeoInBackground(id: String, yaml: String) {
+    // Ids with an IP-resolution retry loop already running, so a config saved twice
+    // (or saved and then backfilled on the next launch) doesn't accumulate loops.
+    // remembered rather than a plain local: a recomposition would otherwise hand out
+    // a fresh empty set and the guard would stop guarding.
+    val geoJobs = remember { java.util.Collections.synchronizedSet(mutableSetOf<String>()) }
+
+    // The operator's own country/country_code from the yaml, if present. No
+    // network, so it cannot fail and is applied immediately - and it wins over
+    // anything the lookup below would return. Reports whether the config spelled
+    // it out.
+    fun applyCountryFromYaml(id: String, yaml: String): Boolean {
+        val country = parseYamlField(yaml, "country")
+        val code = parseYamlField(yaml, "country_code")
+        if (country.isNullOrBlank() && code.isNullOrBlank()) return false
+        ConfigStore.setCountry(context, id, country, code)
+        return true
+    }
+
+    // Resolves a tile's IP (a Ping to the operator's own server) and then, unless
+    // the config already named a country, looks that up from the IP. Both retry
+    // until they succeed: a single attempt at save time meant "no connectivity
+    // right now" turned into "no label on this tile, ever". Backs off to a minute
+    // so a long outage costs nothing, and stops for good once both are pinned.
+    //
+    // The country lookup goes to a third-party geolocation service and so tells it
+    // the address of the user's server - see internal/geoip. That is why it happens
+    // once per saved config and never on a timer.
+    fun resolveTileMetadataInBackground(id: String, yaml: String, hasExplicitCountry: Boolean) {
+        if (!geoJobs.add(id)) return
         coroutineScope.launch {
-            val (ip, _) = fetchPing(yaml) ?: return@launch
-            val country = parseYamlField(yaml, "country")
-            val countryCode = parseYamlField(yaml, "country_code")
-            ConfigStore.setGeo(context, id, ip, country, countryCode)
-            refreshConfigs()
+            try {
+                var backoffMs = 2_000L
+                var ip: String? = null
+                while (isActive) {
+                    if (ip.isNullOrBlank()) {
+                        ip = fetchPing(yaml)?.first
+                        if (!ip.isNullOrBlank()) {
+                            ConfigStore.setServerIP(context, id, ip)
+                            refreshConfigs()
+                        }
+                    }
+                    if (!ip.isNullOrBlank()) {
+                        if (hasExplicitCountry) return@launch
+                        val geo = lookupCountry(ip)
+                        if (geo != null) {
+                            ConfigStore.setCountry(context, id, geo.first, geo.second)
+                            refreshConfigs()
+                            return@launch
+                        }
+                    }
+                    delay(backoffMs)
+                    backoffMs = (backoffMs * 2).coerceAtMost(60_000L)
+                }
+            } finally {
+                geoJobs.remove(id)
+            }
         }
     }
 
-    // Backfill the cached server IP (and any country field from the yaml) once for
-    // configs missing it - keyed on the IP, not the country, so a config whose yaml
-    // simply has no country doesn't re-Ping on every launch.
+    fun resolveGeoInBackground(id: String, yaml: String) {
+        val explicit = applyCountryFromYaml(id, yaml)
+        refreshConfigs()
+        resolveTileMetadataInBackground(id, yaml, explicit)
+    }
+
+    // Backfill on launch, in two halves that fail independently.
+    //
+    // The country is re-applied for every config unconditionally: it is a field in
+    // the yaml, costs nothing, and this is what repairs configs saved by an older
+    // build that dropped the label whenever the Ping at save time failed.
+    //
+    // The IP costs a real handshake, so only configs still missing one are chased -
+    // and that chase retries until it succeeds rather than giving up after a single
+    // attempt on a launch that happened to have no connectivity.
     LaunchedEffect(Unit) {
-        configs.filter { it.ip == null }.forEach { resolveGeoInBackground(it.id, it.yaml) }
+        val explicit = configs.associate { it.id to applyCountryFromYaml(it.id, it.yaml) }
+        refreshConfigs()
+        configs
+            .filter { it.ip == null || it.countryCode.isNullOrBlank() }
+            .forEach { resolveTileMetadataInBackground(it.id, it.yaml, explicit[it.id] == true) }
     }
 
     when (screen) {
@@ -513,6 +584,19 @@ private fun ConfigsPage(
             IconButton(onClick = onAddConfig) {
                 Text("+", fontSize = 22.sp, color = TextSecondary)
             }
+        }
+
+        // Shown only when the Keystore refused to initialise and configs - which
+        // hold the PSK and the server address - ended up in plain storage. It used
+        // to happen silently; see ConfigStore.storageIsPlaintext.
+        if (ConfigStore.storageIsPlaintext) {
+            Spacer(modifier = Modifier.height(10.dp))
+            Text(
+                text = I18n.t("insecure_storage"),
+                color = StatusError,
+                fontSize = 12.sp,
+                modifier = Modifier.fillMaxWidth(),
+            )
         }
 
         Spacer(modifier = Modifier.height(10.dp))
@@ -810,10 +894,68 @@ private fun SettingsScreen(
             LangButton("English", I18n.lang == Lang.EN) { setAppLanguage(context, Lang.EN) }
         }
 
+        // Theme. Reading Appearance.theme repaints everything for the same reason
+        // the language toggle does - every colour in Theme.kt is a computed
+        // property over this state.
+        Text(I18n.t("theme"), color = TextSecondary, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            LangButton(I18n.t("theme_dark"), Appearance.isDark) {
+                Appearance.setTheme(context, ThemeMode.DARK)
+            }
+            LangButton(I18n.t("theme_light"), !Appearance.isDark) {
+                Appearance.setTheme(context, ThemeMode.LIGHT)
+            }
+        }
+
+        // Accent gradient. Shown as swatches painted with the actual gradient
+        // rather than named buttons - the whole point is what it looks like.
+        Text(I18n.t("accent"), color = TextSecondary, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            Accent.entries.forEach { option ->
+                AccentSwatch(
+                    accent = option,
+                    selected = Appearance.accent == option,
+                    onClick = { Appearance.setAccent(context, option) },
+                )
+            }
+        }
+
         OutlinedButton(onClick = onViewLog, modifier = Modifier.fillMaxWidth()) {
             Text(I18n.t("view_log"))
         }
+
+        Spacer(modifier = Modifier.weight(1f))
+
+        // Pinned to the bottom of the settings screen. Worth having somewhere
+        // visible: the app updates itself from GitHub releases, so "which version
+        // am I actually running" is the first thing anyone needs when an update
+        // does or doesn't arrive. Comes from BuildConfig, so it is whatever the APK
+        // was built as and cannot drift from it.
+        Text(
+            text = "${I18n.t("version")} ${BuildConfig.VERSION_NAME}",
+            color = TextSecondary,
+            fontSize = 12.sp,
+            modifier = Modifier.fillMaxWidth(),
+            textAlign = TextAlign.Center,
+        )
     }
+}
+
+// A round chip filled with the accent's own gradient. The selected one gets a
+// ring in the primary colour: a border in one of the gradient's own stops would
+// vanish against the swatch it is meant to outline.
+@Composable
+private fun AccentSwatch(accent: Accent, selected: Boolean, onClick: () -> Unit) {
+    val ringColour = if (selected) AccentLavender else Color.Transparent
+    Box(
+        modifier = Modifier
+            .size(44.dp)
+            .border(2.dp, ringColour, CircleShape)
+            .padding(4.dp)
+            .clip(CircleShape)
+            .background(Brush.linearGradient(accent.stops))
+            .clickable(onClick = onClick),
+    )
 }
 
 @Composable

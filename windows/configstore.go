@@ -134,9 +134,19 @@ func updateConfig(id, yaml string) error {
 	return saveConfigs(dir, configs)
 }
 
-// setConfigGeo persists the one-time-resolved IP/country/flag for a saved
-// config - called by the frontend right after Add/UpdateConfig, once a Ping
-// and a geo-IP lookup have completed.
+// setConfigGeo persists a saved config's tile metadata. An empty argument means
+// "leave this field alone", so the two halves can be written independently.
+//
+// That matters because they have completely different failure modes. The country
+// and its ISO code are fields in the config's own yaml: no network, cannot fail.
+// The IP comes from a Ping to the operator's server and needs connectivity. They
+// used to be written together after a successful Ping, which meant a config added
+// while offline lost its country label permanently - the frontend bailed out
+// before it ever got to storing it. Now the country is pinned immediately and the
+// IP is retried until it lands.
+//
+// There is deliberately no IP->country lookup anywhere: that used to hit a
+// third-party geo service and a flag CDN, handing them the server's address.
 func setConfigGeo(id, ip, country, countryCode string) error {
 	dir, err := configDir()
 	if err != nil {
@@ -148,9 +158,15 @@ func setConfigGeo(id, ip, country, countryCode string) error {
 	}
 	for i := range configs {
 		if configs[i].ID == id {
-			configs[i].IP = ip
-			configs[i].Country = country
-			configs[i].CountryCode = countryCode
+			if ip != "" {
+				configs[i].IP = ip
+			}
+			if country != "" {
+				configs[i].Country = country
+			}
+			if countryCode != "" {
+				configs[i].CountryCode = countryCode
+			}
 		}
 	}
 	return saveConfigs(dir, configs)

@@ -1,5 +1,5 @@
 import './style.css';
-import { Connect, Disconnect, Status, ReadLog, ListConfigs, AddConfig, UpdateConfig, DeleteConfig, SetConfigGeo, Ping, ListResources, AddResource, DeleteResource, ListExcludedApps, PickExcludedAppExe, AddExcludedApp, DeleteExcludedApp, ApplyUpdate, StartProxy, StopProxy, GetLanguage, SetLanguage } from '../wailsjs/go/main/App';
+import { Connect, Disconnect, Status, ReadLog, ListConfigs, AddConfig, UpdateConfig, DeleteConfig, SetConfigGeo, Ping, ListResources, AddResource, DeleteResource, ListExcludedApps, PickExcludedAppExe, AddExcludedApp, DeleteExcludedApp, ApplyUpdate, StartProxy, StopProxy, GetLanguage, SetLanguage, Version, LookupCountry, GetAppearance, SetAppearance } from '../wailsjs/go/main/App';
 import { t, getLang, setLang, applyStaticTranslations } from './i18n.js';
 
 const screens = {
@@ -68,26 +68,76 @@ function parseYamlField(yaml, key) {
   return bare ? bare[1].trim() : '';
 }
 
-// Resolves and persists a config's server IP once (a local DNS + disguised
-// handshake via Ping - no third party), plus the optional country/country_code
-// the operator put in the client.yaml, then re-renders so the tile picks it up.
-// Called after every Add/UpdateConfig.
+// A tile's IP and country label are resolved once per saved config and pinned -
+// a server does not move, so there is nothing to refresh and no reason to poll.
 //
-// There is deliberately NO IP->country geo lookup here: that used to hit a
-// third-party service (ipwho.is) and a flag CDN (flagcdn.com), which leaked the
-// server's IP to those services on a timer. The country label is now purely a
-// static field an operator can put in the config they hand out.
-async function resolveConfigGeo(id, yaml) {
+// The country is looked up from the IP through a third-party geolocation service
+// (internal/geoip), which necessarily tells that service the address of the
+// user's server. That is a real cost and the reason an earlier version of this
+// removed the feature; it is back deliberately, but only once per config rather
+// than on the timer it used to run on. An operator who wants no third-party
+// contact at all can put country/country_code in the config, and those win.
+
+// Ids with a resolution already in flight, so saving a config twice doesn't start
+// two loops racing each other.
+const geoJobs = new Set();
+
+// The operator's own country/country_code from the yaml, if present. No network,
+// so this cannot fail and is stored immediately - and it takes precedence over
+// anything the lookup would return.
+async function applyCountryFromYaml(id, yaml) {
+  const country = parseYamlField(yaml, 'country');
+  const countryCode = parseYamlField(yaml, 'country_code');
+  if (!country && !countryCode) return false;
+  await SetConfigGeo(id, '', country, countryCode);
+  return true;
+}
+
+// Resolves the server IP (a Ping to the operator's own server) and then, unless
+// the config already spelled it out, its country. Both retry until they succeed:
+// a single attempt at save time meant "no connectivity right now" turned into "no
+// label on this tile, ever".
+async function resolveTileMetadata(id, yaml, hasExplicitCountry) {
+  if (geoJobs.has(id)) return;
+  geoJobs.add(id);
   try {
-    const ping = JSON.parse(await Ping(yaml));
-    if (!ping.ip) return;
-    const country = parseYamlField(yaml, 'country');
-    const countryCode = parseYamlField(yaml, 'country_code');
-    await SetConfigGeo(id, ping.ip, country, countryCode);
-    await reloadConfigs();
-  } catch (e) {
-    console.error(e);
+    let backoff = 2000;
+    let ip = '';
+    for (;;) {
+      if (!ip) {
+        try {
+          const ping = JSON.parse(await Ping(yaml));
+          if (ping.ip) {
+            ip = ping.ip;
+            await SetConfigGeo(id, ip, '', '');
+            await reloadConfigs();
+          }
+        } catch (e) {
+          console.error(e);
+        }
+      }
+      if (ip) {
+        if (hasExplicitCountry) return;
+        const raw = await LookupCountry(ip);
+        if (raw) {
+          const geo = JSON.parse(raw);
+          await SetConfigGeo(id, '', geo.country, geo.country_code);
+          await reloadConfigs();
+          return;
+        }
+      }
+      await new Promise((r) => setTimeout(r, backoff));
+      backoff = Math.min(backoff * 2, 60000);
+    }
+  } finally {
+    geoJobs.delete(id);
   }
+}
+
+async function resolveConfigGeo(id, yaml) {
+  const explicit = await applyCountryFromYaml(id, yaml);
+  await reloadConfigs();
+  resolveTileMetadata(id, yaml, explicit);
 }
 
 async function pollPing(config) {
@@ -101,13 +151,30 @@ async function pollPing(config) {
   updateTileMeta(config.id);
 }
 
+// Each ping is a full TCP+TLS+handshake to the server, so setInterval(..., 6000)
+// put a perfectly periodic connection every 6.000 seconds on the wire for as long
+// as the app was open. Real browsing produces nothing like that regularity, and a
+// metronome is exactly what traffic analysis looks for - no amount of
+// per-connection disguise hides it. Rescheduled with jitter after each poll
+// instead (6-10s), which also stops the polls from stacking up if one is slow.
 function startPingLoop(config) {
+  const schedule = () => {
+    const delay = 6000 + Math.floor(Math.random() * 4000);
+    pingTimers.set(config.id, setTimeout(async () => {
+      await pollPing(config);
+      if (pingTimers.has(config.id)) schedule();
+    }, delay));
+  };
   pollPing(config);
-  pingTimers.set(config.id, setInterval(() => pollPing(config), 6000));
+  schedule();
 }
 
 function stopAllPingLoops() {
-  for (const handle of pingTimers.values()) clearInterval(handle);
+  // clearTimeout: the ping loop reschedules itself with setTimeout (see
+  // startPingLoop) rather than running on a fixed interval. Clearing the map is
+  // what actually stops it - the loop checks pingTimers.has() before re-arming,
+  // so a poll already in flight won't schedule another one.
+  for (const handle of pingTimers.values()) clearTimeout(handle);
   pingTimers.clear();
   pingData.clear();
 }
@@ -176,7 +243,7 @@ function stopAllResourceLoops() {
 // this never touches pingData/resources - the last-known values stay on screen instead
 // of flashing to "—" every time the window is hidden and shown again.
 function pauseAllPolling() {
-  for (const handle of pingTimers.values()) clearInterval(handle);
+  for (const handle of pingTimers.values()) clearTimeout(handle); // see stopAllPingLoops
   pingTimers.clear();
   for (const handle of resourceTimers.values()) clearInterval(handle);
   resourceTimers.clear();
@@ -520,6 +587,38 @@ document.getElementById('btn-lang-en').addEventListener('click', async () => {
   applyLanguage('en');
 });
 
+// --- Appearance -------------------------------------------------------------
+//
+// Both values live as attributes on <html>; every colour and the accent gradient
+// are CSS variables keyed off them (see style.css), so switching either is one
+// attribute write and the whole window repaints. No re-render of any component
+// is involved, which is why this doesn't touch renderConfigList and friends the
+// way applyLanguage has to.
+
+let appearance = { theme: 'dark', accent: 'pink' };
+
+function applyAppearance() {
+  document.documentElement.setAttribute('data-theme', appearance.theme);
+  document.documentElement.setAttribute('data-accent', appearance.accent);
+  document.getElementById('btn-theme-dark').classList.toggle('active', appearance.theme === 'dark');
+  document.getElementById('btn-theme-light').classList.toggle('active', appearance.theme === 'light');
+  for (const swatch of document.querySelectorAll('.accent-swatch')) {
+    swatch.classList.toggle('active', swatch.dataset.accent === appearance.accent);
+  }
+}
+
+async function setAppearance(patch) {
+  appearance = { ...appearance, ...patch };
+  applyAppearance();
+  await SetAppearance(appearance.theme, appearance.accent);
+}
+
+document.getElementById('btn-theme-dark').addEventListener('click', () => setAppearance({ theme: 'dark' }));
+document.getElementById('btn-theme-light').addEventListener('click', () => setAppearance({ theme: 'light' }));
+for (const swatch of document.querySelectorAll('.accent-swatch')) {
+  swatch.addEventListener('click', () => setAppearance({ accent: swatch.dataset.accent }));
+}
+
 document.getElementById('btn-view-log').addEventListener('click', async () => {
   logText.textContent = await ReadLog();
   showScreen('log');
@@ -616,6 +715,14 @@ setInterval(refreshStatus, 4000);
   } catch (e) {
     // default (ru) stays if the Go call fails
   }
+  // Before the first paint, so the window doesn't flash the default theme on its
+  // way to the chosen one. Defaults (dark/pink) stay if the Go call fails.
+  try {
+    appearance = JSON.parse(await GetAppearance());
+  } catch (e) {
+    console.error(e);
+  }
+  applyAppearance();
   applyStaticTranslations();
   document.getElementById('btn-lang-ru').classList.toggle('active', getLang() === 'ru');
   document.getElementById('btn-lang-en').classList.toggle('active', getLang() === 'en');
@@ -625,10 +732,26 @@ setInterval(refreshStatus, 4000);
   await reloadResources();
   await reloadExcludedApps();
 
-  // Backfill the cached server IP (and any country field from the yaml) once for
-  // configs that don't have it yet - keyed on the IP, not the country, so a
-  // config whose yaml simply has no country doesn't re-Ping on every launch.
+  // Backfill on launch. Anything the config spells out is applied first (free,
+  // cannot fail, and repairs entries stored by a build that dropped the label
+  // when the Ping failed), then anything still missing is chased with retries.
+  const explicit = new Map();
   for (const config of configs) {
-    if (!config.ip) resolveConfigGeo(config.id, config.yaml);
+    explicit.set(config.id, await applyCountryFromYaml(config.id, config.yaml));
+  }
+  await reloadConfigs();
+  for (const config of configs) {
+    if (!config.ip || !config.countryCode) {
+      resolveTileMetadata(config.id, config.yaml, explicit.get(config.id));
+    }
+  }
+
+  // Version at the bottom of the settings panel. The app updates itself from
+  // GitHub releases, so "what am I actually running" is the first thing anyone
+  // needs when an update does or doesn't arrive.
+  try {
+    document.getElementById('app-version').textContent = `${t('version')} ${await Version()}`;
+  } catch (e) {
+    console.error(e);
   }
 })();

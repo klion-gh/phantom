@@ -46,6 +46,8 @@ object I18n {
         Lang.RU to mapOf(
             // main / config list
             "configs" to "Конфигурации",
+            "version" to "Версия",
+            "insecure_storage" to "Хранилище ключей недоступно — конфигурации сохранены без шифрования. Тот, кто получит доступ к устройству, прочитает PSK и адрес сервера.",
             "no_configs" to "Нет добавленной конфигурации",
             "no_configs_hint" to "Нажмите + чтобы добавить client.yaml",
             "resources" to "Доступность ресурсов",
@@ -71,6 +73,10 @@ object I18n {
             "log_title" to "Лог (%s)",
             "share" to "Поделиться",
             "language" to "Язык",
+            "theme" to "Тема",
+            "theme_dark" to "Тёмная",
+            "theme_light" to "Светлая",
+            "accent" to "Акцент",
             // tiles
             "ping" to "Пинг",
             "ms" to "мс",
@@ -96,6 +102,8 @@ object I18n {
         ),
         Lang.EN to mapOf(
             "configs" to "Configurations",
+            "version" to "Version",
+            "insecure_storage" to "Keystore unavailable — configurations are stored unencrypted. Anyone with access to this device can read the PSK and server address.",
             "no_configs" to "No configuration added",
             "no_configs_hint" to "Tap + to add client.yaml",
             "resources" to "Resource availability",
@@ -118,6 +126,10 @@ object I18n {
             "log_title" to "Log (%s)",
             "share" to "Share",
             "language" to "Language",
+            "theme" to "Theme",
+            "theme_dark" to "Dark",
+            "theme_light" to "Light",
+            "accent" to "Accent",
             "ping" to "Ping",
             "ms" to "ms",
             "port_ph" to "port",

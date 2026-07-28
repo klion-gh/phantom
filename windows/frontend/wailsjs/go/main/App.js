@@ -89,3 +89,19 @@ export function StopProxy(arg1) {
 export function UpdateConfig(arg1, arg2) {
   return window['go']['main']['App']['UpdateConfig'](arg1, arg2);
 }
+
+export function Version() {
+  return window['go']['main']['App']['Version']();
+}
+
+export function LookupCountry(arg1) {
+  return window['go']['main']['App']['LookupCountry'](arg1);
+}
+
+export function GetAppearance() {
+  return window['go']['main']['App']['GetAppearance']();
+}
+
+export function SetAppearance(arg1, arg2) {
+  return window['go']['main']['App']['SetAppearance'](arg1, arg2);
+}

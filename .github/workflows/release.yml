@@ -61,6 +61,18 @@ jobs:
       - name: Run tests
         run: go test ./internal/... ./cmd/...
 
+      # The race detector needs cgo, which isn't available on the maintainer's
+      # Windows machine - so this is the only place it ever runs. Worth it: the
+      # multiplexer, the connection pool and the session refreshers are all
+      # concurrent, and a data race there surfaces as an unreproducible crash on
+      # someone's phone. Only on amd64; the arm64 job would need cross-toolchain
+      # setup for no extra coverage.
+      - name: Run tests under the race detector
+        if: matrix.arch == 'amd64'
+        env:
+          CGO_ENABLED: "1"
+        run: go test -race ./internal/... ./cmd/...
+
       - name: Build phantom-server
         env:
           GOOS: linux
@@ -104,6 +116,14 @@ jobs:
         working-directory: windows
         run: wails build -platform windows/amd64
 
+      # After the build, not before: main.go embeds frontend/dist, which doesn't
+      # exist in a fresh checkout until Wails has built the frontend - so the
+      # package won't even compile earlier in the job. The windows package is
+      # GOOS=windows-only, so this is the only runner that can test it at all.
+      - name: Test the Windows client package
+        working-directory: windows
+        run: go test ./...
+
       - uses: actions/upload-artifact@v4
         with:
           name: windows-client
@@ -138,6 +158,16 @@ jobs:
           done
           [ "$missing" = 0 ]
           ls -la dist/
+
+      # Published alongside the binaries so scripts/install.sh can verify what it
+      # downloaded instead of trusting the transfer blindly. Note this only binds
+      # the artifacts to this release - it is an integrity check, not a signature,
+      # and offers nothing against a compromised release itself.
+      - name: Generate SHA256SUMS
+        working-directory: dist
+        run: |
+          sha256sum * > SHA256SUMS
+          cat SHA256SUMS
 
       - name: Draft release
         uses: softprops/action-gh-release@v2

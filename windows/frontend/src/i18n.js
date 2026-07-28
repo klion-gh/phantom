@@ -26,6 +26,11 @@ const dict = {
     edit_config_title: 'Редактировать конфигурацию',
     // settings
     view_log: 'Посмотреть лог',
+    version: 'Версия',
+    theme: 'Тема',
+    theme_dark: 'Тёмная',
+    theme_light: 'Светлая',
+    accent: 'Акцент',
     split_tunnel: 'Раздельное туннелирование',
     language: 'Язык',
     // log
@@ -80,6 +85,11 @@ const dict = {
     delete: 'Delete',
     edit_config_title: 'Edit configuration',
     view_log: 'View log',
+    version: 'Version',
+    theme: 'Theme',
+    theme_dark: 'Dark',
+    theme_light: 'Light',
+    accent: 'Accent',
     split_tunnel: 'Split tunneling',
     language: 'Language',
     log: 'Log',

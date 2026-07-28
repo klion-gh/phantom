@@ -10,31 +10,29 @@ import (
 )
 
 type Stream struct {
-	id        uint16
-	mux       *Multiplexer
-	target    string
-	readBuf   []byte
-	readCh    chan []byte
-	closeCh   chan struct{}
-	closed    bool
+	id      uint16
+	mux     *Multiplexer
+	target  string
+	readBuf []byte
+	readCh  chan []byte
+	closeCh chan struct{}
+	closed  bool
 	// closeErr is why this stream ended: nil for an ordinary close (the peer sent
 	// CLOSE, or we did), non-nil when the whole session died under it. Read
 	// reports it once the buffered data is drained, so an interrupted transfer
 	// surfaces as an error instead of a clean io.EOF that io.Copy would report as
 	// success.
-	closeErr   error
-	isIncoming bool
-	isUDP     bool
-	accepted  bool
-	mu        sync.Mutex
+	closeErr error
+	isUDP    bool
+	mu       sync.Mutex
 }
 
 func newStream(id uint16, mux *Multiplexer, target string) *Stream {
 	return &Stream{
-		id:     id,
-		mux:    mux,
-		target: target,
-		readCh: make(chan []byte, 64),
+		id:      id,
+		mux:     mux,
+		target:  target,
+		readCh:  make(chan []byte, 64),
 		closeCh: make(chan struct{}),
 	}
 }
