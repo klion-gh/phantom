@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"log"
 	"net"
@@ -97,9 +98,16 @@ func main() {
 		})
 	})
 
-	if err != nil {
+	// A cancelled context is how a normal shutdown ends (SIGTERM -> cancel ->
+	// ListenAndServe returns ctx.Err()), so it is not an error. Treating it as
+	// one made every `systemctl stop` exit non-zero, which systemd reports as
+	// "Failed with result 'exit-code'" and, combined with the shutdown taking a
+	// while, as a timeout - so an ordinary restart looked exactly like a crash in
+	// the journal, on the machine where the journal is the only thing to go on.
+	if err != nil && !errors.Is(err, context.Canceled) {
 		log.Fatalf("Server error: %v", err)
 	}
+	log.Println("[server] stopped")
 }
 
 // logMetricsLoop prints an aggregate connection-outcome summary every few

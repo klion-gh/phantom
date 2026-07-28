@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 // DecoySite is what a connection gets instead of a dropped/reset connection
@@ -50,14 +51,25 @@ func (d *DecoySite) Serve(w io.Writer, req *http.Request) {
 }
 
 func (d *DecoySite) write(w io.Writer, body []byte, contentType string, status int) {
-
+	// Date is mandatory for an origin server per RFC 9110 §6.6.1, and every real
+	// web server sends it. Omitting it was a free, entirely passive distinguisher
+	// available to any prober that bothered to read the response headers - which
+	// rather undercuts serving a decoy site at all.
+	//
+	// Deliberately no Server header: claiming to be nginx or Apache invites a
+	// prober to check that claim against behaviour this isn't (HTTP/2 support,
+	// error page shapes, header ordering), and a missing Server header is
+	// unremarkable on its own - plenty of real deployments strip it.
 	resp := fmt.Sprintf(
 		"HTTP/1.1 %d %s\r\n"+
+			"Date: %s\r\n"+
 			"Content-Type: %s\r\n"+
 			"Content-Length: %d\r\n"+
 			"Connection: close\r\n"+
 			"\r\n",
-		status, http.StatusText(status), contentType, len(body),
+		status, http.StatusText(status),
+		time.Now().UTC().Format(http.TimeFormat),
+		contentType, len(body),
 	)
 	if _, err := w.Write([]byte(resp)); err != nil {
 		log.Printf("[decoy] write response failed: %v", err)
