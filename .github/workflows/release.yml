@@ -61,6 +61,18 @@ jobs:
       - name: Run tests
         run: go test ./internal/... ./cmd/...
 
+      # The race detector needs cgo, which isn't available on the maintainer's
+      # Windows machine - so this is the only place it ever runs. Worth it: the
+      # multiplexer, the connection pool and the session refreshers are all
+      # concurrent, and a data race there surfaces as an unreproducible crash on
+      # someone's phone. Only on amd64; the arm64 job would need cross-toolchain
+      # setup for no extra coverage.
+      - name: Run tests under the race detector
+        if: matrix.arch == 'amd64'
+        env:
+          CGO_ENABLED: "1"
+        run: go test -race ./internal/... ./cmd/...
+
       - name: Build phantom-server
         env:
           GOOS: linux
@@ -138,6 +150,16 @@ jobs:
           done
           [ "$missing" = 0 ]
           ls -la dist/
+
+      # Published alongside the binaries so scripts/install.sh can verify what it
+      # downloaded instead of trusting the transfer blindly. Note this only binds
+      # the artifacts to this release - it is an integrity check, not a signature,
+      # and offers nothing against a compromised release itself.
+      - name: Generate SHA256SUMS
+        working-directory: dist
+        run: |
+          sha256sum * > SHA256SUMS
+          cat SHA256SUMS
 
       - name: Draft release
         uses: softprops/action-gh-release@v2

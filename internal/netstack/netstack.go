@@ -73,7 +73,19 @@ type Tunnel struct {
 // afterwards. A nil Tunnel receiver check isn't needed since callers always
 // have a valid *Tunnel from a successful New.
 func (t *Tunnel) SetBypass(fn BypassFunc) {
+	t.sessionMu.Lock()
 	t.bypass = fn
+	t.sessionMu.Unlock()
+}
+
+// currentBypass reads the hook under the same lock that guards writing it.
+// Both this and the refresher used to be written unlocked while other goroutines
+// read them, which is a data race however benign it looks in practice - the
+// writes happen once at startup, but "once at startup" is not a memory model.
+func (t *Tunnel) currentBypass() BypassFunc {
+	t.sessionMu.Lock()
+	defer t.sessionMu.Unlock()
+	return t.bypass
 }
 
 // SetSessionRefresher installs an optional hook that lets the tunnel recover
@@ -92,7 +104,9 @@ func (t *Tunnel) SetBypass(fn BypassFunc) {
 // whole tunnel having died, requiring a manual disconnect/reconnect to
 // recover instead of the pool's own self-healing actually being put to use.
 func (t *Tunnel) SetSessionRefresher(fn func() (*tunnel.Session, error)) {
+	t.sessionMu.Lock()
 	t.refreshSession = fn
+	t.sessionMu.Unlock()
 }
 
 // currentSession returns the tunnel's session, transparently replacing it
@@ -207,8 +221,8 @@ func (t *Tunnel) handleUDP(r *udp.ForwarderRequest) bool {
 // direct dial itself failed, so an excluded app still gets connectivity via
 // the tunnel rather than none at all).
 func (t *Tunnel) openRemote(network string, localPort uint16, target string) io.ReadWriteCloser {
-	if t.bypass != nil {
-		if conn := t.bypass(network, localPort, target); conn != nil {
+	if bypass := t.currentBypass(); bypass != nil {
+		if conn := bypass(network, localPort, target); conn != nil {
 			return conn
 		}
 	}
