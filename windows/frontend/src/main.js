@@ -101,13 +101,30 @@ async function pollPing(config) {
   updateTileMeta(config.id);
 }
 
+// Each ping is a full TCP+TLS+handshake to the server, so setInterval(..., 6000)
+// put a perfectly periodic connection every 6.000 seconds on the wire for as long
+// as the app was open. Real browsing produces nothing like that regularity, and a
+// metronome is exactly what traffic analysis looks for - no amount of
+// per-connection disguise hides it. Rescheduled with jitter after each poll
+// instead (6-10s), which also stops the polls from stacking up if one is slow.
 function startPingLoop(config) {
+  const schedule = () => {
+    const delay = 6000 + Math.floor(Math.random() * 4000);
+    pingTimers.set(config.id, setTimeout(async () => {
+      await pollPing(config);
+      if (pingTimers.has(config.id)) schedule();
+    }, delay));
+  };
   pollPing(config);
-  pingTimers.set(config.id, setInterval(() => pollPing(config), 6000));
+  schedule();
 }
 
 function stopAllPingLoops() {
-  for (const handle of pingTimers.values()) clearInterval(handle);
+  // clearTimeout: the ping loop reschedules itself with setTimeout (see
+  // startPingLoop) rather than running on a fixed interval. Clearing the map is
+  // what actually stops it - the loop checks pingTimers.has() before re-arming,
+  // so a poll already in flight won't schedule another one.
+  for (const handle of pingTimers.values()) clearTimeout(handle);
   pingTimers.clear();
   pingData.clear();
 }
@@ -176,7 +193,7 @@ function stopAllResourceLoops() {
 // this never touches pingData/resources - the last-known values stay on screen instead
 // of flashing to "—" every time the window is hidden and shown again.
 function pauseAllPolling() {
-  for (const handle of pingTimers.values()) clearInterval(handle);
+  for (const handle of pingTimers.values()) clearTimeout(handle); // see stopAllPingLoops
   pingTimers.clear();
   for (const handle of resourceTimers.values()) clearInterval(handle);
   resourceTimers.clear();

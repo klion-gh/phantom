@@ -326,7 +326,14 @@ private fun LaunchedEffectPing(yaml: String, pingEnabled: Boolean, onResult: sus
         if (!pingEnabled) return@LaunchedEffect
         while (isActive) {
             onResult(fetchPing(yaml))
-            delay(6000)
+            // Jittered, not a flat 6s. Each ping is a full TCP+TLS+handshake to the
+            // server, so a fixed interval put a perfectly periodic connection every
+            // 6.000 seconds on the wire for as long as the app was open. Real
+            // browsing produces nothing like that regularity, and a metronome is
+            // exactly the kind of behavioural signature traffic analysis looks for -
+            // no amount of per-connection disguise hides it. 6-10s keeps the tile
+            // feeling live while making the cadence irregular.
+            delay(6000L + (0..4000L).random())
         }
     }
 }
