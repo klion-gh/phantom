@@ -16,7 +16,6 @@ type Multiplexer struct {
 	streams      map[uint16]*Stream
 	mu           sync.RWMutex
 	nextClientID uint16
-	nextServerID uint16
 	closed       chan struct{}
 	writeCh      chan *writeRequest
 	acceptCh     chan *Stream
@@ -40,7 +39,6 @@ func NewMultiplexer(conn net.Conn, crypto *protocol.SessionCrypto) *Multiplexer 
 		crypto:       crypto,
 		streams:      make(map[uint16]*Stream),
 		nextClientID: 1,
-		nextServerID: 2,
 		closed:       make(chan struct{}),
 		writeCh:      make(chan *writeRequest, 256),
 		acceptCh:     make(chan *Stream, 64),
@@ -113,10 +111,9 @@ var ErrStreamIDsExhausted = errors.New("tunnel: no free stream IDs")
 //
 // The walk steps by 2 from an odd start, so allocated IDs stay odd across the
 // uint16 wrap (65535+2 == 1) and 0 - reserved for session-level frames like PING
-// - is never handed out. Only the initiating side ever calls this; the
-// nextServerID field is vestigial (the server accepts streams, never opens
-// them), so if a future change ever has the server initiate, it must take the
-// even parity or the two sides will collide.
+// - is never handed out. Only the initiating side ever calls this: the server
+// accepts streams and never opens them. If a future change ever has it initiate,
+// it must allocate from the even half or the two sides will collide.
 func (m *Multiplexer) allocStreamID(s *Stream) (uint16, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -241,7 +238,7 @@ func (m *Multiplexer) handleFrame(f *protocol.Frame) {
 	case protocol.FramePing:
 		m.handlePing(f)
 	case protocol.FrameSettings:
-		m.handleSettings(f)
+		// ignore - see PROTOCOL.md; nothing emits these yet
 	case protocol.FramePadding:
 		// ignore
 	}
@@ -256,7 +253,6 @@ func (m *Multiplexer) handleOpen(f *protocol.Frame) {
 	}
 
 	s := newStream(id, m, string(f.Payload))
-	s.isIncoming = true
 	s.isUDP = f.Flags&protocol.FlagUDP != 0
 	m.streams[id] = s
 	m.mu.Unlock()
@@ -312,8 +308,6 @@ func (m *Multiplexer) handlePing(f *protocol.Frame) {
 	}
 	m.sendFrame(pong)
 }
-
-func (m *Multiplexer) handleSettings(f *protocol.Frame) {}
 
 func (m *Multiplexer) writeLoop() {
 	for {

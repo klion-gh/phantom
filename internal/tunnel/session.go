@@ -2,22 +2,16 @@ package tunnel
 
 import (
 	"context"
-	"time"
 
 	"phantom/internal/logx"
-	"phantom/internal/protocol"
 )
 
 type Session struct {
-	mux       *Multiplexer
-	startTime time.Time
+	mux *Multiplexer
 }
 
 func NewSessionFromMux(mux *Multiplexer) *Session {
-	return &Session{
-		mux:       mux,
-		startTime: time.Now(),
-	}
+	return &Session{mux: mux}
 }
 
 func (s *Session) Open(target string) (*Stream, error) {
@@ -44,10 +38,6 @@ func (s *Session) IsAlive() bool {
 	return !s.mux.IsClosed()
 }
 
-func (s *Session) Uptime() time.Duration {
-	return time.Since(s.startTime)
-}
-
 func (s *Session) HandleIncoming(ctx context.Context, handler func(stream *Stream)) {
 	for {
 		select {
@@ -69,21 +59,13 @@ func (s *Session) HandleIncoming(ctx context.Context, handler func(stream *Strea
 	}
 }
 
-func (s *Session) Ping() (time.Duration, error) {
-	start := time.Now()
-
-	pingData := make([]byte, 8)
-	copy(pingData, []byte("PTLSping"))
-
-	pingFrame := &protocol.Frame{
-		Type:     protocol.FramePing,
-		StreamID: 0,
-		Payload:  pingData,
-	}
-
-	if err := s.mux.sendFrame(pingFrame); err != nil {
-		return 0, err
-	}
-
-	return time.Since(start), nil
-}
+// There is deliberately no Ping method here any more. The one that existed was
+// never called by anything, and measured the wrong thing anyway: it returned how
+// long it took to hand the frame to the write loop, with no correlation to the
+// pong that came back, so it reported queueing latency rather than a round trip.
+//
+// handlePing on the receiving side stays - answering a peer's ping costs nothing
+// and keeps the frame type usable - but nothing in this codebase sends one, so
+// the tunnel currently has no application-level keepalive at all. See
+// PROTOCOL.md's known-gaps list; whoever implements one should write a correct
+// round-trip measurement rather than restore this.
