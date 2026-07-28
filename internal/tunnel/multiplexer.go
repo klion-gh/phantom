@@ -63,7 +63,7 @@ func (m *Multiplexer) OpenUDP(target string) (*Stream, error) {
 func (m *Multiplexer) openStream(target string, udp bool) (*Stream, error) {
 	select {
 	case <-m.closed:
-		return nil, errors.New("multiplexer closed")
+		return nil, ErrSessionClosed
 	default:
 	}
 
@@ -139,7 +139,7 @@ func (m *Multiplexer) Accept() (*Stream, error) {
 	case s := <-m.acceptCh:
 		return s, nil
 	case <-m.closed:
-		return nil, errors.New("multiplexer closed")
+		return nil, ErrSessionClosed
 	}
 }
 
@@ -151,9 +151,21 @@ func (m *Multiplexer) sendFrame(f *protocol.Frame) error {
 
 	select {
 	case m.writeCh <- req:
-		return <-req.errCh
+		// Wait for the result, but not forever. Both cases of the select above
+		// are ready once the multiplexer is closed - writeCh is buffered - and Go
+		// picks between ready cases at random, so roughly half the time a frame
+		// gets queued onto a channel whose writeLoop has already returned. Nobody
+		// then writes req.errCh, and a bare `<-req.errCh` blocked permanently:
+		// not only Stream.Write but Open itself, which is what made a dropped
+		// connection still wedge callers even after Close learned to wake streams.
+		select {
+		case err := <-req.errCh:
+			return err
+		case <-m.closed:
+			return ErrSessionClosed
+		}
 	case <-m.closed:
-		return errors.New("multiplexer closed")
+		return ErrSessionClosed
 	}
 }
 
