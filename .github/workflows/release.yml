@@ -109,18 +109,20 @@ jobs:
         with:
           node-version: "22"
 
-      # The windows package is GOOS=windows-only, so the Linux job can't compile
-      # it and its tests never ran anywhere. This is the only runner that can.
-      - name: Test the Windows client package
-        working-directory: windows
-        run: go test ./...
-
       - name: Install Wails
         run: go install github.com/wailsapp/wails/v2/cmd/wails@v2.12.0
 
       - name: Build phantom.exe
         working-directory: windows
         run: wails build -platform windows/amd64
+
+      # After the build, not before: main.go embeds frontend/dist, which doesn't
+      # exist in a fresh checkout until Wails has built the frontend - so the
+      # package won't even compile earlier in the job. The windows package is
+      # GOOS=windows-only, so this is the only runner that can test it at all.
+      - name: Test the Windows client package
+        working-directory: windows
+        run: go test ./...
 
       - uses: actions/upload-artifact@v4
         with:
