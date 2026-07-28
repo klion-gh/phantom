@@ -89,3 +89,7 @@ export function StopProxy(arg1) {
 export function UpdateConfig(arg1, arg2) {
   return window['go']['main']['App']['UpdateConfig'](arg1, arg2);
 }
+
+export function Version() {
+  return window['go']['main']['App']['Version']();
+}

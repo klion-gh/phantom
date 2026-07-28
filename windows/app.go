@@ -171,11 +171,18 @@ func (a *App) UpdateConfig(id string, configYAML string) string {
 	return ""
 }
 
-// SetConfigGeo persists the one-time-resolved server IP/country/flag for a
-// saved config. Called by the frontend right after Add/UpdateConfig, once a
-// Ping and a geo-IP lookup (both done client-side in JS) have completed -
-// see internal/pingcheck and the "why once, not on a timer" note on
-// SavedConfig for the reasoning.
+// Version is the running build's version string, shown at the bottom of the
+// settings panel. Read from the same constant the updater compares against
+// GitHub's latest release tag, so what the user is shown is exactly what decides
+// whether an update is offered.
+func (a *App) Version() string {
+	return AppVersion
+}
+
+// SetConfigGeo persists a saved config's tile metadata. An empty argument means
+// "leave that field alone", so the country (a field in the yaml, no network) and
+// the IP (a Ping, needs connectivity) can be written independently - see
+// setConfigGeo for why that separation matters.
 func (a *App) SetConfigGeo(id string, ip string, country string, countryCode string) string {
 	if err := setConfigGeo(id, ip, country, countryCode); err != nil {
 		return err.Error()

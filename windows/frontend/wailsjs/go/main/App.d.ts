@@ -44,3 +44,5 @@ export function Status():Promise<string>;
 export function StopProxy(arg1:string):Promise<string>;
 
 export function UpdateConfig(arg1:string,arg2:string):Promise<string>;
+
+export function Version():Promise<string>;

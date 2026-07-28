@@ -34,11 +34,14 @@ import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
 private enum class Screen { MAIN, ADD_CONFIG, SETTINGS, LOG }
@@ -243,26 +246,74 @@ private fun PhantomApp(
         }
     }
 
-    // Persists a config's server IP once (a local Ping - no third party) plus the
-    // optional country/country_code the operator put in the yaml, then refreshes so
-    // the tile picks it up. There is deliberately no IP->country lookup anymore: it
-    // used to hit a third-party geo/flag service (ipwho.is/flagcdn), leaking the
-    // server IP to it - the country is now just a static field in the config.
-    fun resolveGeoInBackground(id: String, yaml: String) {
+    // Ids with an IP-resolution retry loop already running, so a config saved twice
+    // (or saved and then backfilled on the next launch) doesn't accumulate loops.
+    // remembered rather than a plain local: a recomposition would otherwise hand out
+    // a fresh empty set and the guard would stop guarding.
+    val geoJobs = remember { java.util.Collections.synchronizedSet(mutableSetOf<String>()) }
+
+    // Applies the country label and ISO code straight from the config's yaml. No
+    // network, so this cannot fail and is applied immediately - which is the whole
+    // point: these two used to be written only after a successful Ping, so a config
+    // added with no connectivity lost its country label permanently.
+    //
+    // There is deliberately no IP->country lookup anywhere: that used to hit a
+    // third-party geo/flag service (ipwho.is/flagcdn) and leak the server's IP to
+    // it. The country is a static field the operator puts in the config they hand
+    // out.
+    fun applyCountryFromYaml(id: String, yaml: String) {
+        ConfigStore.setCountry(
+            context, id,
+            parseYamlField(yaml, "country"),
+            parseYamlField(yaml, "country_code"),
+        )
+    }
+
+    // Resolves the server IP for a config and keeps retrying until it succeeds -
+    // this is the part that genuinely needs the network, and a single attempt at
+    // save time meant "no internet right now" turned into "no IP on this tile,
+    // ever". Backs off up to a minute so a long outage costs nothing, and stops for
+    // good once the value is pinned.
+    fun resolveServerIPInBackground(id: String, yaml: String) {
+        if (!geoJobs.add(id)) return
         coroutineScope.launch {
-            val (ip, _) = fetchPing(yaml) ?: return@launch
-            val country = parseYamlField(yaml, "country")
-            val countryCode = parseYamlField(yaml, "country_code")
-            ConfigStore.setGeo(context, id, ip, country, countryCode)
-            refreshConfigs()
+            try {
+                var backoffMs = 2_000L
+                while (isActive) {
+                    val ip = fetchPing(yaml)?.first
+                    if (!ip.isNullOrBlank()) {
+                        ConfigStore.setServerIP(context, id, ip)
+                        refreshConfigs()
+                        return@launch
+                    }
+                    delay(backoffMs)
+                    backoffMs = (backoffMs * 2).coerceAtMost(60_000L)
+                }
+            } finally {
+                geoJobs.remove(id)
+            }
         }
     }
 
-    // Backfill the cached server IP (and any country field from the yaml) once for
-    // configs missing it - keyed on the IP, not the country, so a config whose yaml
-    // simply has no country doesn't re-Ping on every launch.
+    fun resolveGeoInBackground(id: String, yaml: String) {
+        applyCountryFromYaml(id, yaml)
+        refreshConfigs()
+        resolveServerIPInBackground(id, yaml)
+    }
+
+    // Backfill on launch, in two halves that fail independently.
+    //
+    // The country is re-applied for every config unconditionally: it is a field in
+    // the yaml, costs nothing, and this is what repairs configs saved by an older
+    // build that dropped the label whenever the Ping at save time failed.
+    //
+    // The IP costs a real handshake, so only configs still missing one are chased -
+    // and that chase retries until it succeeds rather than giving up after a single
+    // attempt on a launch that happened to have no connectivity.
     LaunchedEffect(Unit) {
-        configs.filter { it.ip == null }.forEach { resolveGeoInBackground(it.id, it.yaml) }
+        configs.forEach { applyCountryFromYaml(it.id, it.yaml) }
+        refreshConfigs()
+        configs.filter { it.ip == null }.forEach { resolveServerIPInBackground(it.id, it.yaml) }
     }
 
     when (screen) {
@@ -826,6 +877,21 @@ private fun SettingsScreen(
         OutlinedButton(onClick = onViewLog, modifier = Modifier.fillMaxWidth()) {
             Text(I18n.t("view_log"))
         }
+
+        Spacer(modifier = Modifier.weight(1f))
+
+        // Pinned to the bottom of the settings screen. Worth having somewhere
+        // visible: the app updates itself from GitHub releases, so "which version
+        // am I actually running" is the first thing anyone needs when an update
+        // does or doesn't arrive. Comes from BuildConfig, so it is whatever the APK
+        // was built as and cannot drift from it.
+        Text(
+            text = "${I18n.t("version")} ${BuildConfig.VERSION_NAME}",
+            color = TextSecondary,
+            fontSize = 12.sp,
+            modifier = Modifier.fillMaxWidth(),
+            textAlign = TextAlign.Center,
+        )
     }
 }
 

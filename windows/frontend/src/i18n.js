@@ -26,6 +26,7 @@ const dict = {
     edit_config_title: 'Редактировать конфигурацию',
     // settings
     view_log: 'Посмотреть лог',
+    version: 'Версия',
     split_tunnel: 'Раздельное туннелирование',
     language: 'Язык',
     // log
@@ -80,6 +81,7 @@ const dict = {
     delete: 'Delete',
     edit_config_title: 'Edit configuration',
     view_log: 'View log',
+    version: 'Version',
     split_tunnel: 'Split tunneling',
     language: 'Language',
     log: 'Log',

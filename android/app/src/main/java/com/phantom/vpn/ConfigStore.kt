@@ -11,12 +11,14 @@ import java.util.UUID
 /**
  * One saved client.yaml, shown as its own tile on the main screen.
  *
- * [ip]/[country]/[countryCode] are resolved once (a Ping + a geo-IP lookup)
- * right after the config is added or edited, not on every ping cycle - the
- * server behind a saved config essentially never moves, so re-resolving its
- * location every few seconds on a timer was just wasted third-party calls
- * (and is what rate-limited the geo-IP provider into 429s during
- * development). They're null until [ConfigStore.setGeo] is called once.
+ * [country]/[countryCode] are copied out of the config's own yaml - there is no
+ * geo-IP lookup anywhere in the app any more, since that used to hand the
+ * server's address to a third party on a timer. [ip] comes from a Ping to the
+ * operator's own server.
+ *
+ * They are resolved once and pinned, not refreshed on every ping cycle: the
+ * server behind a saved config essentially never moves. See
+ * [ConfigStore.setCountry] and [ConfigStore.setServerIP].
  */
 data class SavedConfig(
     val id: String,
@@ -185,11 +187,25 @@ object ConfigStore {
         saveAll(context, loadAll(context).filterNot { it.id == id })
     }
 
-    /** Persists the one-time-resolved IP/country/flag for a saved config - called right
-     * after add/update, once a Ping and a geo-IP lookup have completed. */
-    fun setGeo(context: Context, id: String, ip: String, country: String?, countryCode: String?) {
+    /**
+     * Persists the country label and ISO code a config's yaml carries.
+     *
+     * Deliberately separate from [setServerIP]. These two values used to be written
+     * together, after a Ping - which meant the country, which comes straight out of
+     * the yaml and needs no network whatsoever, was silently discarded whenever that
+     * Ping failed. Add a config with no connectivity and the label was simply never
+     * stored, permanently, until the config happened to be edited again.
+     */
+    fun setCountry(context: Context, id: String, country: String?, countryCode: String?) {
         saveAll(context, loadAll(context).map {
-            if (it.id == id) it.copy(ip = ip, country = country, countryCode = countryCode) else it
+            if (it.id == id) it.copy(country = country, countryCode = countryCode) else it
+        })
+    }
+
+    /** Persists the server IP resolved by a Ping - the part that does need the network. */
+    fun setServerIP(context: Context, id: String, ip: String) {
+        saveAll(context, loadAll(context).map {
+            if (it.id == id) it.copy(ip = ip) else it
         })
     }
 

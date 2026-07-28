@@ -1,5 +1,5 @@
 import './style.css';
-import { Connect, Disconnect, Status, ReadLog, ListConfigs, AddConfig, UpdateConfig, DeleteConfig, SetConfigGeo, Ping, ListResources, AddResource, DeleteResource, ListExcludedApps, PickExcludedAppExe, AddExcludedApp, DeleteExcludedApp, ApplyUpdate, StartProxy, StopProxy, GetLanguage, SetLanguage } from '../wailsjs/go/main/App';
+import { Connect, Disconnect, Status, ReadLog, ListConfigs, AddConfig, UpdateConfig, DeleteConfig, SetConfigGeo, Ping, ListResources, AddResource, DeleteResource, ListExcludedApps, PickExcludedAppExe, AddExcludedApp, DeleteExcludedApp, ApplyUpdate, StartProxy, StopProxy, GetLanguage, SetLanguage, Version } from '../wailsjs/go/main/App';
 import { t, getLang, setLang, applyStaticTranslations } from './i18n.js';
 
 const screens = {
@@ -68,26 +68,62 @@ function parseYamlField(yaml, key) {
   return bare ? bare[1].trim() : '';
 }
 
-// Resolves and persists a config's server IP once (a local DNS + disguised
-// handshake via Ping - no third party), plus the optional country/country_code
-// the operator put in the client.yaml, then re-renders so the tile picks it up.
-// Called after every Add/UpdateConfig.
+// Tile metadata comes from two sources with completely different failure modes,
+// so it is resolved in two halves - see applyCountryFromYaml and resolveServerIP.
 //
-// There is deliberately NO IP->country geo lookup here: that used to hit a
-// third-party service (ipwho.is) and a flag CDN (flagcdn.com), which leaked the
-// server's IP to those services on a timer. The country label is now purely a
-// static field an operator can put in the config they hand out.
-async function resolveConfigGeo(id, yaml) {
+// There is deliberately NO IP->country geo lookup: that used to hit a third-party
+// service (ipwho.is) and a flag CDN (flagcdn.com), handing the server's address
+// to both on a timer. The country label is a static field an operator puts in the
+// config they hand out.
+
+// Ids with an IP retry already in flight, so saving a config twice doesn't start
+// two loops racing each other.
+const geoJobs = new Set();
+
+// Applies the country label and ISO code from the config's own yaml. No network,
+// so it cannot fail and is stored immediately.
+//
+// This used to happen only after a successful Ping, which meant a config added
+// with no connectivity had its country silently dropped and never retried - the
+// label simply never appeared on the tile again until the config was edited.
+async function applyCountryFromYaml(id, yaml) {
+  const country = parseYamlField(yaml, 'country');
+  const countryCode = parseYamlField(yaml, 'country_code');
+  if (!country && !countryCode) return;
+  await SetConfigGeo(id, '', country, countryCode);
+}
+
+// Resolves the server IP and keeps retrying until it succeeds. This is the half
+// that genuinely needs the network; backs off to a minute so a long outage is
+// cheap, and stops for good once the value is pinned.
+async function resolveServerIP(id, yaml) {
+  if (geoJobs.has(id)) return;
+  geoJobs.add(id);
   try {
-    const ping = JSON.parse(await Ping(yaml));
-    if (!ping.ip) return;
-    const country = parseYamlField(yaml, 'country');
-    const countryCode = parseYamlField(yaml, 'country_code');
-    await SetConfigGeo(id, ping.ip, country, countryCode);
-    await reloadConfigs();
-  } catch (e) {
-    console.error(e);
+    let backoff = 2000;
+    for (;;) {
+      try {
+        const ping = JSON.parse(await Ping(yaml));
+        if (ping.ip) {
+          await SetConfigGeo(id, ping.ip, '', '');
+          await reloadConfigs();
+          return;
+        }
+      } catch (e) {
+        console.error(e);
+      }
+      await new Promise((r) => setTimeout(r, backoff));
+      backoff = Math.min(backoff * 2, 60000);
+    }
+  } finally {
+    geoJobs.delete(id);
   }
+}
+
+async function resolveConfigGeo(id, yaml) {
+  await applyCountryFromYaml(id, yaml);
+  await reloadConfigs();
+  resolveServerIP(id, yaml);
 }
 
 async function pollPing(config) {
@@ -642,10 +678,29 @@ setInterval(refreshStatus, 4000);
   await reloadResources();
   await reloadExcludedApps();
 
-  // Backfill the cached server IP (and any country field from the yaml) once for
-  // configs that don't have it yet - keyed on the IP, not the country, so a
-  // config whose yaml simply has no country doesn't re-Ping on every launch.
+  // Backfill on launch, in two halves that fail independently.
+  //
+  // The country is re-applied for every config: it comes from the yaml, costs
+  // nothing, and this is what repairs configs saved by an older build that
+  // dropped the label whenever the Ping at save time failed.
+  //
+  // The IP costs a real handshake, so only configs still missing one are chased,
+  // and that chase retries until it succeeds rather than giving up because this
+  // particular launch happened to have no connectivity.
   for (const config of configs) {
-    if (!config.ip) resolveConfigGeo(config.id, config.yaml);
+    await applyCountryFromYaml(config.id, config.yaml);
+  }
+  await reloadConfigs();
+  for (const config of configs) {
+    if (!config.ip) resolveServerIP(config.id, config.yaml);
+  }
+
+  // Version at the bottom of the settings panel. The app updates itself from
+  // GitHub releases, so "what am I actually running" is the first thing anyone
+  // needs when an update does or doesn't arrive.
+  try {
+    document.getElementById('app-version').textContent = `${t('version')} ${await Version()}`;
+  } catch (e) {
+    console.error(e);
   }
 })();
