@@ -582,23 +582,41 @@ same for its Wails binding. Both UIs poll this per saved config tile on a **jitt
 6-10s schedule - a flat interval put a perfectly periodic connection on the wire for as
 long as the app was open, which is exactly the shape traffic analysis looks for.
 
-### 9.2 Tile metadata: two halves, two failure modes
+### 9.2 Tile metadata (`internal/geoip`)
 
-A tile shows a server IP and, optionally, a country label. They are resolved separately
-and pinned, because they fail in completely different ways:
+A tile shows the server's IP and the country it sits in. Both are resolved **once per
+saved config and pinned** - a server does not move, so there is nothing to refresh.
 
-- **Country and ISO code** are copied out of the config's own `country`/`country_code`
-  fields (§8). No network is involved, so this cannot fail and is stored the moment the
-  config is saved. There is no geo lookup anywhere in either app - that used to hand the
-  server's address to a third party on a timer (§13.6).
-- **Server IP** comes from a Ping to the operator's own server, which does need
-  connectivity. If it fails it is retried with backoff (2s doubling to a 1-minute cap)
-  until it succeeds, then pinned and never re-resolved.
+1. **Server IP** comes from a Ping to the operator's own server (§9.1).
+2. **Country and ISO code** are looked up from that IP via `internal/geoip`, unless the
+   config already names them.
 
-Both used to be written together, after a successful Ping - so adding a config while
-offline silently discarded the country label, permanently, until that config happened to
-be edited again. Both apps also re-apply the country from the yaml for every saved config
-at launch, which repairs entries stored by a build that had the old behaviour.
+If either step fails it is retried with backoff (2s doubling to a 1-minute cap) until it
+succeeds, so a config added with no connectivity resolves itself later instead of showing
+a blank tile forever. Both apps also re-check on launch for anything still missing.
+
+**Precedence:** `country`/`country_code` in the config (§8) override the lookup entirely.
+A deployment that wants no third-party contact fills them in and `geoip.Lookup` is never
+called.
+
+#### The trade-off, stated plainly
+
+Asking a third party "which country is 203.0.113.10 in?" tells that party the address of
+the user's VPN server and links it to whoever asked. This was removed once for exactly
+that reason (§13.6) and is back by explicit choice - the difference from the version that
+was removed is that it now runs **once per config, never on a timer**. Recurring lookups
+were the part that turned a one-off disclosure into a continuous one.
+
+The query does not go through the tunnel: it happens when a config is saved, before there
+is a tunnel to use.
+
+`internal/geoip` tries three providers in order, first usable answer wins:
+`api.db-ip.com` and `ipwho.is` (both return a country name and an ISO code), then
+`ipinfo.io/<ip>/country` (code only, as a last resort - a bare two-letter response from a
+large, widely-reachable host is the most likely thing to still work when the others are
+blocked). All three are HTTPS with no API key, each attempt is capped at 8s, and the
+returned code is validated as two ASCII letters before it reaches the flag renderer.
+Rate limits are irrelevant at one lookup per config, ever.
 
 ---
 
@@ -863,15 +881,22 @@ out to be platform-neutral.
    rather than wrapping onto them, and returns `ErrStreamIDsExhausted` if all are in use —
    which in practice would mean streams are being leaked, not that a real workload needs
    more. Long-lived connections no longer risk splicing unrelated streams together.
-6. **Third-party geo-IP/flag lookup — removed.** The GUI apps used to resolve each
-   server's country from its IP via a public geo-IP service (`ipwho.is`) and fetch a flag
-   image from `flagcdn.com`, which leaked the *server's* IP to those services on a timer -
-   the only network dependency in either app that wasn't the user's own Phantom server.
-   Both are gone: the cosmetic location label now comes from optional `country`/
-   `country_code` fields the operator can put in the client config (§8), rendered as a
-   flag emoji on Android and as text on Windows (Windows/Chromium can't render flag
-   emoji). Nothing is looked up over the network anymore; the apps contact only the user's
-   own server.
+6. **Third-party geo-IP lookup — present, by choice, and the one network dependency in
+   either app that isn't the user's own server.** The GUI apps resolve a server's country
+   from its IP through a public geolocation service (§9.2), which necessarily tells that
+   service the server's address and links it to whoever asked.
+
+   This was removed once for that reason and deliberately reinstated. What changed is the
+   frequency, which was the real problem: the old code ran the lookup **on a repeating
+   timer** and also fetched a flag *image* from `flagcdn.com` on every render, so a server
+   address was handed out continuously for as long as an app was open. It now runs **once
+   per saved config**, the result is pinned, and the flag is built locally from
+   regional-indicator characters with nothing downloaded.
+
+   An operator who wants zero third-party contact sets `country`/`country_code` in the
+   config (§8); those take precedence and the lookup never runs. Anyone whose threat model
+   makes even a one-off disclosure unacceptable should do that - it is the reason the
+   fields still exist.
 7. **Windows routing/interface setup shells out to `route`/`netsh`** (§11.2) rather than
    using the native IP Helper API (`iphlpapi.dll` via `CreateUnicastIpAddressEntry`/
    `CreateIpForwardEntry2`, the approach `winipcfg`-based tools like WireGuard-Windows

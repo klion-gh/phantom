@@ -92,6 +92,23 @@ suspend fun fetchPing(yaml: String): Pair<String, Long>? = withContext(Dispatche
 }
 
 /**
+ * Resolves which country a server IP sits in, returning (name, ISO code) or null
+ * so the caller can retry.
+ *
+ * This asks a third-party geolocation service through the shared Go core
+ * (internal/geoip), which necessarily tells that service the address of the
+ * user's server. Done once per saved config and pinned - never on a timer, which
+ * is what made the earlier version of this worth removing.
+ */
+suspend fun lookupCountry(ip: String): Pair<String, String>? = withContext(Dispatchers.IO) {
+    runCatching {
+        val json = JSONObject(Mobile.lookupCountry(ip))
+        val code = json.optString("country_code").takeIf { it.isNotBlank() } ?: return@withContext null
+        json.optString("country").takeIf { it.isNotBlank() }.orEmpty() to code
+    }.getOrNull()
+}
+
+/**
  * One tile on the main screen: a saved config's domain/IP/live ping/location on the
  * left, a connect button on the right. Owns its own ping-polling loop (keyed on the
  * config's own yaml/id) so each tile refreshes independently of the others. Long-press

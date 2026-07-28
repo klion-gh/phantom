@@ -6,6 +6,7 @@ import (
 	"log"
 	"sync"
 
+	"phantom/internal/geoip"
 	"phantom/internal/pingcheck"
 
 	"github.com/wailsapp/wails/v2/pkg/runtime"
@@ -169,6 +170,30 @@ func (a *App) UpdateConfig(id string, configYAML string) string {
 		return err.Error()
 	}
 	return ""
+}
+
+// LookupCountry resolves which country a server IP sits in, for the location
+// label on a saved-config tile. Returns a JSON blob
+// {"country":"Netherlands","country_code":"NL"}, or an empty string on failure so
+// the frontend can retry rather than pin a blank label.
+//
+// This asks a third-party geolocation service and so tells it the address of the
+// user's server - see internal/geoip for the trade-off and the constraints:
+// resolved once per saved config and pinned, never polled.
+func (a *App) LookupCountry(ip string) string {
+	res, err := geoip.Lookup(context.Background(), ip)
+	if err != nil {
+		log.Printf("country lookup for a saved config failed: %v", err)
+		return ""
+	}
+	data, err := json.Marshal(struct {
+		Country     string `json:"country"`
+		CountryCode string `json:"country_code"`
+	}{Country: res.Country, CountryCode: res.CountryCode})
+	if err != nil {
+		return ""
+	}
+	return string(data)
 }
 
 // Version is the running build's version string, shown at the bottom of the

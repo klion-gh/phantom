@@ -93,3 +93,7 @@ export function UpdateConfig(arg1, arg2) {
 export function Version() {
   return window['go']['main']['App']['Version']();
 }
+
+export function LookupCountry(arg1) {
+  return window['go']['main']['App']['LookupCountry'](arg1);
+}

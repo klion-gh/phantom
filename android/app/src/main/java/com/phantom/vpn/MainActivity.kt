@@ -252,39 +252,49 @@ private fun PhantomApp(
     // a fresh empty set and the guard would stop guarding.
     val geoJobs = remember { java.util.Collections.synchronizedSet(mutableSetOf<String>()) }
 
-    // Applies the country label and ISO code straight from the config's yaml. No
-    // network, so this cannot fail and is applied immediately - which is the whole
-    // point: these two used to be written only after a successful Ping, so a config
-    // added with no connectivity lost its country label permanently.
-    //
-    // There is deliberately no IP->country lookup anywhere: that used to hit a
-    // third-party geo/flag service (ipwho.is/flagcdn) and leak the server's IP to
-    // it. The country is a static field the operator puts in the config they hand
-    // out.
-    fun applyCountryFromYaml(id: String, yaml: String) {
-        ConfigStore.setCountry(
-            context, id,
-            parseYamlField(yaml, "country"),
-            parseYamlField(yaml, "country_code"),
-        )
+    // The operator's own country/country_code from the yaml, if present. No
+    // network, so it cannot fail and is applied immediately - and it wins over
+    // anything the lookup below would return. Reports whether the config spelled
+    // it out.
+    fun applyCountryFromYaml(id: String, yaml: String): Boolean {
+        val country = parseYamlField(yaml, "country")
+        val code = parseYamlField(yaml, "country_code")
+        if (country.isNullOrBlank() && code.isNullOrBlank()) return false
+        ConfigStore.setCountry(context, id, country, code)
+        return true
     }
 
-    // Resolves the server IP for a config and keeps retrying until it succeeds -
-    // this is the part that genuinely needs the network, and a single attempt at
-    // save time meant "no internet right now" turned into "no IP on this tile,
-    // ever". Backs off up to a minute so a long outage costs nothing, and stops for
-    // good once the value is pinned.
-    fun resolveServerIPInBackground(id: String, yaml: String) {
+    // Resolves a tile's IP (a Ping to the operator's own server) and then, unless
+    // the config already named a country, looks that up from the IP. Both retry
+    // until they succeed: a single attempt at save time meant "no connectivity
+    // right now" turned into "no label on this tile, ever". Backs off to a minute
+    // so a long outage costs nothing, and stops for good once both are pinned.
+    //
+    // The country lookup goes to a third-party geolocation service and so tells it
+    // the address of the user's server - see internal/geoip. That is why it happens
+    // once per saved config and never on a timer.
+    fun resolveTileMetadataInBackground(id: String, yaml: String, hasExplicitCountry: Boolean) {
         if (!geoJobs.add(id)) return
         coroutineScope.launch {
             try {
                 var backoffMs = 2_000L
+                var ip: String? = null
                 while (isActive) {
-                    val ip = fetchPing(yaml)?.first
+                    if (ip.isNullOrBlank()) {
+                        ip = fetchPing(yaml)?.first
+                        if (!ip.isNullOrBlank()) {
+                            ConfigStore.setServerIP(context, id, ip)
+                            refreshConfigs()
+                        }
+                    }
                     if (!ip.isNullOrBlank()) {
-                        ConfigStore.setServerIP(context, id, ip)
-                        refreshConfigs()
-                        return@launch
+                        if (hasExplicitCountry) return@launch
+                        val geo = lookupCountry(ip)
+                        if (geo != null) {
+                            ConfigStore.setCountry(context, id, geo.first, geo.second)
+                            refreshConfigs()
+                            return@launch
+                        }
                     }
                     delay(backoffMs)
                     backoffMs = (backoffMs * 2).coerceAtMost(60_000L)
@@ -296,9 +306,9 @@ private fun PhantomApp(
     }
 
     fun resolveGeoInBackground(id: String, yaml: String) {
-        applyCountryFromYaml(id, yaml)
+        val explicit = applyCountryFromYaml(id, yaml)
         refreshConfigs()
-        resolveServerIPInBackground(id, yaml)
+        resolveTileMetadataInBackground(id, yaml, explicit)
     }
 
     // Backfill on launch, in two halves that fail independently.
@@ -311,9 +321,11 @@ private fun PhantomApp(
     // and that chase retries until it succeeds rather than giving up after a single
     // attempt on a launch that happened to have no connectivity.
     LaunchedEffect(Unit) {
-        configs.forEach { applyCountryFromYaml(it.id, it.yaml) }
+        val explicit = configs.associate { it.id to applyCountryFromYaml(it.id, it.yaml) }
         refreshConfigs()
-        configs.filter { it.ip == null }.forEach { resolveServerIPInBackground(it.id, it.yaml) }
+        configs
+            .filter { it.ip == null || it.countryCode.isNullOrBlank() }
+            .forEach { resolveTileMetadataInBackground(it.id, it.yaml, explicit[it.id] == true) }
     }
 
     when (screen) {
