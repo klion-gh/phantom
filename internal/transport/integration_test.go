@@ -70,7 +70,7 @@ func TestFullStackTCPRelay(t *testing.T) {
 
 			direct := proxy.NewDirectOutbound(5 * time.Second)
 			// The echo servers these tests relay to run on loopback, which the
-			// server-side SSRF guard refuses by default - see proxy.blockedTarget.
+			// server-side SSRF guard refuses by default - see proxy.blockedIP.
 			direct.AllowLocalTargets(true)
 			stream, err := session.Accept()
 			if err != nil {
@@ -165,7 +165,7 @@ func TestFullStackUDPRelay(t *testing.T) {
 
 			direct := proxy.NewDirectOutbound(5 * time.Second)
 			// The echo servers these tests relay to run on loopback, which the
-			// server-side SSRF guard refuses by default - see proxy.blockedTarget.
+			// server-side SSRF guard refuses by default - see proxy.blockedIP.
 			direct.AllowLocalTargets(true)
 			stream, err := session.Accept()
 			if err != nil {
@@ -362,4 +362,3 @@ func startEchoServer(t *testing.T) string {
 	t.Cleanup(func() { ln.Close() })
 	return ln.Addr().String()
 }
-

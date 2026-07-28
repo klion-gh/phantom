@@ -1,6 +1,7 @@
 package proxy
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -80,7 +81,7 @@ func blockedIP(ip net.IP) (string, bool) {
 // If any resolved address is blocked, the whole target is refused rather than
 // filtered down to the allowed ones: a name that resolves to both a public
 // address and loopback is not a name with an innocent explanation.
-func resolveAllowed(target string, allowLocal bool) ([]string, error) {
+func resolveAllowed(ctx context.Context, target string, allowLocal bool) ([]string, error) {
 	host, port, err := net.SplitHostPort(target)
 	if err != nil {
 		return nil, fmt.Errorf("bad target %q: %w", target, err)
@@ -96,7 +97,7 @@ func resolveAllowed(target string, allowLocal bool) ([]string, error) {
 		return []string{net.JoinHostPort(ip.String(), port)}, nil
 	}
 
-	ips, err := net.LookupIP(host)
+	ips, err := net.DefaultResolver.LookupIP(ctx, "ip", host)
 	if err != nil {
 		return nil, fmt.Errorf("resolve %q: %w", host, err)
 	}
@@ -116,11 +117,27 @@ func resolveAllowed(target string, allowLocal bool) ([]string, error) {
 	return addrs, nil
 }
 
+// resolveTimeout bounds the name lookup in dialChecked.
+//
+// It needs to exist at all because moving the lookup out of net.Dial moved it out
+// from under the dial timeout that used to cover resolution and connection
+// together. Without a deadline of its own, a slow or deliberately unresponsive
+// authoritative server holds a stream's handler goroutine open indefinitely, and
+// a client opening streams against such names piles them up without bound.
+//
+// Separate from and tighter than the dial timeout on purpose: 30s of connect is
+// a plausibly slow host, 30s of DNS is a broken one. Matches what
+// internal/pingcheck already uses for the same reason.
+const resolveTimeout = 5 * time.Second
+
 // dialChecked resolves target once and dials the resulting addresses in order.
 // Trying each preserves the fallback behaviour dialing a hostname used to get for
 // free from the resolver returning several addresses.
 func (d *DirectOutbound) dialChecked(network, target string) (net.Conn, error) {
-	addrs, err := resolveAllowed(target, d.allowLocal)
+	ctx, cancel := context.WithTimeout(context.Background(), resolveTimeout)
+	defer cancel()
+
+	addrs, err := resolveAllowed(ctx, target, d.allowLocal)
 	if err != nil {
 		return nil, err
 	}

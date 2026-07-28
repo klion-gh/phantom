@@ -1,9 +1,11 @@
 package proxy
 
 import (
+	"context"
 	"net"
 	"strings"
 	"testing"
+	"time"
 )
 
 // TestResolveAllowedRefusesLocalTargets pins the server-side SSRF guard: a client
@@ -28,7 +30,7 @@ func TestResolveAllowedRefusesLocalTargets(t *testing.T) {
 		{"10.0.0.5:22", false, "RFC1918"},
 		{"[2606:4700:4700::1111]:53", false, "ordinary public IPv6"},
 	} {
-		_, err := resolveAllowed(tc.target, false)
+		_, err := resolveAllowed(context.Background(), tc.target, false)
 		refused := err != nil && strings.Contains(err.Error(), "refused")
 		if refused != tc.refuse {
 			t.Errorf("resolveAllowed(%q): refused=%v want %v (%s) [err=%v]",
@@ -41,7 +43,7 @@ func TestResolveAllowedRefusesLocalTargets(t *testing.T) {
 // the caller must get back a concrete address to dial, so there is no second
 // lookup that could disagree with the one that passed the check.
 func TestResolveAllowedReturnsDialableAddress(t *testing.T) {
-	addrs, err := resolveAllowed("1.1.1.1:53", false)
+	addrs, err := resolveAllowed(context.Background(), "1.1.1.1:53", false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -63,7 +65,7 @@ func TestResolveAllowedReturnsDialableAddress(t *testing.T) {
 // TestResolveAllowedPreservesIPv6Bracketing guards the JoinHostPort detail: an
 // unbracketed IPv6 address plus port is not dialable.
 func TestResolveAllowedPreservesIPv6Bracketing(t *testing.T) {
-	addrs, err := resolveAllowed("[2606:4700:4700::1111]:53", false)
+	addrs, err := resolveAllowed(context.Background(), "[2606:4700:4700::1111]:53", false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -78,7 +80,7 @@ func TestResolveAllowedPreservesIPv6Bracketing(t *testing.T) {
 // TestResolveAllowedOptOut checks the escape hatch for an operator who genuinely
 // wants clients reaching services on the VPN host.
 func TestResolveAllowedOptOut(t *testing.T) {
-	addrs, err := resolveAllowed("127.0.0.1:22", true)
+	addrs, err := resolveAllowed(context.Background(), "127.0.0.1:22", true)
 	if err != nil {
 		t.Fatalf("AllowLocalTargets did not disable the guard: %v", err)
 	}
@@ -90,7 +92,42 @@ func TestResolveAllowedOptOut(t *testing.T) {
 // TestResolveAllowedRejectsMalformedTarget: a target that doesn't parse must fail
 // here rather than reaching the dialer.
 func TestResolveAllowedRejectsMalformedTarget(t *testing.T) {
-	if _, err := resolveAllowed("this is not a target", false); err == nil {
+	if _, err := resolveAllowed(context.Background(), "this is not a target", false); err == nil {
 		t.Error("a malformed target was accepted")
+	}
+}
+
+// TestResolveAllowedHonoursContextDeadline is the regression test for the
+// timeout: moving the lookup out of net.Dial moved it out from under the dial
+// timeout that used to bound it, and without a deadline of its own a slow or
+// unresponsive nameserver holds a stream's handler goroutine open indefinitely.
+func TestResolveAllowedHonoursContextDeadline(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // already past its deadline before the lookup starts
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := resolveAllowed(ctx, "example.com:443", false)
+		done <- err
+	}()
+
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("a cancelled context still produced a successful lookup")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("resolveAllowed ignored the context and kept resolving")
+	}
+}
+
+// An IP literal must not consult the resolver at all, so a dead context is
+// irrelevant to it - which is also what keeps the guard cheap for the common case.
+func TestResolveAllowedSkipsResolverForLiterals(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	if _, err := resolveAllowed(ctx, "1.1.1.1:53", false); err != nil {
+		t.Fatalf("an IP literal went through the resolver: %v", err)
 	}
 }

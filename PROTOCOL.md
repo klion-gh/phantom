@@ -150,7 +150,7 @@ Frame types:
 | 0x00 | `FrameData`    | Stream payload (encrypted + padded) |
 | 0x01 | `FrameOpen`    | Open a new logical stream; payload = target `"host:port"` (**encrypted + padded** since wire v2) |
 | 0x02 | `FrameClose`   | Close a logical stream |
-| 0x03 | `FramePing`    | Keepalive; echoed back verbatim |
+| 0x03 | `FramePing`    | Echoed back verbatim on receipt - but **nothing in this codebase sends one**, so there is no keepalive in practice (see item 11) |
 | 0x04 | `FrameSettings`| Received and ignored - vestigial, no sender ever emits it |
 | 0x05 | `FramePadding` | Received and ignored - vestigial, no sender ever emits it |
 
@@ -818,13 +818,22 @@ out to be platform-neutral.
    of freezing the others. Proper credit-based windowing is the remaining work — it needs
    a wire change, so it belongs in the next version bump rather than a patch.
 10a. **The server refuses tunnelled connections to its own loopback and to
-   link-local addresses** (`proxy.blockedTarget`). The PSK is shared by every user,
+   link-local addresses** (`proxy.blockedIP`/`resolveAllowed`). The PSK is shared by every user,
    so without this any client holding it could reach services the operator
    deliberately bound to 127.0.0.1, or fetch VPS credentials from the cloud
    metadata endpoint at 169.254.169.254. RFC1918 ranges stay reachable on purpose -
    using a personal VPN to reach one's own LAN is a real use case, and the PSK
    holder is already inside that boundary. `AllowLocalTargets` opts out.
-11. **Stream ids are per-connection and finite.** One pooled connection carries every
+11. **There is no keepalive.** `FramePing` is answered when it arrives, but nothing
+   ever sends one: the `Session.Ping` that used to was never called by any caller,
+   and measured how long it took to hand the frame to the write loop rather than a
+   round trip, so it was removed instead of preserved. An idle tunnel therefore has
+   no application-level liveness check - a NAT mapping that expires leaves a
+   connection that is neither closed nor usable until traffic is next attempted.
+   Whoever adds one should correlate the pong, and send it from somewhere other
+   than `readLoop` (`handlePing` answers synchronously, which would let a stalled
+   write path block reading).
+12. **Stream ids are per-connection and finite.** One pooled connection carries every
    stream for its lifetime, and the initiating side has 32768 ids (odd values; 0 is
    reserved for session-level frames). `allocStreamID` now skips ids that are still live
    rather than wrapping onto them, and returns `ErrStreamIDsExhausted` if all are in use —
