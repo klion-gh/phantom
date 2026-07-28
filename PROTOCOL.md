@@ -817,7 +817,14 @@ out to be platform-neutral.
    reader still stuck after the timeout loses its own stream (`ErrStreamStalled`) instead
    of freezing the others. Proper credit-based windowing is the remaining work — it needs
    a wire change, so it belongs in the next version bump rather than a patch.
-10. **Stream ids are per-connection and finite.** One pooled connection carries every
+10a. **The server refuses tunnelled connections to its own loopback and to
+   link-local addresses** (`proxy.blockedTarget`). The PSK is shared by every user,
+   so without this any client holding it could reach services the operator
+   deliberately bound to 127.0.0.1, or fetch VPS credentials from the cloud
+   metadata endpoint at 169.254.169.254. RFC1918 ranges stay reachable on purpose -
+   using a personal VPN to reach one's own LAN is a real use case, and the PSK
+   holder is already inside that boundary. `AllowLocalTargets` opts out.
+11. **Stream ids are per-connection and finite.** One pooled connection carries every
    stream for its lifetime, and the initiating side has 32768 ids (odd values; 0 is
    reserved for session-level frames). `allocStreamID` now skips ids that are still live
    rather than wrapping onto them, and returns `ErrStreamIDsExhausted` if all are in use —

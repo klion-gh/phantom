@@ -22,10 +22,61 @@ import (
 
 type DirectOutbound struct {
 	timeout time.Duration
+	// allowLocal disables the guard below. Off by default; an operator who
+	// genuinely wants clients to reach services on the VPN host itself can turn
+	// it on.
+	allowLocal bool
 }
 
 func NewDirectOutbound(timeout time.Duration) *DirectOutbound {
 	return &DirectOutbound{timeout: timeout}
+}
+
+// AllowLocalTargets lets tunnelled traffic reach loopback and link-local
+// addresses on the server. See blockedTarget for why it's off by default.
+func (d *DirectOutbound) AllowLocalTargets(allow bool) {
+	d.allowLocal = allow
+}
+
+// blockedTarget reports whether target resolves somewhere a tunnelled client has
+// no business reaching through this server.
+//
+// Two ranges matter. Loopback is the server's own private surface: an SSH daemon
+// bound to 127.0.0.1, a database, an admin endpoint deliberately not exposed to
+// the internet - all of it was reachable by anyone holding the PSK, which is a
+// shared secret handed to every user. Link-local covers 169.254.169.254, the
+// cloud metadata endpoint, where on most providers a plain unauthenticated GET
+// returns credentials for the whole VPS.
+//
+// RFC1918 ranges are deliberately NOT blocked: a personal VPN is a legitimate way
+// to reach one's own LAN, and blocking that would break a real use case to
+// mitigate a threat the PSK holder doesn't have (they're already inside).
+func blockedTarget(target string, allowLocal bool) (string, bool) {
+	if allowLocal {
+		return "", false
+	}
+	host, _, err := net.SplitHostPort(target)
+	if err != nil {
+		return "", false
+	}
+	// Resolve rather than pattern-match the literal: "localhost", a domain with
+	// an A record of 127.0.0.1, and a decimal-encoded address all reach the same
+	// place, and only resolution catches all three.
+	ips, err := net.LookupIP(host)
+	if err != nil {
+		return "", false // let the dial fail on its own terms
+	}
+	for _, ip := range ips {
+		switch {
+		case ip.IsLoopback():
+			return "loopback", true
+		case ip.IsLinkLocalUnicast(), ip.IsLinkLocalMulticast():
+			return "link-local (cloud metadata)", true
+		case ip.IsUnspecified():
+			return "unspecified", true
+		}
+	}
+	return "", false
 }
 
 func (d *DirectOutbound) HandleStream(stream *tunnel.Stream) {
@@ -34,6 +85,11 @@ func (d *DirectOutbound) HandleStream(stream *tunnel.Stream) {
 	target := stream.Target()
 	if target == "" {
 		logx.Warnf("[direct] empty target")
+		return
+	}
+
+	if reason, blocked := blockedTarget(target, d.allowLocal); blocked {
+		logx.Warnf("[direct] refused %s target", reason)
 		return
 	}
 
