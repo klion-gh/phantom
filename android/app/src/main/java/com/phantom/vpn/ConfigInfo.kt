@@ -157,9 +157,7 @@ fun ConfigInfoCard(
 
     val cardShape = RoundedCornerShape(20.dp)
     val isConnected = status == ConnectionStatus.CONNECTED
-    val connectedGradient = Brush.linearGradient(
-        colors = listOf(Color(0xFFA78BFA), Color(0xFFF472B6), Color(0xFF7DD3FC))
-    )
+    val connectedGradient = Brush.linearGradient(colors = AccentGradient)
 
     Card(
         colors = CardDefaults.cardColors(containerColor = BgSurface),
@@ -272,9 +270,7 @@ private fun ProxyBlock(
     onToggleClick: () -> Unit,
 ) {
     val shape = RoundedCornerShape(8.dp)
-    val gradient = Brush.linearGradient(
-        colors = listOf(Color(0xFFA78BFA), Color(0xFFF472B6), Color(0xFF7DD3FC))
-    )
+    val gradient = Brush.linearGradient(colors = AccentGradient)
     Column(horizontalAlignment = Alignment.CenterHorizontally) {
         Box(
             modifier = Modifier

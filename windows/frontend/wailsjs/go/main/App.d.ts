@@ -48,3 +48,7 @@ export function UpdateConfig(arg1:string,arg2:string):Promise<string>;
 export function Version():Promise<string>;
 
 export function LookupCountry(arg1:string):Promise<string>;
+
+export function GetAppearance():Promise<string>;
+
+export function SetAppearance(arg1:string,arg2:string):Promise<void>;

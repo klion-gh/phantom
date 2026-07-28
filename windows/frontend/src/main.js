@@ -1,5 +1,5 @@
 import './style.css';
-import { Connect, Disconnect, Status, ReadLog, ListConfigs, AddConfig, UpdateConfig, DeleteConfig, SetConfigGeo, Ping, ListResources, AddResource, DeleteResource, ListExcludedApps, PickExcludedAppExe, AddExcludedApp, DeleteExcludedApp, ApplyUpdate, StartProxy, StopProxy, GetLanguage, SetLanguage, Version, LookupCountry } from '../wailsjs/go/main/App';
+import { Connect, Disconnect, Status, ReadLog, ListConfigs, AddConfig, UpdateConfig, DeleteConfig, SetConfigGeo, Ping, ListResources, AddResource, DeleteResource, ListExcludedApps, PickExcludedAppExe, AddExcludedApp, DeleteExcludedApp, ApplyUpdate, StartProxy, StopProxy, GetLanguage, SetLanguage, Version, LookupCountry, GetAppearance, SetAppearance } from '../wailsjs/go/main/App';
 import { t, getLang, setLang, applyStaticTranslations } from './i18n.js';
 
 const screens = {
@@ -587,6 +587,38 @@ document.getElementById('btn-lang-en').addEventListener('click', async () => {
   applyLanguage('en');
 });
 
+// --- Appearance -------------------------------------------------------------
+//
+// Both values live as attributes on <html>; every colour and the accent gradient
+// are CSS variables keyed off them (see style.css), so switching either is one
+// attribute write and the whole window repaints. No re-render of any component
+// is involved, which is why this doesn't touch renderConfigList and friends the
+// way applyLanguage has to.
+
+let appearance = { theme: 'dark', accent: 'pink' };
+
+function applyAppearance() {
+  document.documentElement.setAttribute('data-theme', appearance.theme);
+  document.documentElement.setAttribute('data-accent', appearance.accent);
+  document.getElementById('btn-theme-dark').classList.toggle('active', appearance.theme === 'dark');
+  document.getElementById('btn-theme-light').classList.toggle('active', appearance.theme === 'light');
+  for (const swatch of document.querySelectorAll('.accent-swatch')) {
+    swatch.classList.toggle('active', swatch.dataset.accent === appearance.accent);
+  }
+}
+
+async function setAppearance(patch) {
+  appearance = { ...appearance, ...patch };
+  applyAppearance();
+  await SetAppearance(appearance.theme, appearance.accent);
+}
+
+document.getElementById('btn-theme-dark').addEventListener('click', () => setAppearance({ theme: 'dark' }));
+document.getElementById('btn-theme-light').addEventListener('click', () => setAppearance({ theme: 'light' }));
+for (const swatch of document.querySelectorAll('.accent-swatch')) {
+  swatch.addEventListener('click', () => setAppearance({ accent: swatch.dataset.accent }));
+}
+
 document.getElementById('btn-view-log').addEventListener('click', async () => {
   logText.textContent = await ReadLog();
   showScreen('log');
@@ -683,6 +715,14 @@ setInterval(refreshStatus, 4000);
   } catch (e) {
     // default (ru) stays if the Go call fails
   }
+  // Before the first paint, so the window doesn't flash the default theme on its
+  // way to the chosen one. Defaults (dark/pink) stay if the Go call fails.
+  try {
+    appearance = JSON.parse(await GetAppearance());
+  } catch (e) {
+    console.error(e);
+  }
+  applyAppearance();
   applyStaticTranslations();
   document.getElementById('btn-lang-ru').classList.toggle('active', getLang() === 'ru');
   document.getElementById('btn-lang-en').classList.toggle('active', getLang() === 'en');

@@ -1,5 +1,13 @@
 package com.phantom.vpn
 
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
 import android.Manifest
 import android.content.Intent
 import android.content.pm.PackageManager
@@ -886,6 +894,32 @@ private fun SettingsScreen(
             LangButton("English", I18n.lang == Lang.EN) { setAppLanguage(context, Lang.EN) }
         }
 
+        // Theme. Reading Appearance.theme repaints everything for the same reason
+        // the language toggle does - every colour in Theme.kt is a computed
+        // property over this state.
+        Text(I18n.t("theme"), color = TextSecondary, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            LangButton(I18n.t("theme_dark"), Appearance.isDark) {
+                Appearance.setTheme(context, ThemeMode.DARK)
+            }
+            LangButton(I18n.t("theme_light"), !Appearance.isDark) {
+                Appearance.setTheme(context, ThemeMode.LIGHT)
+            }
+        }
+
+        // Accent gradient. Shown as swatches painted with the actual gradient
+        // rather than named buttons - the whole point is what it looks like.
+        Text(I18n.t("accent"), color = TextSecondary, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            Accent.entries.forEach { option ->
+                AccentSwatch(
+                    accent = option,
+                    selected = Appearance.accent == option,
+                    onClick = { Appearance.setAccent(context, option) },
+                )
+            }
+        }
+
         OutlinedButton(onClick = onViewLog, modifier = Modifier.fillMaxWidth()) {
             Text(I18n.t("view_log"))
         }
@@ -905,6 +939,23 @@ private fun SettingsScreen(
             textAlign = TextAlign.Center,
         )
     }
+}
+
+// A round chip filled with the accent's own gradient. The selected one gets a
+// ring in the primary colour: a border in one of the gradient's own stops would
+// vanish against the swatch it is meant to outline.
+@Composable
+private fun AccentSwatch(accent: Accent, selected: Boolean, onClick: () -> Unit) {
+    val ringColour = if (selected) AccentLavender else Color.Transparent
+    Box(
+        modifier = Modifier
+            .size(44.dp)
+            .border(2.dp, ringColour, CircleShape)
+            .padding(4.dp)
+            .clip(CircleShape)
+            .background(Brush.linearGradient(accent.stops))
+            .clickable(onClick = onClick),
+    )
 }
 
 @Composable

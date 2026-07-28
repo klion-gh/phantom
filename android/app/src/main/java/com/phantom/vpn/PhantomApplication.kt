@@ -9,6 +9,9 @@ class PhantomApplication : Application() {
         // Load the UI language early (before any Activity or the VpnService), so
         // both Compose and the service's notifications render in the right one.
         I18n.load(this)
+        // Loaded before any composable reads a colour, so the first frame is
+        // already in the user's chosen theme instead of flashing the default.
+        Appearance.load(this)
         FileLog.i("Application.onCreate")
     }
 }

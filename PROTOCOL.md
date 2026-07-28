@@ -622,7 +622,7 @@ Rate limits are irrelevant at one lookup per config, ever.
 
 ## 10. Android app (`android/`, package `com.phantom.vpn`)
 
-Kotlin + Jetpack Compose, dark/purple theme (`Theme.kt`). Manual state-based screen
+Kotlin + Jetpack Compose (`Theme.kt`, see §10.3). Manual state-based screen
 switching (a `Screen` enum in `MainActivity.kt`; no `NavHost`) across four screens:
 
 - **Main** (`MainScreen` in `MainActivity.kt`): a scrollable list of saved-config tiles
@@ -640,11 +640,12 @@ switching (a `Screen` enum in `MainActivity.kt`; no `NavHost`) across four scree
   Save; reached either via "+" (blank, adds a new `SavedConfig`) or a long-press on an
   existing tile (pre-filled, edits that tile in place and offers a confirm-gated
   "Удалить конфигурацию" delete button).
-- **Settings** (`SettingsScreen`): language toggle, a "Посмотреть лог" button, and the
-  running version (`BuildConfig.VERSION_NAME`) pinned at the bottom — config management
-  moved out of here into the dedicated add/edit screen above. The version is worth
-  surfacing because the app updates itself from GitHub releases, so "which build am I on"
-  is the first question when an update does or doesn't arrive.
+- **Settings** (`SettingsScreen`): language toggle, theme toggle, accent-gradient
+  swatches (§10.3), a "Посмотреть лог" button, and the running version
+  (`BuildConfig.VERSION_NAME`) pinned at the bottom — config management moved out of here
+  into the dedicated add/edit screen above. The version is worth surfacing because the app
+  updates itself from GitHub releases, so "which build am I on" is the first question when
+  an update does or doesn't arrive.
 - **Log** (`LogScreen`): shows `FileLog`'s persisted plain-text log with a share button.
 
 ### 10.1 Config storage (`ConfigStore.kt`)
@@ -678,7 +679,30 @@ alone isn't sufficient starting with that API level.
 the service and the Compose UI; `VpnState` carries `status`/`message`/`activeConfigId`
 (the last reset to `null` whenever `status` goes back to `IDLE`).
 
-### 10.3 `Protector` / routing-loop prevention
+### 10.3 Theming (`Theme.kt`)
+
+Two independent choices, both persisted in the same plain `SharedPreferences` file the
+language toggle uses (neither is sensitive):
+
+- **Theme** — dark or light. Dark is the default and the original look, so an app that
+  is never touched appears exactly as it did before the switch existed.
+- **Accent** — which three-stop gradient paints the "this is on" outlines: a connected
+  config tile and a running proxy toggle. Four presets (`PINK`, `GREEN`, `BLUE`, `RED`),
+  pink being the original. Presets rather than a colour picker: these are hand-picked
+  ramps that stay legible against both backgrounds, which an arbitrary colour would not.
+
+The palette is exposed as *computed properties* (`val BgSurface: Color get() = ...`)
+rather than constants, so reading any colour inside a composable subscribes it to
+`Appearance.theme` - flipping the theme repaints the app with no other plumbing, and every
+existing call site was left unchanged. `Appearance` is loaded in
+`PhantomApplication.onCreate`, before anything composes, so the first frame is already in
+the chosen theme instead of flashing the default.
+
+The Windows client does the same thing with CSS: `:root[data-theme="light"]` and
+`:root[data-accent="…"]` override variables, so switching either is one attribute write on
+`<html>` and the whole window repaints without re-rendering a single component (§11.5).
+
+### 10.4 `Protector` / routing-loop prevention
 
 Once `VpnService.Builder.establish()` installs a `0.0.0.0/0`+`::/0` route through the
 TUN interface, the app's own outbound connection to the Phantom server would be
@@ -717,7 +741,7 @@ in its status output.
 
 Once a `0.0.0.0/0` route exists through the TUN interface, this process's own connection
 to the Phantom server would loop back into the tunnel it's building — the same class of
-bug as Android's routing loop (§10.3), but Windows has no per-socket exemption API, so
+bug as Android's routing loop (§10.4), but Windows has no per-socket exemption API, so
 the fix is routing-table specificity instead. `StartWindows` does, strictly in this
 order:
 
@@ -799,6 +823,24 @@ Closing the main window (the X button) doesn't quit the app: `App.beforeClose`
 (`options.App.OnBeforeClose`) unconditionally calls `runtime.WindowHide` and returns
 `true` to cancel the default close-and-quit behavior, so the process (and any active
 tunnel) keeps running in the tray until "Выход" is chosen explicitly.
+
+### 11.5 Theming (`style.css`, `App.GetAppearance`/`SetAppearance`)
+
+The same two choices as Android (§10.3) — dark/light and one of four accent gradients —
+with the same defaults, so an untouched app looks exactly as it did before.
+
+Implemented entirely in CSS: `:root` holds the dark palette and the pink gradient,
+`:root[data-theme="light"]` and `:root[data-accent="…"]` override those variables, and
+every rule already referenced the variables rather than literal colours. Switching either
+is therefore one attribute write on `<html>` and the whole window repaints — no component
+re-renders, which is why `applyAppearance` doesn't touch `renderConfigList` and friends
+the way `applyLanguage` has to.
+
+Persistence is Go-side (`settings.go`) so the values survive a WebView reload and sit
+beside the language file. `GetAppearance` is read before the first paint, so the window
+doesn't flash the default theme on its way to the chosen one. `saveSetting` validates
+against the allowed set on both read and write: a hand-edited or no-longer-supported value
+degrades to the default rather than reaching the UI.
 
 ---
 

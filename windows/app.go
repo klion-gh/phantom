@@ -382,6 +382,25 @@ func (a *App) GetLanguage() string {
 	return loadLanguage()
 }
 
+// GetAppearance returns the persisted look as {"theme":"dark","accent":"pink"}.
+// Read once at startup and applied before the first paint, so the window doesn't
+// flash the default theme on its way to the chosen one.
+func (a *App) GetAppearance() string {
+	data, _ := json.Marshal(struct {
+		Theme  string `json:"theme"`
+		Accent string `json:"accent"`
+	}{Theme: loadTheme(), Accent: loadAccent()})
+	return string(data)
+}
+
+// SetAppearance persists the theme ("dark"/"light") and accent gradient
+// ("pink"/"green"/"blue"/"red"). Unrecognised values fall back to the defaults -
+// see saveSetting.
+func (a *App) SetAppearance(theme string, accent string) {
+	saveTheme(theme)
+	saveAccent(accent)
+}
+
 // SetLanguage persists the chosen UI language and re-labels the tray menu to
 // match (the WebView side re-renders itself). "ru" or "en"; anything else is
 // stored as "ru".
