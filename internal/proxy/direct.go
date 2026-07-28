@@ -2,6 +2,7 @@ package proxy
 
 import (
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"time"
@@ -33,50 +34,105 @@ func NewDirectOutbound(timeout time.Duration) *DirectOutbound {
 }
 
 // AllowLocalTargets lets tunnelled traffic reach loopback and link-local
-// addresses on the server. See blockedTarget for why it's off by default.
+// addresses on the server. See blockedIP for why it's off by default.
 func (d *DirectOutbound) AllowLocalTargets(allow bool) {
 	d.allowLocal = allow
 }
 
-// blockedTarget reports whether target resolves somewhere a tunnelled client has
-// no business reaching through this server.
+// blockedIP reports whether a resolved address is somewhere a tunnelled client
+// has no business reaching through this server.
 //
 // Two ranges matter. Loopback is the server's own private surface: an SSH daemon
 // bound to 127.0.0.1, a database, an admin endpoint deliberately not exposed to
-// the internet - all of it was reachable by anyone holding the PSK, which is a
-// shared secret handed to every user. Link-local covers 169.254.169.254, the
-// cloud metadata endpoint, where on most providers a plain unauthenticated GET
-// returns credentials for the whole VPS.
+// the internet - all of it reachable by anyone holding the PSK, which is a shared
+// secret handed to every user. Link-local covers 169.254.169.254, the cloud
+// metadata endpoint, where on most providers a plain unauthenticated GET returns
+// credentials for the whole VPS.
 //
 // RFC1918 ranges are deliberately NOT blocked: a personal VPN is a legitimate way
 // to reach one's own LAN, and blocking that would break a real use case to
 // mitigate a threat the PSK holder doesn't have (they're already inside).
-func blockedTarget(target string, allowLocal bool) (string, bool) {
-	if allowLocal {
-		return "", false
-	}
-	host, _, err := net.SplitHostPort(target)
-	if err != nil {
-		return "", false
-	}
-	// Resolve rather than pattern-match the literal: "localhost", a domain with
-	// an A record of 127.0.0.1, and a decimal-encoded address all reach the same
-	// place, and only resolution catches all three.
-	ips, err := net.LookupIP(host)
-	if err != nil {
-		return "", false // let the dial fail on its own terms
-	}
-	for _, ip := range ips {
-		switch {
-		case ip.IsLoopback():
-			return "loopback", true
-		case ip.IsLinkLocalUnicast(), ip.IsLinkLocalMulticast():
-			return "link-local (cloud metadata)", true
-		case ip.IsUnspecified():
-			return "unspecified", true
-		}
+func blockedIP(ip net.IP) (string, bool) {
+	switch {
+	case ip.IsLoopback():
+		return "loopback", true
+	case ip.IsLinkLocalUnicast(), ip.IsLinkLocalMulticast():
+		return "link-local (cloud metadata)", true
+	case ip.IsUnspecified():
+		return "unspecified", true
 	}
 	return "", false
+}
+
+// resolveAllowed resolves target exactly once and returns dialable ip:port
+// addresses, all of them already checked.
+//
+// Resolving once is the whole point. The first version of this guard resolved the
+// name to decide whether to allow it and then handed the *name* to net.Dial,
+// which resolved it again independently - two separate DNS queries with nothing
+// binding them together. A domain under an attacker's control answers the first
+// with a public address and the second with 127.0.0.1, and the check is bypassed
+// entirely: textbook DNS rebinding, defeating the guard against exactly the
+// adversary it exists for. Callers now dial the verified address, so there is no
+// second lookup to disagree with the first. It also halves the DNS traffic every
+// tunnelled connection generates.
+//
+// If any resolved address is blocked, the whole target is refused rather than
+// filtered down to the allowed ones: a name that resolves to both a public
+// address and loopback is not a name with an innocent explanation.
+func resolveAllowed(target string, allowLocal bool) ([]string, error) {
+	host, port, err := net.SplitHostPort(target)
+	if err != nil {
+		return nil, fmt.Errorf("bad target %q: %w", target, err)
+	}
+
+	// An IP literal parses here and skips the resolver entirely.
+	if ip := net.ParseIP(host); ip != nil {
+		if !allowLocal {
+			if reason, blocked := blockedIP(ip); blocked {
+				return nil, fmt.Errorf("refused %s target", reason)
+			}
+		}
+		return []string{net.JoinHostPort(ip.String(), port)}, nil
+	}
+
+	ips, err := net.LookupIP(host)
+	if err != nil {
+		return nil, fmt.Errorf("resolve %q: %w", host, err)
+	}
+	if len(ips) == 0 {
+		return nil, fmt.Errorf("resolve %q: no addresses", host)
+	}
+
+	addrs := make([]string, 0, len(ips))
+	for _, ip := range ips {
+		if !allowLocal {
+			if reason, blocked := blockedIP(ip); blocked {
+				return nil, fmt.Errorf("refused %s target", reason)
+			}
+		}
+		addrs = append(addrs, net.JoinHostPort(ip.String(), port))
+	}
+	return addrs, nil
+}
+
+// dialChecked resolves target once and dials the resulting addresses in order.
+// Trying each preserves the fallback behaviour dialing a hostname used to get for
+// free from the resolver returning several addresses.
+func (d *DirectOutbound) dialChecked(network, target string) (net.Conn, error) {
+	addrs, err := resolveAllowed(target, d.allowLocal)
+	if err != nil {
+		return nil, err
+	}
+	var lastErr error
+	for _, addr := range addrs {
+		conn, err := net.DialTimeout(network, addr, d.timeout)
+		if err == nil {
+			return conn, nil
+		}
+		lastErr = err
+	}
+	return nil, lastErr
 }
 
 func (d *DirectOutbound) HandleStream(stream *tunnel.Stream) {
@@ -88,17 +144,12 @@ func (d *DirectOutbound) HandleStream(stream *tunnel.Stream) {
 		return
 	}
 
-	if reason, blocked := blockedTarget(target, d.allowLocal); blocked {
-		logx.Warnf("[direct] refused %s target", reason)
-		return
-	}
-
 	if stream.IsUDP() {
 		d.handleUDPStream(stream, target)
 		return
 	}
 
-	conn, err := net.DialTimeout("tcp", target, d.timeout)
+	conn, err := d.dialChecked("tcp", target)
 	if err != nil {
 		logx.Debugf("[direct] dial %s failed: %v", target, err)
 		return
@@ -123,7 +174,7 @@ func (d *DirectOutbound) HandleStream(stream *tunnel.Stream) {
 const udpIdleTimeout = 60 * time.Second
 
 func (d *DirectOutbound) handleUDPStream(stream *tunnel.Stream, target string) {
-	conn, err := net.DialTimeout("udp", target, d.timeout)
+	conn, err := d.dialChecked("udp", target)
 	if err != nil {
 		logx.Debugf("[direct] udp dial %s failed: %v", target, err)
 		return
