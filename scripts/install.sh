@@ -111,8 +111,51 @@ if [ -f "$INSTALL_DIR/server.yaml" ]; then
     log "Existing installation found at $INSTALL_DIR - upgrading binary, keeping config and keys."
 fi
 
+# verify_checksum <file> <name-in-SHA256SUMS>
+#
+# Checks a downloaded artifact against the release's SHA256SUMS. This binds the
+# file to what the release actually published, rather than trusting the transfer
+# to have delivered it intact - worth having on the path that installs a binary
+# and runs it as root.
+#
+# Deliberately not fatal when SHA256SUMS is absent: releases published before it
+# existed don't have one, and refusing to install from those would break the
+# documented one-line installer for every older version. A missing file warns; a
+# *mismatch* always aborts.
+verify_checksum() {
+    _file="$1"
+    _name="$2"
+
+    command -v sha256sum >/dev/null 2>&1 || {
+        warn "sha256sum not available - skipping integrity check"
+        return 0
+    }
+
+    _sums=$(mktemp)
+    if ! curl -fsSL "$BASE_URL/SHA256SUMS" -o "$_sums" 2>/dev/null; then
+        warn "this release publishes no SHA256SUMS - skipping integrity check"
+        rm -f "$_sums"
+        return 0
+    fi
+
+    _want=$(awk -v n="$_name" '$2 == n || $2 == "*" n {print $1}' "$_sums" | head -1)
+    rm -f "$_sums"
+    if [ -z "$_want" ]; then
+        warn "$_name not listed in SHA256SUMS - skipping integrity check"
+        return 0
+    fi
+
+    _got=$(sha256sum "$_file" | awk '{print $1}')
+    if [ "$_got" != "$_want" ]; then
+        rm -f "$_file"
+        die "checksum mismatch for $_name (expected $_want, got $_got) - refusing to install"
+    fi
+    log "Checksum verified for $_name."
+}
+
 log "Downloading phantom-server ($ARCH)..."
 curl -fsSL "$BASE_URL/phantom-server-linux-$ARCH" -o "$INSTALL_DIR/phantom-server.new"
+verify_checksum "$INSTALL_DIR/phantom-server.new" "phantom-server-linux-$ARCH"
 chmod 755 "$INSTALL_DIR/phantom-server.new"
 mv "$INSTALL_DIR/phantom-server.new" "$INSTALL_DIR/phantom-server"
 
@@ -156,6 +199,7 @@ fi
 
 log "Downloading phantom-keygen ($ARCH) to generate server keys..."
 curl -fsSL "$BASE_URL/phantom-keygen-linux-$ARCH" -o /tmp/phantom-keygen
+verify_checksum /tmp/phantom-keygen "phantom-keygen-linux-$ARCH"
 chmod 755 /tmp/phantom-keygen
 
 KEYGEN_OUT=$(/tmp/phantom-keygen)
