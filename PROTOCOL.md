@@ -578,10 +578,27 @@ user is connected to it. `pingcheck.Ping(configYAML string) (Result, error)`:
 
 Returns `{IP, LatencyMs}`. `mobile.Ping` wraps this as a JSON string (gomobile-safe
 return type, same pattern as `Tunnel.Stats()`); the Windows `App.Ping` method does the
-same for its Wails binding. Both UIs poll this on a repeating timer (every ~6s) per
-saved config tile. The optional country label next to a tile comes straight from the
-config's own `country`/`country_code` fields (§8) - there is no network geo lookup; the
-apps contact only the user's own server (see §13.6).
+same for its Wails binding. Both UIs poll this per saved config tile on a **jittered**
+6-10s schedule - a flat interval put a perfectly periodic connection on the wire for as
+long as the app was open, which is exactly the shape traffic analysis looks for.
+
+### 9.2 Tile metadata: two halves, two failure modes
+
+A tile shows a server IP and, optionally, a country label. They are resolved separately
+and pinned, because they fail in completely different ways:
+
+- **Country and ISO code** are copied out of the config's own `country`/`country_code`
+  fields (§8). No network is involved, so this cannot fail and is stored the moment the
+  config is saved. There is no geo lookup anywhere in either app - that used to hand the
+  server's address to a third party on a timer (§13.6).
+- **Server IP** comes from a Ping to the operator's own server, which does need
+  connectivity. If it fails it is retried with backoff (2s doubling to a 1-minute cap)
+  until it succeeds, then pinned and never re-resolved.
+
+Both used to be written together, after a successful Ping - so adding a config while
+offline silently discarded the country label, permanently, until that config happened to
+be edited again. Both apps also re-apply the country from the yaml for every saved config
+at launch, which repairs entries stored by a build that had the old behaviour.
 
 ---
 
@@ -593,10 +610,10 @@ switching (a `Screen` enum in `MainActivity.kt`; no `NavHost`) across four scree
 - **Main** (`MainScreen` in `MainActivity.kt`): a scrollable list of saved-config tiles
   (`ConfigInfoCard`, `ConfigInfo.kt`), one per entry in `ConfigStore`. Each tile shows
   the config's domain, resolved IP, live ping (`fetchPing`/`pingcheck.Ping` via the
-  `Mobile.ping` gomobile binding, polled every 6s independently per tile), and an optional
-  country label taken from the config's own `country`/`country_code` fields (§8), rendered
-  as a flag emoji via `countryCodeToFlag` (modern Android has the flag glyphs) - no network
-  geo lookup (§13.6). A circular connect
+  `Mobile.ping` gomobile binding, polled on a jittered 6-10s schedule independently per
+  tile), and an optional country label taken from the config's own `country`/`country_code`
+  fields (§8, §9.2), rendered as a flag emoji via `countryCodeToFlag` - the emoji is built
+  locally from regional-indicator characters, nothing is downloaded. A circular connect
   button (`ConnectButton.kt`, reused at a smaller `size` for tiles) sits on the right of
   each tile; the currently-connected tile additionally gets a purple→pink→blue gradient
   border (`Modifier.border(width, Brush, shape)`). Header has a "+" button (always adds
@@ -605,8 +622,11 @@ switching (a `Screen` enum in `MainActivity.kt`; no `NavHost`) across four scree
   Save; reached either via "+" (blank, adds a new `SavedConfig`) or a long-press on an
   existing tile (pre-filled, edits that tile in place and offers a confirm-gated
   "Удалить конфигурацию" delete button).
-- **Settings** (`SettingsScreen`): just a "Посмотреть лог" button — config
-  management moved out of here into the dedicated add/edit screen above.
+- **Settings** (`SettingsScreen`): language toggle, a "Посмотреть лог" button, and the
+  running version (`BuildConfig.VERSION_NAME`) pinned at the bottom — config management
+  moved out of here into the dedicated add/edit screen above. The version is worth
+  surfacing because the app updates itself from GitHub releases, so "which build am I on"
+  is the first question when an update does or doesn't arrive.
 - **Log** (`LogScreen`): shows `FileLog`'s persisted plain-text log with a share button.
 
 ### 10.1 Config storage (`ConfigStore.kt`)
@@ -734,12 +754,16 @@ Same `SavedConfig{ID, Yaml}` list shape as Android, persisted as JSON
 pre-multi-config single `client.yaml` file. `App` exposes `ListConfigs`/`AddConfig`/
 `UpdateConfig`/`DeleteConfig`/`Connect(id, yaml)`/`Disconnect`/`Status`/`Ping`/`ReadLog`
 to the frontend. `Ping` wraps `internal/pingcheck.Ping` (§9.1) the same way `mobile.Ping`
-does. The optional country label comes from the config's own `country`/`country_code`
-fields (§8) shown as text - no network geo lookup (§13.6). Unlike Android it isn't shown as
-a flag emoji: Windows' Segoe UI Emoji font (and Chromium/WebView2 on Windows) has no flag
-glyphs and would render the emoji as the bare two-letter code (a deliberate, longstanding
-Microsoft choice, not a WebView2 bug), which is exactly why the old code fetched flag
-*images* from a CDN - the dependency §13.6 removed.
+does. `App.Version` returns `AppVersion` - the same constant the updater compares against
+the latest release tag - and the frontend shows it at the bottom of the settings panel, so
+what the user reads is exactly what decides whether an update is offered.
+
+The optional country label comes from the config's own `country`/`country_code` fields
+(§8, §9.2) shown as text. Unlike Android it is not rendered as a flag emoji: Windows' Segoe
+UI Emoji font (and Chromium/WebView2 on Windows) has no flag glyphs and would draw the bare
+two-letter code instead - a deliberate, longstanding Microsoft choice, not a WebView2 bug,
+and exactly why the old code fetched flag *images* from a CDN, the dependency §13.6
+removed.
 
 ### 11.4 System tray (`tray.go`)
 
