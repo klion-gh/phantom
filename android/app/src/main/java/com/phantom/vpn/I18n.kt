@@ -46,6 +46,7 @@ object I18n {
         Lang.RU to mapOf(
             // main / config list
             "configs" to "Конфигурации",
+            "insecure_storage" to "Хранилище ключей недоступно — конфигурации сохранены без шифрования. Тот, кто получит доступ к устройству, прочитает PSK и адрес сервера.",
             "no_configs" to "Нет добавленной конфигурации",
             "no_configs_hint" to "Нажмите + чтобы добавить client.yaml",
             "resources" to "Доступность ресурсов",
@@ -96,6 +97,7 @@ object I18n {
         ),
         Lang.EN to mapOf(
             "configs" to "Configurations",
+            "insecure_storage" to "Keystore unavailable — configurations are stored unencrypted. Anyone with access to this device can read the PSK and server address.",
             "no_configs" to "No configuration added",
             "no_configs_hint" to "Tap + to add client.yaml",
             "resources" to "Resource availability",

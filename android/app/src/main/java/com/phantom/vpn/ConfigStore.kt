@@ -42,29 +42,87 @@ object ConfigStore {
     private const val LEGACY_YAML_KEY = "client_yaml" // pre-multi-config single entry
     private const val LAST_ACTIVE_KEY = "last_active_config_id"
 
+    private const val SECURE_PREFS = "phantom_secure_prefs"
+    private const val PLAIN_PREFS = "phantom_plain_prefs"
+
     @Volatile
     private var cached: SharedPreferences? = null
+
+    /**
+     * True when configs are being kept in plain, unencrypted preferences because
+     * the Android Keystore refused to initialise.
+     *
+     * This matters more here than in most apps: a saved config holds the PSK and
+     * the server's address, and for a censorship-circumvention tool that pair is
+     * itself the evidence of use - it identifies the device as a client of a
+     * specific server. Anyone with access to the device's app-private storage (a
+     * rooted device, an ADB backup, a forensic image) reads it straight out of XML.
+     *
+     * The fallback still exists - refusing to start at all would be worse - but it
+     * is no longer silent: [MainActivity] surfaces this to the user.
+     */
+    @Volatile
+    var storageIsPlaintext: Boolean = false
+        private set
 
     @Synchronized
     private fun prefs(context: Context): SharedPreferences {
         cached?.let { return it }
-        // EncryptedSharedPreferences touches the Android Keystore and can throw on some
-        // devices/ROMs; fall back to plain prefs rather than taking the app down.
-        val opened = try {
+
+        // EncryptedSharedPreferences touches the Android Keystore and can throw on
+        // some devices/ROMs; fall back to plain prefs rather than taking the app down.
+        val secure = try {
             val masterKey = MasterKey.Builder(context)
                 .setKeyScheme(MasterKey.KeyScheme.AES256_GCM)
                 .build()
             EncryptedSharedPreferences.create(
-                context, "phantom_secure_prefs", masterKey,
+                context, SECURE_PREFS, masterKey,
                 EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
                 EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
             )
         } catch (t: Throwable) {
             FileLog.e("EncryptedSharedPreferences init failed, falling back to plain prefs", t)
             null
-        } ?: context.getSharedPreferences("phantom_plain_prefs", Context.MODE_PRIVATE)
+        }
+
+        val opened = if (secure != null) {
+            // Keystore is working now. If an earlier run degraded to plain storage,
+            // move everything back and wipe the plaintext copy - without this a
+            // single transient Keystore failure downgraded the app permanently,
+            // since nothing ever looked at the plain store again.
+            migratePlainToSecure(context, secure)
+            storageIsPlaintext = false
+            secure
+        } else {
+            storageIsPlaintext = true
+            context.getSharedPreferences(PLAIN_PREFS, Context.MODE_PRIVATE)
+        }
+
         cached = opened
         return opened
+    }
+
+    /** Moves any leftover plaintext entries into [secure] and erases the plain store. */
+    private fun migratePlainToSecure(context: Context, secure: SharedPreferences) {
+        val plain = context.getSharedPreferences(PLAIN_PREFS, Context.MODE_PRIVATE)
+        val all = plain.all
+        if (all.isEmpty()) return
+
+        FileLog.e("recovering ${all.size} entries from plaintext storage back into the Keystore-backed store", null)
+        val editor = secure.edit()
+        for ((key, value) in all) {
+            when (value) {
+                is String -> editor.putString(key, value)
+                is Boolean -> editor.putBoolean(key, value)
+                is Int -> editor.putInt(key, value)
+                is Long -> editor.putLong(key, value)
+                is Float -> editor.putFloat(key, value)
+            }
+        }
+        editor.apply()
+        // commit(), not apply(): the plaintext copy must actually be gone before
+        // this returns, not queued behind whatever else the app does next.
+        plain.edit().clear().commit()
     }
 
     fun loadAll(context: Context): List<SavedConfig> {

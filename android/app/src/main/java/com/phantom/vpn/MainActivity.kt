@@ -515,6 +515,19 @@ private fun ConfigsPage(
             }
         }
 
+        // Shown only when the Keystore refused to initialise and configs - which
+        // hold the PSK and the server address - ended up in plain storage. It used
+        // to happen silently; see ConfigStore.storageIsPlaintext.
+        if (ConfigStore.storageIsPlaintext) {
+            Spacer(modifier = Modifier.height(10.dp))
+            Text(
+                text = I18n.t("insecure_storage"),
+                color = StatusError,
+                fontSize = 12.sp,
+                modifier = Modifier.fillMaxWidth(),
+            )
+        }
+
         Spacer(modifier = Modifier.height(10.dp))
 
         if (configs.isNotEmpty()) {
