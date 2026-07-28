@@ -121,7 +121,7 @@ const MaxDataPlaintext = MaxFramePayload - (lengthPrefixSize + 24 + 16)
 // MaxDataPlaintext is deliberately the looser limit of the two: it's what an
 // indivisible UDP datagram is checked against, so datagrams between the two
 // limits still go through (unpadded, as before) instead of being dropped.
-const DataChunkSize = ((maxPaddedPlaintext - maxPadJitter) / largestBucket) * largestBucket - lengthPrefixSize
+const DataChunkSize = ((maxPaddedPlaintext-maxPadJitter)/largestBucket)*largestBucket - lengthPrefixSize
 
 type Frame struct {
 	Type     FrameType
