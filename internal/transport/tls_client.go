@@ -133,6 +133,26 @@ func dialAddr(ctx context.Context, cfg *TLSClientConfig, addr string) (net.Conn,
 		return nil, nil, fmt.Errorf("tls handshake: %w", err)
 	}
 
+	// HandshakeContext only bounds the TLS handshake itself - once it returns,
+	// ctx's deadline stops being enforced on this conn at all, since nothing
+	// downstream watches ctx.Done(). The disguised handshake below
+	// (handshake.ClientHandshake) does a plain blocking Write then
+	// http.ReadResponse with no deadline of its own, so a peer that completes
+	// the outer TLS handshake but then never answers the upgrade request (a
+	// stalled server, or a middlebox that silently drops packets afterward)
+	// left this call - and every caller waiting on it, including a UI button -
+	// blocked forever. A bounded deadline here, capped to whatever's left on
+	// ctx, is what makes Connect() a reliable "up or definitively failed"
+	// call the way its callers already assume it is.
+	deadline := time.Now().Add(defaultTimeout)
+	if ctxDeadline, ok := ctx.Deadline(); ok && ctxDeadline.Before(deadline) {
+		deadline = ctxDeadline
+	}
+	if err := uconn.SetDeadline(deadline); err != nil {
+		conn.Close()
+		return nil, nil, fmt.Errorf("set handshake deadline: %w", err)
+	}
+
 	// Mimicking a real Chrome ClientHello (via clientHelloID above) includes a
 	// renegotiation_info extension, which makes uTLS set config.Renegotiation
 	// to a non-Never value to match - and the underlying TLS stack refuses to
@@ -154,6 +174,14 @@ func dialAddr(ctx context.Context, cfg *TLSClientConfig, addr string) (net.Conn,
 	if err != nil {
 		uconn.Close()
 		return nil, nil, fmt.Errorf("handshake: %w", err)
+	}
+
+	// Clear the handshake deadline - the tunnel that follows manages its own
+	// read/write timing (see internal/tunnel), and leaving this one in place
+	// would tear the connection down mid-session the moment it's reached.
+	if err := uconn.SetDeadline(time.Time{}); err != nil {
+		uconn.Close()
+		return nil, nil, fmt.Errorf("clear handshake deadline: %w", err)
 	}
 
 	return uconn, crypto, nil
