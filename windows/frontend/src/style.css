@@ -2,39 +2,41 @@
    appearance just because a theme switch was added. The light palette applies
    only once html[data-theme="light"] is set - see applyAppearance in main.js. */
 :root {
-    --bg-deep: #07070C;
-    --bg-surface: #141225;
-    --bg-surface-alt: #1C1934;
-    --accent-lavender: #A78BFA;
-    --accent-lavender-bright: #C9B8FF;
-    --accent-purple-deep: #4A3B8C;
+    --bg-deep: #0A0A0A;
+    --bg-surface: #161616;
+    --bg-surface-alt: #1E1E1E;
     --status-connected: #4ADE80;
     --status-error: #F87171;
-    --text-primary: #F5F3FF;
-    --text-secondary: #9C97B8;
+    --text-primary: #F5F5F5;
+    --text-secondary: #9C9C9C;
 
     /* The "this is on" gradient: a connected tile's outline and a running proxy
-       toggle. Overridden per accent below; pink is the original. */
+       toggle. Overridden per accent below; pink is the original. --accent-solid
+       and --accent-solid-bright are a single flat colour tracking the same
+       selection, for anywhere the full multi-stop gradient doesn't fit (buttons,
+       focus rings, the connect button's glow) - every spot that used to be
+       hardcoded purple now follows whichever accent is chosen. */
     --accent-gradient: linear-gradient(120deg, #A78BFA, #F472B6, #7DD3FC);
+    --accent-solid: #A78BFA;
+    --accent-solid-bright: #C9B8FF;
+    --accent-glow: rgba(167, 139, 250, 0.35);
+    --accent-glow-soft: rgba(167, 139, 250, 0.15);
 }
 
 :root[data-theme="light"] {
-    --bg-deep: #F4F3FA;
+    --bg-deep: #F4F4F4;
     --bg-surface: #FFFFFF;
-    --bg-surface-alt: #EBE9F5;
-    --accent-lavender: #7C3AED;
-    --accent-lavender-bright: #9061F9;
-    --accent-purple-deep: #DDD6FE;
+    --bg-surface-alt: #EBEBEB;
     --status-connected: #15803D;
     --status-error: #DC2626;
-    --text-primary: #17162B;
-    --text-secondary: #5F5B79;
+    --text-primary: #18181B;
+    --text-secondary: #5F5F5F;
 }
 
-:root[data-accent="pink"]  { --accent-gradient: linear-gradient(120deg, #A78BFA, #F472B6, #7DD3FC); }
-:root[data-accent="green"] { --accent-gradient: linear-gradient(120deg, #34D399, #4ADE80, #BEF264); }
-:root[data-accent="blue"]  { --accent-gradient: linear-gradient(120deg, #60A5FA, #38BDF8, #22D3EE); }
-:root[data-accent="red"]   { --accent-gradient: linear-gradient(120deg, #EF4444, #F87171, #FB923C); }
+:root[data-accent="pink"]  { --accent-gradient: linear-gradient(120deg, #A78BFA, #F472B6, #7DD3FC); --accent-solid: #A78BFA; --accent-solid-bright: #C9B8FF; --accent-glow: rgba(167, 139, 250, 0.35); --accent-glow-soft: rgba(167, 139, 250, 0.15); }
+:root[data-accent="green"] { --accent-gradient: linear-gradient(120deg, #34D399, #4ADE80, #BEF264); --accent-solid: #34D399; --accent-solid-bright: #6EE7B7; --accent-glow: rgba(52, 211, 153, 0.35); --accent-glow-soft: rgba(52, 211, 153, 0.15); }
+:root[data-accent="blue"]  { --accent-gradient: linear-gradient(120deg, #60A5FA, #38BDF8, #22D3EE); --accent-solid: #38BDF8; --accent-solid-bright: #7DD3FC; --accent-glow: rgba(56, 189, 248, 0.35); --accent-glow-soft: rgba(56, 189, 248, 0.15); }
+:root[data-accent="red"]   { --accent-gradient: linear-gradient(120deg, #EF4444, #F87171, #FB923C); --accent-solid: #F87171; --accent-solid-bright: #FCA5A5; --accent-glow: rgba(248, 113, 113, 0.35); --accent-glow-soft: rgba(248, 113, 113, 0.15); }
 
 * { box-sizing: border-box; }
 
@@ -96,13 +98,29 @@ html, body {
 }
 .update-btn:hover { background: rgba(74, 222, 128, 0.15); color: var(--status-connected); }
 
+/* --- Update download progress, shown under the header/logo while an update
+   is downloading (see 'update:progress' in main.js) --- */
+.update-progress {
+    height: 3px;
+    margin: 0 24px 12px;
+    border-radius: 2px;
+    background: var(--bg-surface-alt);
+    overflow: hidden;
+}
+.update-progress-bar {
+    height: 100%;
+    width: 0%;
+    background: var(--accent-gradient);
+    transition: width 0.2s ease;
+}
+
 /* --- Update banner --- */
 .update-banner {
     margin: 0 24px 16px;
     padding: 10px 14px;
     border-radius: 10px;
     background: var(--bg-surface-alt);
-    color: var(--accent-lavender-bright);
+    color: var(--accent-solid-bright);
     font-size: 13px;
 }
 
@@ -125,7 +143,7 @@ html, body {
 
 .main-col-resources {
     flex: 0 0 260px;
-    border-left: 1px solid rgba(156, 151, 184, 0.15);
+    border-left: 1px solid rgba(156, 156, 156, 0.15);
     padding-left: 20px;
 }
 
@@ -198,12 +216,14 @@ html, body {
     margin-top: 8px;
 }
 
+/* .fi (flag-icons) sizes itself off font-size (1.333em wide x 1em tall) -
+   13px here lands close to the old fixed 18x13 <img>. overflow:hidden gives
+   the flag itself the same rounded-corner treatment the old image had. */
 .geo-flag {
-    width: 18px;
-    height: 13px;
+    font-size: 13px;
     border-radius: 2px;
-    object-fit: cover;
-    margin-left: 4px;
+    overflow: hidden;
+    flex-shrink: 0;
 }
 
 .config-edit-btn {
@@ -231,7 +251,7 @@ html, body {
     cursor: pointer;
     padding: 6px 10px;
     border-radius: 8px;
-    border: 2px solid rgba(156, 151, 184, 0.35);
+    border: 2px solid rgba(156, 156, 156, 0.35);
     transition: border-color 0.25s ease, color 0.25s ease;
 }
 .proxy-toggle:hover { color: var(--text-primary); }
@@ -258,13 +278,13 @@ html, body {
     width: 56px;
     background: transparent;
     border: none;
-    border-bottom: 1px solid rgba(156, 151, 184, 0.35);
+    border-bottom: 1px solid rgba(156, 156, 156, 0.35);
     color: var(--text-secondary);
     font-size: 11px;
     text-align: center;
     padding: 2px 0;
 }
-.proxy-port-input:focus { outline: none; border-bottom-color: var(--accent-lavender); color: var(--text-primary); }
+.proxy-port-input:focus { outline: none; border-bottom-color: var(--accent-solid); color: var(--text-primary); }
 .proxy-port-input:disabled { border-bottom-color: transparent; color: var(--text-secondary); }
 
 .config-edit-btn:hover { background: var(--bg-surface-alt); color: var(--text-primary); }
@@ -312,8 +332,8 @@ html, body {
 .power-btn.connecting { cursor: default; }
 
 .power-btn.connected {
-    background: linear-gradient(135deg, var(--accent-lavender-bright), var(--accent-purple-deep));
-    box-shadow: 0 0 0 6px rgba(167, 139, 250, 0.15), 0 0 16px 2px rgba(167, 139, 250, 0.35);
+    background: var(--accent-gradient);
+    box-shadow: 0 0 0 6px var(--accent-glow-soft), 0 0 16px 2px var(--accent-glow);
 }
 
 .power-icon {
@@ -337,7 +357,7 @@ html, body {
 .power-btn.connecting .spinner { display: block; }
 .power-btn.connecting .power-icon { stroke: var(--text-secondary); opacity: 0.5; }
 .spinner circle {
-    stroke: var(--accent-lavender-bright);
+    stroke: var(--accent-solid-bright);
     stroke-linecap: round;
     stroke-dasharray: 110;
     stroke-dashoffset: 60;
@@ -428,7 +448,7 @@ html, body {
 
 textarea, .log-text {
     background: var(--bg-surface);
-    border: 1px solid rgba(156, 151, 184, 0.4);
+    border: 1px solid rgba(156, 156, 156, 0.4);
     border-radius: 8px;
     color: var(--text-primary);
     font-family: "Consolas", "Cascadia Code", monospace;
@@ -441,19 +461,19 @@ textarea {
     min-height: 220px;
     resize: none;
 }
-textarea:focus { outline: none; border-color: var(--accent-lavender); }
+textarea:focus { outline: none; border-color: var(--accent-solid); }
 textarea::placeholder { color: var(--text-secondary); }
 
 .text-input {
     background: var(--bg-surface);
-    border: 1px solid rgba(156, 151, 184, 0.4);
+    border: 1px solid rgba(156, 156, 156, 0.4);
     border-radius: 8px;
     color: var(--text-primary);
     font-size: 13px;
     padding: 10px 12px;
     font-family: inherit;
 }
-.text-input:focus { outline: none; border-color: var(--accent-lavender); }
+.text-input:focus { outline: none; border-color: var(--accent-solid); }
 .text-input::placeholder { color: var(--text-secondary); }
 
 .log-text {
@@ -476,16 +496,16 @@ textarea::placeholder { color: var(--text-secondary); }
     cursor: pointer;
 }
 .btn-primary {
-    background: var(--accent-lavender);
+    background: var(--accent-solid);
     color: var(--bg-deep);
 }
-.btn-primary:hover { background: var(--accent-lavender-bright); }
+.btn-primary:hover { background: var(--accent-solid-bright); }
 .btn-outline {
     background: transparent;
-    color: var(--accent-lavender);
-    border: 1px solid var(--accent-lavender);
+    color: var(--accent-solid);
+    border: 1px solid var(--accent-solid);
 }
-.btn-outline:hover { background: rgba(167, 139, 250, 0.1); }
+.btn-outline:hover { background: var(--accent-glow-soft); }
 .btn-danger {
     background: transparent;
     color: var(--status-error);
@@ -499,8 +519,8 @@ textarea::placeholder { color: var(--text-secondary); }
     inset: 0;
     z-index: 10;
     /* Opaque enough to fully obscure a connected config tile's glow behind it
-       (box-shadow: 0 0 16px rgba(167,139,250,.35) on .power-btn.connected) -
-       at 0.5 alpha that glow was still visibly showing through the backdrop. */
+       (box-shadow: 0 0 16px var(--accent-glow) on .power-btn.connected) - at
+       0.5 alpha that glow was still visibly showing through the backdrop. */
     background: rgba(4, 4, 10, 0.92);
     display: flex;
     align-items: center;
@@ -564,7 +584,10 @@ textarea::placeholder { color: var(--text-secondary); }
     border: 2px solid transparent;
     box-shadow: inset 0 0 0 2px var(--bg-deep);
 }
-.accent-swatch.active { border-color: var(--accent-lavender); }
+/* Neutral (not accent-coloured) on purpose: the ring marks the selected
+   swatch, so tying its colour to that same swatch's own accent would make it
+   nearly invisible against exactly the one it's meant to highlight. */
+.accent-swatch.active { border-color: var(--text-primary); }
 
 .accent-swatch[data-accent="pink"]  { background: linear-gradient(120deg, #A78BFA, #F472B6, #7DD3FC); }
 .accent-swatch[data-accent="green"] { background: linear-gradient(120deg, #34D399, #4ADE80, #BEF264); }

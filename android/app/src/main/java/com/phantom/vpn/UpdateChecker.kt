@@ -85,6 +85,33 @@ fun requestInstallPermission(context: Context) {
 
 private fun updateApkFile(context: Context): File = File(context.getExternalFilesDir(null), UPDATE_APK_FILE_NAME)
 
+/** Streams input to output in chunks, reporting percent complete as it goes -
+ * total <= 0 (server didn't send Content-Length) just means onProgress never
+ * fires, the copy itself is unaffected. */
+private fun copyWithProgress(
+    input: java.io.InputStream,
+    output: java.io.OutputStream,
+    total: Long,
+    onProgress: (percent: Int) -> Unit,
+) {
+    val buffer = ByteArray(8 * 1024)
+    var copied = 0L
+    var lastPct = -1
+    while (true) {
+        val n = input.read(buffer)
+        if (n < 0) break
+        output.write(buffer, 0, n)
+        copied += n
+        if (total > 0) {
+            val pct = (copied * 100 / total).toInt().coerceIn(0, 100)
+            if (pct != lastPct) {
+                lastPct = pct
+                onProgress(pct)
+            }
+        }
+    }
+}
+
 /** Whether [info]'s APK is already sitting on disk from a previous attempt - e.g. the
  * user dismissed the install prompt without installing it, or the app was
  * backgrounded mid-flow - so downloadAndInstallUpdate can skip straight to
@@ -105,7 +132,15 @@ fun isUpdateAlreadyDownloaded(context: Context, info: UpdateInfo): Boolean {
  * finding the file. Returns false if the download itself failed (network, disk); the
  * install step failing/being cancelled by the user isn't observable from here.
  */
-suspend fun downloadAndInstallUpdate(context: Context, info: UpdateInfo): Boolean {
+suspend fun downloadAndInstallUpdate(
+    context: Context,
+    info: UpdateInfo,
+    // 0-100 while the APK streams to disk - lets the caller show a bar under
+    // the logo instead of a bare "downloading" state with no feedback for
+    // however long the transfer takes. Never called if the APK was already
+    // sitting on disk from a previous attempt (see isUpdateAlreadyDownloaded).
+    onProgress: (percent: Int) -> Unit = {},
+): Boolean {
     val file = updateApkFile(context)
 
     if (!isUpdateAlreadyDownloaded(context, info)) {
@@ -115,8 +150,9 @@ suspend fun downloadAndInstallUpdate(context: Context, info: UpdateInfo): Boolea
                 conn.connectTimeout = 10_000
                 conn.readTimeout = 120_000
                 conn.instanceFollowRedirects = true
+                val total = conn.contentLengthLong
                 conn.inputStream.use { input ->
-                    file.outputStream().use { output -> input.copyTo(output) }
+                    file.outputStream().use { output -> copyWithProgress(input, output, total, onProgress) }
                 }
                 true
             }.getOrElse {

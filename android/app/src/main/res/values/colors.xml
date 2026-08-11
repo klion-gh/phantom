@@ -2,16 +2,18 @@
 <resources>
     <color name="ic_launcher_background">#0A0A12</color>
 
-    <color name="bg_deep">#07070C</color>
-    <color name="bg_surface">#141225</color>
-    <color name="bg_surface_alt">#1C1934</color>
-
-    <color name="accent_lavender">#A78BFA</color>
-    <color name="accent_lavender_bright">#C9B8FF</color>
-    <color name="accent_purple_deep">#4A3B8C</color>
+    <!-- The real, theme/accent-aware palette lives in Theme.kt (Compose reads
+         it directly and ignores this file) - bg_deep here is only the
+         pre-Compose window/status/nav-bar background (see themes.xml), kept
+         in sync with Theme.kt's BgDeep so there's no flash of a different
+         shade on cold start. The rest are kept in sync for reference even
+         though nothing currently points at them. -->
+    <color name="bg_deep">#0A0A0A</color>
+    <color name="bg_surface">#161616</color>
+    <color name="bg_surface_alt">#1E1E1E</color>
 
     <color name="status_connected">#4ADE80</color>
     <color name="status_error">#F87171</color>
-    <color name="text_primary">#F5F3FF</color>
-    <color name="text_secondary">#9C97B8</color>
+    <color name="text_primary">#F5F5F5</color>
+    <color name="text_secondary">#9C9C9C</color>
 </resources>

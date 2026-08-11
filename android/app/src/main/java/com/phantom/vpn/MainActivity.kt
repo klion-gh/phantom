@@ -5,6 +5,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -175,6 +176,11 @@ private fun PhantomApp(
     // so there's no equivalent of the exe's silent relaunch to guard against here.
     var updateInfo by remember { mutableStateOf<UpdateInfo?>(null) }
     var isUpdating by remember { mutableStateOf(false) }
+    // 0-100 while the APK streams to disk, null the rest of the time (including
+    // while the download is already-on-disk/install-permission branches of
+    // downloadAndInstallUpdate, which never call onProgress) - see MainScreen's
+    // progress bar under the logo.
+    var updateProgress by remember { mutableStateOf<Int?>(null) }
     LaunchedEffect(Unit) {
         updateInfo = checkForUpdate(BuildConfig.VERSION_NAME)
     }
@@ -189,9 +195,11 @@ private fun PhantomApp(
         val info = updateInfo ?: return
         if (isUpdating) return
         isUpdating = true
+        updateProgress = 0
         coroutineScope.launch {
-            val ok = downloadAndInstallUpdate(context, info)
+            val ok = downloadAndInstallUpdate(context, info) { pct -> updateProgress = pct }
             isUpdating = false
+            updateProgress = null
             if (!ok) {
                 Toast.makeText(context, I18n.t("download_failed"), Toast.LENGTH_LONG).show()
             }
@@ -272,30 +280,36 @@ private fun PhantomApp(
         return true
     }
 
-    // Resolves a tile's IP (a Ping to the operator's own server) and then, unless
-    // the config already named a country, looks that up from the IP. Both retry
-    // until they succeed: a single attempt at save time meant "no connectivity
-    // right now" turned into "no label on this tile, ever". Backs off to a minute
-    // so a long outage costs nothing, and stops for good once both are pinned.
+    // Resolves a tile's IP (a Ping to the operator's own server) and re-resolves
+    // its country only if that comes back different from whatever IP is already
+    // pinned for this config - not on every save. previousIP is captured once, up
+    // front: a config being saved for the first time has none yet, which is what
+    // makes a first resolution behave the same as a real IP change. Both the Ping
+    // and (once a change is confirmed) the country lookup retry until they
+    // succeed: a single attempt at save time meant "no connectivity right now"
+    // turned into "no label on this tile, ever". Backs off to a minute so a long
+    // outage costs nothing.
     //
     // The country lookup goes to a third-party geolocation service and so tells it
-    // the address of the user's server - see internal/geoip. That is why it happens
-    // once per saved config and never on a timer.
+    // the address of the user's server - see internal/geoip. That is why it only
+    // ever runs after a genuine IP change, never on a timer.
     fun resolveTileMetadataInBackground(id: String, yaml: String, hasExplicitCountry: Boolean) {
         if (!geoJobs.add(id)) return
         coroutineScope.launch {
             try {
+                val previousIP = configs.find { it.id == id }?.ip
+                var invalidated = false // stale IP/country already cleared for this run
                 var backoffMs = 2_000L
-                var ip: String? = null
                 while (isActive) {
-                    if (ip.isNullOrBlank()) {
-                        ip = fetchPing(yaml)?.first
-                        if (!ip.isNullOrBlank()) {
-                            ConfigStore.setServerIP(context, id, ip)
-                            refreshConfigs()
-                        }
-                    }
+                    val ip = fetchPing(yaml)?.first
                     if (!ip.isNullOrBlank()) {
+                        if (ip == previousIP) return@launch // same server as before - nothing to do
+                        if (!invalidated) {
+                            ConfigStore.setServerIP(context, id, ip)
+                            ConfigStore.setCountry(context, id, null, null)
+                            refreshConfigs()
+                            invalidated = true
+                        }
                         if (hasExplicitCountry) return@launch
                         val geo = lookupCountry(ip)
                         if (geo != null) {
@@ -379,6 +393,7 @@ private fun PhantomApp(
             resources = resources,
             appInForeground = appInForeground,
             hasUpdate = updateInfo != null,
+            updateProgress = updateProgress,
             isUpdating = isUpdating,
             onUpdateClick = { applyUpdate() },
             proxyRunningPorts = proxyRunningPorts,
@@ -430,6 +445,7 @@ private fun MainScreen(
     appInForeground: Boolean,
     hasUpdate: Boolean,
     isUpdating: Boolean,
+    updateProgress: Int?,
     onUpdateClick: () -> Unit,
     proxyRunningPorts: Map<String, Int>,
     onToggleProxy: (SavedConfig, String) -> Unit,
@@ -474,6 +490,29 @@ private fun MainScreen(
                 }
             }
             Spacer(modifier = Modifier.weight(1f))
+        }
+
+        // Update download progress, shown under the header/logo while
+        // downloadAndInstallUpdate is streaming the APK to disk - see
+        // applyUpdate's onProgress callback. Absent (not just empty) the rest
+        // of the time, including the already-downloaded/needs-install-
+        // permission branches, which never report progress.
+        if (updateProgress != null) {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 8.dp)
+                    .height(3.dp)
+                    .clip(RoundedCornerShape(2.dp))
+                    .background(BgSurfaceAlt),
+            ) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxHeight()
+                        .fillMaxWidth((updateProgress / 100f).coerceIn(0f, 1f))
+                        .background(Brush.linearGradient(AccentGradient)),
+                )
+            }
         }
 
         Spacer(modifier = Modifier.height(20.dp))
@@ -553,7 +592,7 @@ private fun NavBarItem(
         Icon(
             imageVector = icon,
             contentDescription = null,
-            tint = if (selected) AccentLavender else TextSecondary,
+            tint = if (selected) AccentSolid else TextSecondary,
             modifier = Modifier.size(26.dp),
         )
     }
@@ -722,9 +761,9 @@ private fun AddResourceDialog(
     val fieldColors = OutlinedTextFieldDefaults.colors(
         focusedTextColor = TextPrimary,
         unfocusedTextColor = TextPrimary,
-        focusedBorderColor = AccentLavender,
+        focusedBorderColor = AccentSolid,
         unfocusedBorderColor = TextSecondary.copy(alpha = 0.4f),
-        cursorColor = AccentLavender,
+        cursorColor = AccentSolid,
     )
 
     AlertDialog(
@@ -762,7 +801,7 @@ private fun AddResourceDialog(
                     "https://$trimmedUrl"
                 }
                 onSave(trimmedName, fullUrl)
-            }) { Text(I18n.t("add"), color = AccentLavender) }
+            }) { Text(I18n.t("add"), color = AccentSolid) }
         },
         dismissButton = {
             TextButton(onClick = onDismiss) { Text(I18n.t("cancel")) }
@@ -818,9 +857,9 @@ private fun ConfigScreen(
             colors = OutlinedTextFieldDefaults.colors(
                 focusedTextColor = TextPrimary,
                 unfocusedTextColor = TextPrimary,
-                focusedBorderColor = AccentLavender,
+                focusedBorderColor = AccentSolid,
                 unfocusedBorderColor = TextSecondary.copy(alpha = 0.4f),
-                cursorColor = AccentLavender,
+                cursorColor = AccentSolid,
             ),
             modifier = Modifier
                 .fillMaxWidth()
@@ -829,7 +868,7 @@ private fun ConfigScreen(
 
         Button(
             onClick = onSave,
-            colors = ButtonDefaults.buttonColors(containerColor = AccentLavender, contentColor = BgDeep),
+            colors = ButtonDefaults.buttonColors(containerColor = AccentSolid, contentColor = BgDeep),
             modifier = Modifier.fillMaxWidth(),
         ) {
             Text(I18n.t("save"))
@@ -946,7 +985,7 @@ private fun SettingsScreen(
 // vanish against the swatch it is meant to outline.
 @Composable
 private fun AccentSwatch(accent: Accent, selected: Boolean, onClick: () -> Unit) {
-    val ringColour = if (selected) AccentLavender else Color.Transparent
+    val ringColour = if (selected) TextPrimary else Color.Transparent
     Box(
         modifier = Modifier
             .size(44.dp)
@@ -963,7 +1002,7 @@ private fun LangButton(label: String, active: Boolean, onClick: () -> Unit) {
     if (active) {
         Button(
             onClick = onClick,
-            colors = ButtonDefaults.buttonColors(containerColor = AccentLavender, contentColor = BgDeep),
+            colors = ButtonDefaults.buttonColors(containerColor = AccentSolid, contentColor = BgDeep),
         ) { Text(label) }
     } else {
         OutlinedButton(onClick = onClick) { Text(label) }
@@ -1017,7 +1056,7 @@ private fun LogScreen(onClose: () -> Unit) {
                 }
                 context.startActivity(Intent.createChooser(shareIntent, "Share Phantom log"))
             },
-            colors = ButtonDefaults.buttonColors(containerColor = AccentLavender, contentColor = BgDeep),
+            colors = ButtonDefaults.buttonColors(containerColor = AccentSolid, contentColor = BgDeep),
             modifier = Modifier.fillMaxWidth(),
         ) {
             Text(I18n.t("share"))

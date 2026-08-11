@@ -215,6 +215,18 @@ func (a *App) SetConfigGeo(id string, ip string, country string, countryCode str
 	return ""
 }
 
+// ClearConfigCountry blanks a saved config's cached country/country_code -
+// the frontend calls this right before re-resolving them once it notices the
+// config's dialed IP has changed (see resolveTileMetadata in main.js), so a
+// label from the old server doesn't linger while the new one is being looked
+// up. Returns "" on success or an error message.
+func (a *App) ClearConfigCountry(id string) string {
+	if err := clearConfigCountry(id); err != nil {
+		return err.Error()
+	}
+	return ""
+}
+
 // DeleteConfig removes a saved config, disconnecting first if it's the one
 // currently active (otherwise the tunnel would keep running with no tile
 // left in the UI to represent or control it) and stopping its independent

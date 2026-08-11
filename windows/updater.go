@@ -87,7 +87,7 @@ func applyPendingUpdate(ctx context.Context) string {
 	log.Printf("applying update %s (current %s)", tag, AppVersion)
 	runtime.EventsEmit(ctx, "update:downloading", tag)
 
-	if err := selfUpdate(downloadURL, sumsURL); err != nil {
+	if err := selfUpdate(ctx, downloadURL, sumsURL); err != nil {
 		log.Printf("self-update to %s failed: %v", tag, err)
 		runtime.EventsEmit(ctx, "update:failed", err.Error())
 		return err.Error()
@@ -244,7 +244,7 @@ func parseVersion(v string) [3]int {
 // The relaunched exe still carries the requireAdministrator manifest, so
 // Windows shows a fresh UAC prompt for it - unavoidable given the app's
 // elevation requirement, regardless of how the new process is started.
-func selfUpdate(downloadURL, sumsURL string) error {
+func selfUpdate(ctx context.Context, downloadURL, sumsURL string) error {
 	exePath, err := os.Executable()
 	if err != nil {
 		return fmt.Errorf("locate executable: %w", err)
@@ -275,14 +275,19 @@ func selfUpdate(downloadURL, sumsURL string) error {
 		return fmt.Errorf("create temp file: %w", err)
 	}
 	// Hash while writing rather than re-reading afterwards: what gets hashed is
-	// then exactly the bytes that were written.
+	// then exactly the bytes that were written. progress fans the same bytes out
+	// to "update:progress" so the frontend can show a bar under the logo instead
+	// of a bare "downloading" banner - GitHub always sends Content-Length for a
+	// release asset, so resp.ContentLength is reliable here.
 	hasher := sha256.New()
-	if _, err := io.Copy(io.MultiWriter(out, hasher), resp.Body); err != nil {
+	progress := newDownloadProgress(ctx, resp.ContentLength)
+	if _, err := io.Copy(io.MultiWriter(out, hasher, progress), resp.Body); err != nil {
 		out.Close()
 		os.Remove(newPath)
 		return fmt.Errorf("write temp file: %w", err)
 	}
 	out.Close()
+	runtime.EventsEmit(ctx, "update:progress", 100)
 
 	if got := hex.EncodeToString(hasher.Sum(nil)); got != wantSum {
 		os.Remove(newPath)
@@ -316,6 +321,41 @@ func selfUpdate(downloadURL, sumsURL string) error {
 	log.Printf("update installed, relaunching as pid %d", cmd.Process.Pid)
 	os.Exit(0)
 	return nil // unreachable
+}
+
+// downloadProgress is an io.Writer that turns bytes written (via
+// io.MultiWriter alongside the actual file/hasher) into periodic
+// "update:progress" events carrying a 0-100 percent complete. Throttled to at
+// most once per percentage point and once per 100ms so a fast local network
+// doesn't flood the frontend with events for a multi-megabyte exe.
+type downloadProgress struct {
+	ctx      context.Context
+	total    int64
+	written  int64
+	lastPct  int
+	lastSent time.Time
+}
+
+func newDownloadProgress(ctx context.Context, total int64) *downloadProgress {
+	return &downloadProgress{ctx: ctx, total: total, lastPct: -1}
+}
+
+func (p *downloadProgress) Write(b []byte) (int, error) {
+	n := len(b)
+	p.written += int64(n)
+	if p.total <= 0 {
+		return n, nil
+	}
+	pct := int(p.written * 100 / p.total)
+	if pct > 100 {
+		pct = 100
+	}
+	if pct != p.lastPct && time.Since(p.lastSent) >= 100*time.Millisecond {
+		p.lastPct = pct
+		p.lastSent = time.Now()
+		runtime.EventsEmit(p.ctx, "update:progress", pct)
+	}
+	return n, nil
 }
 
 // cleanupOldExe removes a phantom_old.exe left behind by a previous

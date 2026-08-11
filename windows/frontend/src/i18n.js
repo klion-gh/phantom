@@ -70,6 +70,7 @@ const dict = {
     update_installing: 'Установка обновления {tag} — скачивание и перезапуск...',
     update_failed: 'Не удалось обновиться: {message}',
     reconnecting: 'Смена сети — переподключение...',
+    connect_timeout: 'Не удалось подключиться: сервер не ответил вовремя',
   },
   en: {
     settings: 'Settings',
@@ -124,6 +125,7 @@ const dict = {
     update_installing: 'Installing update {tag} — downloading and restarting...',
     update_failed: 'Update failed: {message}',
     reconnecting: 'Network changed — reconnecting...',
+    connect_timeout: 'Connection failed: the server did not respond in time',
   },
 };
 

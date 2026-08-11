@@ -111,6 +111,12 @@ func addConfig(yaml string) (SavedConfig, error) {
 	return cfg, nil
 }
 
+// updateConfig deliberately leaves IP/Country/CountryCode alone - an edit that
+// doesn't change which server the yaml points at shouldn't discard a label
+// that's still correct. The frontend's resolveTileMetadata is what decides
+// whether anything actually changed: it re-Pings the (possibly edited) yaml
+// and only invalidates the cached country (via ClearConfigCountry) when that
+// comes back with a different IP than what's already pinned here.
 func updateConfig(id, yaml string) error {
 	dir, err := configDir()
 	if err != nil {
@@ -122,13 +128,7 @@ func updateConfig(id, yaml string) error {
 	}
 	for i := range configs {
 		if configs[i].ID == id {
-			// Clear any previously cached geo data - the edited yaml may point at a
-			// different server entirely, so the old IP/country would be stale until
-			// SetConfigGeo re-resolves it.
 			configs[i].Yaml = yaml
-			configs[i].IP = ""
-			configs[i].Country = ""
-			configs[i].CountryCode = ""
 		}
 	}
 	return saveConfigs(dir, configs)
@@ -138,15 +138,17 @@ func updateConfig(id, yaml string) error {
 // "leave this field alone", so the two halves can be written independently.
 //
 // That matters because they have completely different failure modes. The country
-// and its ISO code are fields in the config's own yaml: no network, cannot fail.
-// The IP comes from a Ping to the operator's server and needs connectivity. They
-// used to be written together after a successful Ping, which meant a config added
-// while offline lost its country label permanently - the frontend bailed out
-// before it ever got to storing it. Now the country is pinned immediately and the
-// IP is retried until it lands.
+// and its ISO code are either a field in the config's own yaml (no network, cannot
+// fail) or come from LookupCountry, a third-party geo-IP lookup on the IP below -
+// see app.go's LookupCountry for that trade-off. The IP itself comes from a Ping to
+// the operator's server and needs connectivity. They used to be written together
+// after a successful Ping, which meant a config added while offline lost its
+// country label permanently - the frontend bailed out before it ever got to storing
+// it. Now the country is pinned immediately (or looked up) and the IP is retried
+// until it lands.
 //
-// There is deliberately no IP->country lookup anywhere: that used to hit a
-// third-party geo service and a flag CDN, handing them the server's address.
+// Because "" here means "leave alone" rather than "clear", this cannot itself
+// blank a stale country once it's been set - see ClearConfigCountry for that.
 func setConfigGeo(id, ip, country, countryCode string) error {
 	dir, err := configDir()
 	if err != nil {
@@ -167,6 +169,30 @@ func setConfigGeo(id, ip, country, countryCode string) error {
 			if countryCode != "" {
 				configs[i].CountryCode = countryCode
 			}
+		}
+	}
+	return saveConfigs(dir, configs)
+}
+
+// clearConfigCountry blanks a saved config's cached country/ISO code - called
+// by the frontend right before re-resolving them once resolveTileMetadata
+// notices the config's dialed IP has changed, so a label from the old server
+// doesn't linger on screen while the new one is being looked up. Separate from
+// setConfigGeo because that function's "" means "leave alone", which cannot
+// express "set this to blank".
+func clearConfigCountry(id string) error {
+	dir, err := configDir()
+	if err != nil {
+		return err
+	}
+	configs, err := loadConfigs()
+	if err != nil {
+		return err
+	}
+	for i := range configs {
+		if configs[i].ID == id {
+			configs[i].Country = ""
+			configs[i].CountryCode = ""
 		}
 	}
 	return saveConfigs(dir, configs)

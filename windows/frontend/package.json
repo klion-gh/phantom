@@ -9,5 +9,8 @@
   },
   "devDependencies": {
     "vite": "^3.0.7"
+  },
+  "dependencies": {
+    "flag-icons": "7.5.0"
   }
 }

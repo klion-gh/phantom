@@ -1,5 +1,14 @@
 import './style.css';
-import { Connect, Disconnect, Status, ReadLog, ListConfigs, AddConfig, UpdateConfig, DeleteConfig, SetConfigGeo, Ping, ListResources, AddResource, DeleteResource, ListExcludedApps, PickExcludedAppExe, AddExcludedApp, DeleteExcludedApp, ApplyUpdate, StartProxy, StopProxy, GetLanguage, SetLanguage, Version, LookupCountry, GetAppearance, SetAppearance } from '../wailsjs/go/main/App';
+// Bundled locally (see package.json) rather than fetched from a CDN or drawn
+// as an emoji: the app already tells nothing to a third party for this label
+// (§9.2/PROTOCOL.md), and Windows' own emoji font has no flag glyphs anyway -
+// confirmed directly in WebView2, not just assumed. flag-icons ships every
+// ISO 3166-1 flag as an SVG plus one CSS file (`.fi.fi-xx`); Vite pulls every
+// flag referenced by that CSS into the build regardless of which ones this
+// install ever shows, so the app's own footprint grows by the whole set
+// (~2.4MB) once, not per flag shown.
+import 'flag-icons/css/flag-icons.min.css';
+import { Connect, Disconnect, Status, ReadLog, ListConfigs, AddConfig, UpdateConfig, DeleteConfig, SetConfigGeo, ClearConfigCountry, Ping, ListResources, AddResource, DeleteResource, ListExcludedApps, PickExcludedAppExe, AddExcludedApp, DeleteExcludedApp, ApplyUpdate, StartProxy, StopProxy, GetLanguage, SetLanguage, Version, LookupCountry, GetAppearance, SetAppearance } from '../wailsjs/go/main/App';
 import { t, getLang, setLang, applyStaticTranslations } from './i18n.js';
 
 const screens = {
@@ -26,6 +35,8 @@ const deleteConfirm = document.getElementById('delete-confirm');
 const logText = document.getElementById('log-text');
 const resourceList = document.getElementById('resource-list');
 const updateBanner = document.getElementById('update-banner');
+const updateProgress = document.getElementById('update-progress');
+const updateProgressBar = document.getElementById('update-progress-bar');
 const btnUpdate = document.getElementById('btn-update');
 const addResourceOverlay = document.getElementById('add-resource-overlay');
 const resourceNameInput = document.getElementById('resource-name-input');
@@ -93,38 +104,44 @@ async function applyCountryFromYaml(id, yaml) {
   return true;
 }
 
-// Resolves the server IP (a Ping to the operator's own server) and then, unless
-// the config already spelled it out, its country. Both retry until they succeed:
-// a single attempt at save time meant "no connectivity right now" turned into "no
-// label on this tile, ever".
+// Resolves the server IP (a Ping to the operator's own server) and re-resolves
+// the country only if that comes back different from whatever IP is already
+// pinned for this config - not on every save. previousIP is captured once, up
+// front: a config being saved for the first time has none yet, which is what
+// makes a first resolution behave the same as a real IP change. Both the Ping
+// and (once a change is confirmed) the country lookup retry until they
+// succeed: a single attempt at save time meant "no connectivity right now"
+// turned into "no label on this tile, ever".
 async function resolveTileMetadata(id, yaml, hasExplicitCountry) {
   if (geoJobs.has(id)) return;
   geoJobs.add(id);
   try {
+    const startConfig = configs.find((c) => c.id === id);
+    const previousIP = startConfig ? startConfig.ip : '';
+    let invalidated = false; // stale IP/country already cleared for this run
     let backoff = 2000;
-    let ip = '';
     for (;;) {
-      if (!ip) {
-        try {
-          const ping = JSON.parse(await Ping(yaml));
-          if (ping.ip) {
-            ip = ping.ip;
-            await SetConfigGeo(id, ip, '', '');
+      try {
+        const ping = JSON.parse(await Ping(yaml));
+        if (ping.ip) {
+          if (ping.ip === previousIP) return; // same server as before - nothing to do
+          if (!invalidated) {
+            await SetConfigGeo(id, ping.ip, '', '');
+            await ClearConfigCountry(id);
             await reloadConfigs();
+            invalidated = true;
           }
-        } catch (e) {
-          console.error(e);
+          if (hasExplicitCountry) return;
+          const raw = await LookupCountry(ping.ip);
+          if (raw) {
+            const geo = JSON.parse(raw);
+            await SetConfigGeo(id, '', geo.country, geo.country_code);
+            await reloadConfigs();
+            return;
+          }
         }
-      }
-      if (ip) {
-        if (hasExplicitCountry) return;
-        const raw = await LookupCountry(ip);
-        if (raw) {
-          const geo = JSON.parse(raw);
-          await SetConfigGeo(id, '', geo.country, geo.country_code);
-          await reloadConfigs();
-          return;
-        }
+      } catch (e) {
+        console.error(e);
       }
       await new Promise((r) => setTimeout(r, backoff));
       backoff = Math.min(backoff * 2, 60000);
@@ -188,15 +205,26 @@ function updateTileMeta(id) {
   card.querySelector('.config-ip').textContent = info.ip || config.ip || parseYamlField(config.yaml, 'server') || '—';
   card.querySelector('.ping-text').textContent = info.latencyMs != null ? `${t('ping')}: ${info.latencyMs} ${t('ms')}` : `${t('ping')}: —`;
 
-  // Country label comes from the operator-provided country/country_code in the
-  // config (see resolveConfigGeo) - no third-party geo/flag lookup anymore. The
-  // flag <img> stays hidden: a real flag would need a CDN (the leak we removed)
-  // or bundled images, and Windows/Chromium can't render flag emoji either, so
-  // we show the country name/code as text instead.
-  const flagImg = card.querySelector('.geo-flag');
+  // Country label comes from the operator-provided country/country_code in
+  // the config, or a LookupCountry resolution keyed off the resolved IP (see
+  // resolveConfigGeo/resolveTileMetadata). The flag itself is a bundled
+  // flag-icons SVG, not the regional-indicator emoji Android uses - Windows'
+  // own emoji font has no flag glyphs (confirmed directly in a WebView2 page,
+  // not just assumed), so that would only ever show the bare two-letter code.
   const geoText = card.querySelector('.geo-text');
-  flagImg.classList.add('hidden');
   geoText.textContent = config.country || config.countryCode || '';
+
+  const flagEl = card.querySelector('.geo-flag');
+  const code = /^[A-Za-z]{2}$/.test(config.countryCode || '') ? config.countryCode.toLowerCase() : '';
+  for (const cls of [...flagEl.classList]) {
+    if (cls.startsWith('fi-')) flagEl.classList.remove(cls);
+  }
+  if (code) {
+    flagEl.classList.add(`fi-${code}`);
+    flagEl.classList.remove('hidden');
+  } else {
+    flagEl.classList.add('hidden');
+  }
 }
 
 // Checks one resource tile via a plain fetch() from this page's own network
@@ -343,7 +371,7 @@ function renderConfigList() {
         <div class="config-ip"></div>
         <div class="config-meta">
           <span class="ping-text">${t('ping')}: —</span>
-          <img class="geo-flag hidden" alt="" />
+          <span class="geo-flag fi hidden"></span>
           <span class="geo-text"></span>
         </div>
       </div>
@@ -463,6 +491,24 @@ function refreshTileStatuses() {
   }
 }
 
+// Go's own Connect() is bounded (dial/handshake deadlines - see
+// internal/transport's dialAddr), but this is a second, independent backstop
+// on the UI side: whatever the reason a call takes unexpectedly long, the
+// power button must never stay disabled forever with no way to disconnect -
+// that used to mean force-closing the app. 30s comfortably exceeds Go's own
+// ~15s worst case, so it only ever fires as a last resort.
+const CONNECT_TIMEOUT_MS = 30000;
+
+function withTimeout(promise, ms, timeoutMessage) {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(timeoutMessage)), ms);
+    promise.then(
+      (v) => { clearTimeout(timer); resolve(v); },
+      (e) => { clearTimeout(timer); reject(e); },
+    );
+  });
+}
+
 async function toggleConnection(config) {
   const isActive = currentStatus.activeConfigId === config.id && currentStatus.connected;
 
@@ -478,7 +524,7 @@ async function toggleConnection(config) {
   pendingConnectId = config.id;
   refreshTileStatuses();
   try {
-    const err = await Connect(config.id, config.yaml);
+    const err = await withTimeout(Connect(config.id, config.yaml), CONNECT_TIMEOUT_MS, t('connect_timeout'));
     if (err) {
       errorText.textContent = err;
       errorText.classList.remove('hidden');
@@ -686,10 +732,20 @@ if (window.runtime) {
   window.runtime.EventsOn('update:downloading', (tag) => {
     updateBanner.textContent = t('update_installing', { tag });
     updateBanner.classList.remove('hidden');
+    updateProgressBar.style.width = '0%';
+    updateProgress.classList.remove('hidden');
+  });
+  // Emitted repeatedly (throttled Go-side) while selfUpdate streams the new
+  // exe to disk - see downloadProgress in updater.go. On success the process
+  // relaunches and exits before there's ever a reason to hide this bar again;
+  // 'update:failed' below is what hides it on the other branch.
+  window.runtime.EventsOn('update:progress', (pct) => {
+    updateProgressBar.style.width = `${pct}%`;
   });
   window.runtime.EventsOn('update:failed', (message) => {
     updateBanner.textContent = t('update_failed', { message });
     updateBanner.classList.remove('hidden');
+    updateProgress.classList.add('hidden');
     btnUpdate.disabled = false;
   });
   // Fired by windows/networkwatch.go's native route-change callback (see

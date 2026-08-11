@@ -11,14 +11,15 @@ import java.util.UUID
 /**
  * One saved client.yaml, shown as its own tile on the main screen.
  *
- * [country]/[countryCode] are copied out of the config's own yaml - there is no
- * geo-IP lookup anywhere in the app any more, since that used to hand the
- * server's address to a third party on a timer. [ip] comes from a Ping to the
- * operator's own server.
+ * [country]/[countryCode] either come straight out of the config's own yaml
+ * (no network) or from [lookupCountry], a third-party geo-IP lookup keyed on
+ * [ip] - see that function's doc for the trade-off. [ip] itself comes from a
+ * Ping to the operator's own server.
  *
- * They are resolved once and pinned, not refreshed on every ping cycle: the
- * server behind a saved config essentially never moves. See
- * [ConfigStore.setCountry] and [ConfigStore.setServerIP].
+ * They are resolved once and pinned, re-resolved only if a later edit's Ping
+ * reveals a different [ip] than what's already pinned here - not refreshed on
+ * every ping cycle, since the server behind a saved config essentially never
+ * moves. See [ConfigStore.setCountry] and [ConfigStore.setServerIP].
  */
 data class SavedConfig(
     val id: String,
@@ -175,11 +176,15 @@ object ConfigStore {
         return cfg
     }
 
-    /** Clears any previously cached geo data - the edited yaml may point at a different
-     * server entirely, so the old ip/country would be stale until [setGeo] re-resolves it. */
+    /** Deliberately leaves ip/country/countryCode alone - an edit that doesn't change
+     * which server the yaml points at shouldn't discard a label that's still correct.
+     * MainActivity's resolveTileMetadataInBackground is what decides whether anything
+     * actually changed: it re-Pings the (possibly edited) yaml and only invalidates the
+     * cached country (via [setCountry]) when that comes back with a different IP than
+     * what's already pinned here. */
     fun update(context: Context, id: String, yaml: String) {
         saveAll(context, loadAll(context).map {
-            if (it.id == id) it.copy(yaml = yaml, ip = null, country = null, countryCode = null) else it
+            if (it.id == id) it.copy(yaml = yaml) else it
         })
     }
 

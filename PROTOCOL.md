@@ -485,7 +485,7 @@ listen_http: "127.0.0.1:1081"         # default; desktop HTTP CONNECT (cmd/clien
 pool_size: 4                          # default; parallel pooled connections
 log_level: "info"                     # not actually read by any logger; plain `log` package used unconditionally
 country: "Germany"                    # optional cosmetic location label for the GUI tile (operator-set, not looked up)
-country_code: "DE"                    # optional two-letter ISO code; flag emoji on Android, text on Windows
+country_code: "DE"                    # optional two-letter ISO code; rendered as a flag on both apps
 ```
 
 The Windows and Android apps import this exact same `client.yaml` text verbatim (pasted
@@ -584,16 +584,24 @@ long as the app was open, which is exactly the shape traffic analysis looks for.
 
 ### 9.2 Tile metadata (`internal/geoip`)
 
-A tile shows the server's IP and the country it sits in. Both are resolved **once per
-saved config and pinned** - a server does not move, so there is nothing to refresh.
+A tile shows the server's IP and the country it sits in.
 
 1. **Server IP** comes from a Ping to the operator's own server (§9.1).
 2. **Country and ISO code** are looked up from that IP via `internal/geoip`, unless the
    config already names them.
 
+Both are resolved when a config is first added, then pinned - a server does not move, so
+there is nothing to refresh on a timer. Editing a saved config's yaml re-Pings it and
+compares the result against the IP already pinned: if it's unchanged (the common case - an
+edit that touches something other than the server address), the cached country is left
+alone; if it's different, the stale country is cleared and re-resolved the same way as a
+brand-new config. This is what stops "which country" queries from firing on every edit,
+not just the first save.
+
 If either step fails it is retried with backoff (2s doubling to a 1-minute cap) until it
-succeeds, so a config added with no connectivity resolves itself later instead of showing
-a blank tile forever. Both apps also re-check on launch for anything still missing.
+succeeds, so a config added (or edited onto a new server) with no connectivity resolves
+itself later instead of showing a blank tile forever. Both apps also re-check on launch
+for anything still missing.
 
 **Precedence:** `country`/`country_code` in the config (§8) override the lookup entirely.
 A deployment that wants no third-party contact fills them in and `geoip.Lookup` is never
@@ -801,11 +809,17 @@ the latest release tag - and the frontend shows it at the bottom of the settings
 what the user reads is exactly what decides whether an update is offered.
 
 The optional country label comes from the config's own `country`/`country_code` fields
-(§8, §9.2) shown as text. Unlike Android it is not rendered as a flag emoji: Windows' Segoe
-UI Emoji font (and Chromium/WebView2 on Windows) has no flag glyphs and would draw the bare
-two-letter code instead - a deliberate, longstanding Microsoft choice, not a WebView2 bug,
-and exactly why the old code fetched flag *images* from a CDN, the dependency §13.6
-removed.
+(§8, §9.2) shown as text next to a flag. Unlike Android, the flag is not the regional-
+indicator emoji pair: Windows' Segoe UI Emoji font (and Chromium/WebView2 on Windows) has
+no flag glyphs and would draw the bare two-letter code instead - a deliberate, longstanding
+Microsoft choice, not a WebView2 bug, confirmed directly rather than assumed. Instead the
+frontend bundles the `flag-icons` npm package (MIT, every ISO 3166-1 flag as an SVG) and
+renders `<span class="fi fi-xx">`, swapping the `fi-xx` class in `updateTileMeta` (`main.js`)
+to match `countryCode`. Nothing is fetched at runtime - the whole flag set (~2.4MB of SVGs,
+referenced by `flag-icons.min.css` and pulled into the Vite build regardless of which ones
+a given install ever shows) ships inside the exe alongside everything else `//go:embed
+all:frontend/dist` already covers - exactly why the old code's CDN image fetch, the
+dependency §13.6 removed, isn't repeated here.
 
 ### 11.4 System tray (`tray.go`)
 

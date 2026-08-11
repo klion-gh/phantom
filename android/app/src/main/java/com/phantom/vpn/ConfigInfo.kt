@@ -244,8 +244,8 @@ private fun ConnectSwitch(status: ConnectionStatus, onClick: () -> Unit) {
         onCheckedChange = { onClick() },
         enabled = status != ConnectionStatus.CONNECTING,
         colors = androidx.compose.material3.SwitchDefaults.colors(
-            checkedThumbColor = AccentLavenderBright,
-            checkedTrackColor = AccentPurpleDeep,
+            checkedThumbColor = AccentSolidBright,
+            checkedTrackColor = AccentSolidDeep,
             checkedBorderColor = Color.Transparent,
             uncheckedThumbColor = TextSecondary,
             uncheckedTrackColor = BgSurfaceAlt,

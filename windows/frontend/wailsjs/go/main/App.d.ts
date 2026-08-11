@@ -9,6 +9,8 @@ export function AddResource(arg1:string,arg2:string):Promise<string>;
 
 export function ApplyUpdate():Promise<string>;
 
+export function ClearConfigCountry(arg1:string):Promise<string>;
+
 export function Connect(arg1:string,arg2:string):Promise<string>;
 
 export function DeleteConfig(arg1:string):Promise<string>;
@@ -19,6 +21,8 @@ export function DeleteResource(arg1:string):Promise<string>;
 
 export function Disconnect():Promise<void>;
 
+export function GetAppearance():Promise<string>;
+
 export function GetLanguage():Promise<string>;
 
 export function ListConfigs():Promise<string>;
@@ -27,11 +31,15 @@ export function ListExcludedApps():Promise<string>;
 
 export function ListResources():Promise<string>;
 
+export function LookupCountry(arg1:string):Promise<string>;
+
 export function PickExcludedAppExe():Promise<string>;
 
 export function Ping(arg1:string):Promise<string>;
 
 export function ReadLog():Promise<string>;
+
+export function SetAppearance(arg1:string,arg2:string):Promise<void>;
 
 export function SetConfigGeo(arg1:string,arg2:string,arg3:string,arg4:string):Promise<string>;
 
@@ -46,9 +54,3 @@ export function StopProxy(arg1:string):Promise<string>;
 export function UpdateConfig(arg1:string,arg2:string):Promise<string>;
 
 export function Version():Promise<string>;
-
-export function LookupCountry(arg1:string):Promise<string>;
-
-export function GetAppearance():Promise<string>;
-
-export function SetAppearance(arg1:string,arg2:string):Promise<void>;
