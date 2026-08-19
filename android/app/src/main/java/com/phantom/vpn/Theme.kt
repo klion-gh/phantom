@@ -3,52 +3,100 @@ package com.phantom.vpn
 import android.content.Context
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.darkColorScheme
-import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.graphics.Color
 
-enum class ThemeMode { DARK, LIGHT }
-
 /**
- * The accent gradient used for the "this is on" outline - a connected config tile
- * and a running proxy toggle. Four presets rather than a free colour picker: the
- * gradients are hand-picked three-stop ramps that stay legible against both
- * backgrounds, which an arbitrary colour would not.
+ * Six interchangeable dark palettes - see PROTOCOL.md's theming section. The
+ * palette changes colour only: sizing, radii, spacing and type are identical
+ * across all six so the app stays one product regardless of which is picked.
+ * There is no light variant - this system is built for a dark, colourful
+ * background and breaks if inverted, so unlike the old theme switch this is
+ * a straight palette choice, not palette+mode.
  *
- * [solid]/[bright]/[deep] are a single flat colour tracking the same selection,
- * for anywhere the full multi-stop gradient doesn't fit (buttons, focus rings,
- * the connect switch) - every spot that used to be hardcoded purple regardless
- * of the chosen accent now follows it instead. [solid] is always the gradient's
- * own first stop, so the default (PINK) is pixel-identical to the old fixed
- * lavender it replaces.
- *
- * PINK is the original and stays the default, so nobody's app changes appearance
- * because this feature was added.
+ * MIDNIGHT is the original and stays the default, so nobody's app changes
+ * appearance because this feature was added.
  */
-enum class Accent(val stops: List<Color>, val solid: Color, val bright: Color, val deep: Color) {
-    PINK(
-        listOf(Color(0xFFA78BFA), Color(0xFFF472B6), Color(0xFF7DD3FC)),
-        solid = Color(0xFFA78BFA), bright = Color(0xFFC9B8FF), deep = Color(0xFF4A3B8C),
+enum class Palette(
+    val displayName: String,
+    val bg: Color,
+    val surface: Color,
+    val surfaceHigh: Color,
+    val surfaceOutline: Color,
+    val primary: Color,
+    val primaryDeep: Color,
+    val accent: Color,
+    val textPrimary: Color,
+    val textSecondary: Color,
+    val textMuted: Color,
+    // The 3-stop 135deg wash behind AnimatedBackground's canvas - see
+    // style.css's --backdrop for the same values on Windows.
+    val backdrop: List<Color>,
+) {
+    MIDNIGHT(
+        displayName = "Полночь",
+        bg = Color(0xFF0E0B18), surface = Color(0xFF171327), surfaceHigh = Color(0xFF211C36), surfaceOutline = Color(0xFF2E2748),
+        primary = Color(0xFF8B7CF6), primaryDeep = Color(0xFF6D5AE0), accent = Color(0xFF5B8DEF),
+        textPrimary = Color(0xFFF2EFFA), textSecondary = Color(0xFF9C93B8), textMuted = Color(0xFF6B6385),
+        backdrop = listOf(Color(0xFF1A162E), Color(0xFF0E0B18), Color(0xFF131325)),
     ),
-    GREEN(
-        listOf(Color(0xFF34D399), Color(0xFF4ADE80), Color(0xFFBEF264)),
-        solid = Color(0xFF34D399), bright = Color(0xFF6EE7B7), deep = Color(0xFF065F46),
+    EMERALD(
+        displayName = "Изумруд",
+        bg = Color(0xFF07140F), surface = Color(0xFF0F2019), surfaceHigh = Color(0xFF162C23), surfaceOutline = Color(0xFF224034),
+        primary = Color(0xFF34D399), primaryDeep = Color(0xFF10B981), accent = Color(0xFF4ECDC4),
+        textPrimary = Color(0xFFECFDF5), textSecondary = Color(0xFF8CAFA1), textMuted = Color(0xFF5E7D71),
+        backdrop = listOf(Color(0xFF0C271D), Color(0xFF07140F), Color(0xFF0B1F1A)),
     ),
-    BLUE(
-        listOf(Color(0xFF60A5FA), Color(0xFF38BDF8), Color(0xFF22D3EE)),
-        solid = Color(0xFF38BDF8), bright = Color(0xFF7DD3FC), deep = Color(0xFF075985),
+    SUNSET(
+        displayName = "Закат",
+        bg = Color(0xFF17090C), surface = Color(0xFF261216), surfaceHigh = Color(0xFF33191E), surfaceOutline = Color(0xFF48252C),
+        primary = Color(0xFFFF7A59), primaryDeep = Color(0xFFE85D3D), accent = Color(0xFFFFB86C),
+        textPrimary = Color(0xFFFFF1EC), textSecondary = Color(0xFFC0968D), textMuted = Color(0xFF8C6A63),
+        backdrop = listOf(Color(0xFF2E1414), Color(0xFF17090C), Color(0xFF251412)),
     ),
-    RED(
-        listOf(Color(0xFFEF4444), Color(0xFFF87171), Color(0xFFFB923C)),
-        solid = Color(0xFFF87171), bright = Color(0xFFFCA5A5), deep = Color(0xFF7F1D1D),
+    OCEAN(
+        displayName = "Океан",
+        bg = Color(0xFF061320), surface = Color(0xFF0C2033), surfaceHigh = Color(0xFF122C45), surfaceOutline = Color(0xFF1D3F5E),
+        primary = Color(0xFF38BDF8), primaryDeep = Color(0xFF0EA5E9), accent = Color(0xFF6EE7B7),
+        textPrimary = Color(0xFFECFAFF), textSecondary = Color(0xFF8AA9BF), textMuted = Color(0xFF5C7A88),
+        backdrop = listOf(Color(0xFF0B2436), Color(0xFF061320), Color(0xFF0C2029)),
+    ),
+    GRAPHITE(
+        displayName = "Графит",
+        bg = Color(0xFF0D0D0F), surface = Color(0xFF17171A), surfaceHigh = Color(0xFF212126), surfaceOutline = Color(0xFF2E2E35),
+        primary = Color(0xFFE4E4E7), primaryDeep = Color(0xFFA1A1AA), accent = Color(0xFF7DD3FC),
+        textPrimary = Color(0xFFF4F4F5), textSecondary = Color(0xFF9A9AA5), textMuted = Color(0xFF67676F),
+        backdrop = listOf(Color(0xFF222225), Color(0xFF0D0D0F), Color(0xFF14191D)),
+    ),
+    SAKURA(
+        displayName = "Сакура",
+        bg = Color(0xFF15090F), surface = Color(0xFF23121B), surfaceHigh = Color(0xFF301926), surfaceOutline = Color(0xFF452537),
+        primary = Color(0xFFFF8FB1), primaryDeep = Color(0xFFE05C8B), accent = Color(0xFFC084FC),
+        textPrimary = Color(0xFFFFEFF5), textSecondary = Color(0xFFC195A8), textMuted = Color(0xFF8E6A79),
+        backdrop = listOf(Color(0xFF2C161F), Color(0xFF15090F), Color(0xFF1F101D)),
     ),
 }
 
 /**
- * User-chosen look: light or dark, and which accent gradient.
+ * Eight animated-backdrop variants - see AnimatedBackground.kt. "ORBS" is the
+ * original/default.
+ */
+enum class BackgroundStyle(val label: String, val description: String) {
+    ORBS("Сферы", "Плавно плывущие пятна света"),
+    AURORA("Сияние", "Медленные цветные ленты"),
+    STARS("Звёзды", "Мерцающие точки на фоне"),
+    MESH("Сеть", "Точки, соединённые тонкими линиями"),
+    METEORS("Метеоры", "Редкие росчерки по диагонали"),
+    WAVES("Волны", "Слоистые волнистые линии"),
+    EMBERS("Искры", "Огоньки, поднимающиеся снизу вверх"),
+    PLAIN("Без анимации", "Только фоновый градиент"),
+}
+
+/**
+ * User-chosen look: which palette, and which animated backdrop.
  *
  * Both are Compose state, so every composable that reads a colour below
  * recomposes the moment either changes - the same mechanism [I18n] uses for the
@@ -57,90 +105,72 @@ enum class Accent(val stops: List<Color>, val solid: Color, val bright: Color, v
  */
 object Appearance {
     private const val PREFS = "phantom_settings"
-    private const val THEME_KEY = "theme"
-    private const val ACCENT_KEY = "accent"
+    private const val PALETTE_KEY = "palette"
+    private const val BACKGROUND_KEY = "background_style"
 
-    var theme by mutableStateOf(ThemeMode.DARK)
+    var palette by mutableStateOf(Palette.MIDNIGHT)
         private set
 
-    var accent by mutableStateOf(Accent.PINK)
+    var background by mutableStateOf(BackgroundStyle.ORBS)
         private set
-
-    val isDark: Boolean get() = theme == ThemeMode.DARK
 
     fun load(context: Context) {
         val p = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-        theme = if (p.getString(THEME_KEY, null) == "light") ThemeMode.LIGHT else ThemeMode.DARK
-        accent = runCatching { Accent.valueOf(p.getString(ACCENT_KEY, null) ?: "") }.getOrDefault(Accent.PINK)
+        palette = runCatching { Palette.valueOf(p.getString(PALETTE_KEY, null) ?: "") }.getOrDefault(Palette.MIDNIGHT)
+        background = runCatching { BackgroundStyle.valueOf(p.getString(BACKGROUND_KEY, null) ?: "") }.getOrDefault(BackgroundStyle.ORBS)
     }
 
-    fun setTheme(context: Context, mode: ThemeMode) {
-        theme = mode
+    fun setPalette(context: Context, value: Palette) {
+        palette = value
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
-            .putString(THEME_KEY, if (mode == ThemeMode.LIGHT) "light" else "dark")
+            .putString(PALETTE_KEY, value.name)
             .apply()
     }
 
-    fun setAccent(context: Context, value: Accent) {
-        accent = value
+    fun setBackground(context: Context, value: BackgroundStyle) {
+        background = value
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
-            .putString(ACCENT_KEY, value.name)
+            .putString(BACKGROUND_KEY, value.name)
             .apply()
     }
 }
 
-// The palette is exposed as computed properties rather than constants so that
-// reading any of them inside a composable subscribes it to Appearance.theme -
-// switching the theme repaints the app with no other plumbing. Call sites are
-// unchanged from when these were plain vals.
-private fun pick(dark: Long, light: Long) = Color(if (Appearance.isDark) dark else light)
+// Exposed as computed properties rather than constants so that reading any of
+// them inside a composable subscribes it to Appearance.palette - switching the
+// palette repaints the app with no other plumbing.
+val Bg: Color get() = Appearance.palette.bg
+val Surface: Color get() = Appearance.palette.surface
+val SurfaceHigh: Color get() = Appearance.palette.surfaceHigh
+val SurfaceOutline: Color get() = Appearance.palette.surfaceOutline
+val Primary: Color get() = Appearance.palette.primary
+val PrimaryDeep: Color get() = Appearance.palette.primaryDeep
+val Accent: Color get() = Appearance.palette.accent
+val TextPrimary: Color get() = Appearance.palette.textPrimary
+val TextSecondary: Color get() = Appearance.palette.textSecondary
+val TextMuted: Color get() = Appearance.palette.textMuted
+val Backdrop: List<Color> get() = Appearance.palette.backdrop
 
-val BgDeep: Color get() = pick(0xFF0A0A0A, 0xFFF4F4F4)
-val BgSurface: Color get() = pick(0xFF161616, 0xFFFFFFFF)
-val BgSurfaceAlt: Color get() = pick(0xFF1E1E1E, 0xFFEBEBEB)
-val StatusConnected: Color get() = pick(0xFF4ADE80, 0xFF15803D)
-val StatusError: Color get() = pick(0xFFF87171, 0xFFDC2626)
-val TextPrimary: Color get() = pick(0xFFF5F5F5, 0xFF18181B)
-val TextSecondary: Color get() = pick(0xFF9C9C9C, 0xFF5F5F5F)
+// Fixed regardless of palette - an error/success that changes colour with the
+// theme stops reading as an error/success.
+val Danger = Color(0xFFFF5C7A)
+val Success = Color(0xFF4ADE80)
 
-/** The accent gradient's stops - see [Accent]. */
-val AccentGradient: List<Color> get() = Appearance.accent.stops
-
-/** Single flat colour tracking the selected accent - see [Accent]. */
-val AccentSolid: Color get() = Appearance.accent.solid
-val AccentSolidBright: Color get() = Appearance.accent.bright
-val AccentSolidDeep: Color get() = Appearance.accent.deep
+/** [Primary] -> [Accent], 135deg - the "this is on" outline/glow. */
+val BrandGradient: List<Color> get() = listOf(Primary, Accent)
 
 @Composable
 fun PhantomTheme(content: @Composable () -> Unit) {
-    val scheme = if (Appearance.isDark) {
-        darkColorScheme(
-            primary = AccentSolid,
-            onPrimary = BgDeep,
-            secondary = AccentSolidDeep,
-            background = BgDeep,
-            onBackground = TextPrimary,
-            surface = BgSurface,
-            onSurface = TextPrimary,
-            surfaceVariant = BgSurfaceAlt,
-            onSurfaceVariant = TextSecondary,
-            error = StatusError,
-        )
-    } else {
-        lightColorScheme(
-            primary = AccentSolid,
-            // White on the accent colour, not the near-black background -
-            // dark-on-accent is unreadable at button contrast.
-            onPrimary = Color.White,
-            secondary = AccentSolidDeep,
-            background = BgDeep,
-            onBackground = TextPrimary,
-            surface = BgSurface,
-            onSurface = TextPrimary,
-            surfaceVariant = BgSurfaceAlt,
-            onSurfaceVariant = TextSecondary,
-            error = StatusError,
-        )
-    }
+    val scheme = darkColorScheme(
+        primary = Primary,
+        onPrimary = Color.White,
+        secondary = PrimaryDeep,
+        background = Bg,
+        onBackground = TextPrimary,
+        surface = Surface,
+        onSurface = TextPrimary,
+        surfaceVariant = SurfaceHigh,
+        onSurfaceVariant = TextSecondary,
+        error = Danger,
+    )
     MaterialTheme(colorScheme = scheme, content = content)
 }

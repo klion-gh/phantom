@@ -10,6 +10,9 @@ import './style.css';
 import 'flag-icons/css/flag-icons.min.css';
 import { Connect, Disconnect, Status, ReadLog, ListConfigs, AddConfig, UpdateConfig, DeleteConfig, SetConfigGeo, ClearConfigCountry, Ping, ListResources, AddResource, DeleteResource, ListExcludedApps, PickExcludedAppExe, AddExcludedApp, DeleteExcludedApp, ApplyUpdate, StartProxy, StopProxy, GetLanguage, SetLanguage, Version, LookupCountry, GetAppearance, SetAppearance } from '../wailsjs/go/main/App';
 import { t, getLang, setLang, applyStaticTranslations } from './i18n.js';
+import { BACKGROUNDS, initBackground, initMiniBackground } from './background.js';
+import { PALETTES } from './palettes.js';
+import { initScrollbars, relayoutScrollbars } from './scrollbar.js';
 
 const screens = {
   main: document.getElementById('screen-main'),
@@ -23,6 +26,16 @@ function showScreen(name) {
   for (const key in screens) {
     screens[key].classList.toggle('hidden', key !== name);
   }
+  // The palette grid's column count is computed off its own clientWidth
+  // (relayoutPaletteGrid), which is 0 while the settings screen is
+  // display:none - the ResizeObserver watching it picks this back up once
+  // visible, but recomputing here too means it's never even briefly wrong.
+  if (name === 'settings') relayoutPaletteGrid();
+  // Same reasoning as the palette grid above: a scrollbar's geometry is
+  // meaningless while its element is display:none, so recompute right as
+  // this screen becomes the visible one rather than relying solely on the
+  // ResizeObserver noticing the 0->real size jump.
+  relayoutScrollbars(screens[name]);
 }
 
 const configList = document.getElementById('config-list');
@@ -635,35 +648,109 @@ document.getElementById('btn-lang-en').addEventListener('click', async () => {
 
 // --- Appearance -------------------------------------------------------------
 //
-// Both values live as attributes on <html>; every colour and the accent gradient
-// are CSS variables keyed off them (see style.css), so switching either is one
-// attribute write and the whole window repaints. No re-render of any component
-// is involved, which is why this doesn't touch renderConfigList and friends the
-// way applyLanguage has to.
+// Both values live as attributes on <html>; every colour (see style.css's
+// [data-palette=...] blocks) and the animated backdrop (background.js, keyed
+// off data-background) are driven straight off them, so switching either is
+// one attribute write - no re-render of any component is involved, which is
+// why this doesn't touch renderConfigList and friends the way applyLanguage
+// has to. Always dark: this design has no light variant to switch to.
 
-let appearance = { theme: 'dark', accent: 'pink' };
+let appearance = { palette: 'midnight', background: 'orbs' };
+
+const paletteGridEl = document.getElementById('palette-grid');
+const backgroundOptionsEl = document.getElementById('background-options');
+
+// Each card is drawn in the colours of the palette it *represents*, not the
+// active one - an honest "what would this look like" preview - via CSS
+// custom properties scoped to that one card, referenced by the .palette-card
+// rules in style.css.
+function renderPaletteGrid() {
+  paletteGridEl.innerHTML = PALETTES.map((p) => `
+    <button class="palette-card" data-palette="${p.id}" style="
+      --p-surface:${p.surface}; --p-outline:${p.surfaceOutline}; --p-primary:${p.primary};
+      --p-accent:${p.accent}; --p-surface-high:${p.surfaceHigh}; --p-text-primary:${p.textPrimary};
+    ">
+      <div class="palette-card-top">
+        <div class="palette-card-dots">
+          <span class="palette-card-dot" style="background:${p.primary}"></span>
+          <span class="palette-card-dot" style="background:${p.accent}"></span>
+          <span class="palette-card-dot" style="background:${p.surfaceHigh}"></span>
+        </div>
+        <div class="palette-card-check">&#10003;</div>
+      </div>
+      <div class="palette-card-spacer"></div>
+      <div class="palette-card-name">${escapeHtml(p.name)}</div>
+      <div class="palette-card-bar"></div>
+    </button>
+  `).join('');
+  for (const card of paletteGridEl.querySelectorAll('.palette-card')) {
+    card.addEventListener('click', () => setAppearance({ palette: card.dataset.palette }));
+  }
+}
+
+// Flutter's SliverGridDelegateWithMaxCrossAxisExtent(maxCrossAxisExtent: 200)
+// picks columns = ceil(width / 200); CSS's own auto-fill rounds down instead,
+// which can land one column short at some widths - computed here to match
+// exactly, and re-computed on resize since this is a resizable desktop window.
+function relayoutPaletteGrid() {
+  const width = paletteGridEl.clientWidth;
+  const columns = Math.max(1, Math.ceil(width / 200));
+  paletteGridEl.style.gridTemplateColumns = `repeat(${columns}, 1fr)`;
+}
+if (window.ResizeObserver) {
+  new ResizeObserver(relayoutPaletteGrid).observe(paletteGridEl);
+} else {
+  window.addEventListener('resize', relayoutPaletteGrid);
+}
+
+// Each row gets its own live canvas thumbnail, actually running that
+// variant's animation (not a static image) - initMiniBackground drives it
+// independently of whichever background is actually active.
+function renderBackgroundList() {
+  backgroundOptionsEl.innerHTML = BACKGROUNDS.map((bg) => `
+    <button class="background-row" data-background="${bg.id}">
+      <canvas class="background-thumb" data-background="${bg.id}"></canvas>
+      <div class="background-row-text">
+        <div class="background-row-name">${escapeHtml(bg.name)}</div>
+        <div class="background-row-desc">${escapeHtml(bg.desc)}</div>
+      </div>
+      <div class="background-row-icon">&#10003;</div>
+    </button>
+  `).join('');
+  for (const row of backgroundOptionsEl.querySelectorAll('.background-row')) {
+    row.addEventListener('click', () => setAppearance({ background: row.dataset.background }));
+    const canvas = row.querySelector('.background-thumb');
+    initMiniBackground(canvas, row.dataset.background);
+  }
+}
 
 function applyAppearance() {
-  document.documentElement.setAttribute('data-theme', appearance.theme);
-  document.documentElement.setAttribute('data-accent', appearance.accent);
-  document.getElementById('btn-theme-dark').classList.toggle('active', appearance.theme === 'dark');
-  document.getElementById('btn-theme-light').classList.toggle('active', appearance.theme === 'light');
-  for (const swatch of document.querySelectorAll('.accent-swatch')) {
-    swatch.classList.toggle('active', swatch.dataset.accent === appearance.accent);
+  document.documentElement.setAttribute('data-palette', appearance.palette);
+  document.documentElement.setAttribute('data-background', appearance.background);
+  for (const card of document.querySelectorAll('.palette-card')) {
+    card.classList.toggle('active', card.dataset.palette === appearance.palette);
+  }
+  for (const row of document.querySelectorAll('.background-row')) {
+    row.classList.toggle('active', row.dataset.background === appearance.background);
   }
 }
 
 async function setAppearance(patch) {
   appearance = { ...appearance, ...patch };
   applyAppearance();
-  await SetAppearance(appearance.theme, appearance.accent);
+  await SetAppearance(appearance.palette, appearance.background);
 }
 
-document.getElementById('btn-theme-dark').addEventListener('click', () => setAppearance({ theme: 'dark' }));
-document.getElementById('btn-theme-light').addEventListener('click', () => setAppearance({ theme: 'light' }));
-for (const swatch of document.querySelectorAll('.accent-swatch')) {
-  swatch.addEventListener('click', () => setAppearance({ accent: swatch.dataset.accent }));
-}
+renderPaletteGrid();
+relayoutPaletteGrid();
+renderBackgroundList();
+initBackground(document.getElementById('bg-canvas'));
+
+// The scrollable elements (.content/.config-list/.resource-list) exist in
+// the static markup from the start, even while empty or hidden behind
+// another screen - wrapping them now is safe; each fills in over time via
+// its own MutationObserver as configs/resources/settings actually render.
+initScrollbars();
 
 document.getElementById('btn-view-log').addEventListener('click', async () => {
   logText.textContent = await ReadLog();
@@ -771,8 +858,8 @@ setInterval(refreshStatus, 4000);
   } catch (e) {
     // default (ru) stays if the Go call fails
   }
-  // Before the first paint, so the window doesn't flash the default theme on its
-  // way to the chosen one. Defaults (dark/pink) stay if the Go call fails.
+  // Before the first paint, so the window doesn't flash the default palette on
+  // its way to the chosen one. Defaults (midnight/orbs) stay if the Go call fails.
   try {
     appearance = JSON.parse(await GetAppearance());
   } catch (e) {

@@ -114,12 +114,14 @@ fun ResourceCard(
         favicon = fetchFaviconBitmap(resource.url)
     }
 
+    val shape = RoundedCornerShape(18.dp)
     Card(
-        colors = CardDefaults.cardColors(containerColor = BgSurface),
-        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(containerColor = Surface),
+        shape = shape,
+        border = androidx.compose.foundation.BorderStroke(1.dp, SurfaceOutline.copy(alpha = 0.6f)),
         modifier = Modifier.fillMaxWidth(),
     ) {
-        Box(modifier = Modifier.fillMaxWidth().padding(14.dp)) {
+        Box(modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 12.dp)) {
             Row(
                 modifier = Modifier.padding(end = 24.dp),
                 verticalAlignment = Alignment.CenterVertically,
@@ -146,8 +148,8 @@ fun ResourceCard(
                     }
                     val statusColor = when {
                         result == null -> TextSecondary
-                        result?.reachable == true -> StatusConnected
-                        else -> StatusError
+                        result?.reachable == true -> Success
+                        else -> Danger
                     }
                     Text(text = statusText, color = statusColor, fontSize = 13.sp)
                 }

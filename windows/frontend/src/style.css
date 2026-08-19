@@ -1,56 +1,139 @@
-/* Dark is the default and stays the default: nobody's app should change
-   appearance just because a theme switch was added. The light palette applies
-   only once html[data-theme="light"] is set - see applyAppearance in main.js. */
+/* Design tokens: six interchangeable dark palettes, switched at runtime via
+   data-palette on <html> (see applyAppearance in main.js) - the palette only
+   ever changes colour. Sizing, radii, spacing and type stay identical across
+   all six so the product still feels like one product. No light theme: this
+   system is built for a dark, colourful-not-neutral background and breaks if
+   inverted. --danger/--success are fixed on purpose - an error that changes
+   colour with the palette stops reading as an error. */
+:root,
+[data-palette="midnight"] {
+    --bg: #0E0B18;
+    --surface: #171327;
+    --surface-high: #211C36;
+    --surface-outline: #2E2748;
+    --primary: #8B7CF6;
+    --primary-deep: #6D5AE0;
+    --accent: #5B8DEF;
+    --text-primary: #F2EFFA;
+    --text-secondary: #9C93B8;
+    --text-muted: #6B6385;
+    --backdrop: linear-gradient(135deg, #1A162E 0%, #0E0B18 50%, #131325 100%);
+}
+
+[data-palette="emerald"] {
+    --bg: #07140F;
+    --surface: #0F2019;
+    --surface-high: #162C23;
+    --surface-outline: #224034;
+    --primary: #34D399;
+    --primary-deep: #10B981;
+    --accent: #4ECDC4;
+    --text-primary: #ECFDF5;
+    --text-secondary: #8CAFA1;
+    --text-muted: #5E7D71;
+    --backdrop: linear-gradient(135deg, #0C271D 0%, #07140F 50%, #0B1F1A 100%);
+}
+
+[data-palette="sunset"] {
+    --bg: #17090C;
+    --surface: #261216;
+    --surface-high: #33191E;
+    --surface-outline: #48252C;
+    --primary: #FF7A59;
+    --primary-deep: #E85D3D;
+    --accent: #FFB86C;
+    --text-primary: #FFF1EC;
+    --text-secondary: #C0968D;
+    --text-muted: #8C6A63;
+    --backdrop: linear-gradient(135deg, #2E1414 0%, #17090C 50%, #251412 100%);
+}
+
+[data-palette="ocean"] {
+    --bg: #061320;
+    --surface: #0C2033;
+    --surface-high: #122C45;
+    --surface-outline: #1D3F5E;
+    --primary: #38BDF8;
+    --primary-deep: #0EA5E9;
+    --accent: #6EE7B7;
+    --text-primary: #ECFAFF;
+    --text-secondary: #8AA9BF;
+    --text-muted: #5C7A88;
+    --backdrop: linear-gradient(135deg, #0B2436 0%, #061320 50%, #0C2029 100%);
+}
+
+[data-palette="graphite"] {
+    --bg: #0D0D0F;
+    --surface: #17171A;
+    --surface-high: #212126;
+    --surface-outline: #2E2E35;
+    --primary: #E4E4E7;
+    --primary-deep: #A1A1AA;
+    --accent: #7DD3FC;
+    --text-primary: #F4F4F5;
+    --text-secondary: #9A9AA5;
+    --text-muted: #67676F;
+    --backdrop: linear-gradient(135deg, #222225 0%, #0D0D0F 50%, #14191D 100%);
+}
+
+[data-palette="sakura"] {
+    --bg: #15090F;
+    --surface: #23121B;
+    --surface-high: #301926;
+    --surface-outline: #452537;
+    --primary: #FF8FB1;
+    --primary-deep: #E05C8B;
+    --accent: #C084FC;
+    --text-primary: #FFEFF5;
+    --text-secondary: #C195A8;
+    --text-muted: #8E6A79;
+    --backdrop: linear-gradient(135deg, #2C161F 0%, #15090F 50%, #1F101D 100%);
+}
+
 :root {
-    --bg-deep: #0A0A0A;
-    --bg-surface: #161616;
-    --bg-surface-alt: #1E1E1E;
-    --status-connected: #4ADE80;
-    --status-error: #F87171;
-    --text-primary: #F5F5F5;
-    --text-secondary: #9C9C9C;
-
-    /* The "this is on" gradient: a connected tile's outline and a running proxy
-       toggle. Overridden per accent below; pink is the original. --accent-solid
-       and --accent-solid-bright are a single flat colour tracking the same
-       selection, for anywhere the full multi-stop gradient doesn't fit (buttons,
-       focus rings, the connect button's glow) - every spot that used to be
-       hardcoded purple now follows whichever accent is chosen. */
-    --accent-gradient: linear-gradient(120deg, #A78BFA, #F472B6, #7DD3FC);
-    --accent-solid: #A78BFA;
-    --accent-solid-bright: #C9B8FF;
-    --accent-glow: rgba(167, 139, 250, 0.35);
-    --accent-glow-soft: rgba(167, 139, 250, 0.15);
+    --danger: #FF5C7A;
+    --success: #4ADE80;
+    --brand-gradient: linear-gradient(135deg, var(--primary), var(--accent));
+    /* Depth is layered surfaces + a 1px outline, not drop-shadow - the one
+       exception is a soft colour glow around an active/accent element, which
+       these two derive from whatever --primary the current palette sets. */
+    --primary-glow: color-mix(in srgb, var(--primary) 35%, transparent);
+    --primary-glow-soft: color-mix(in srgb, var(--primary) 15%, transparent);
+    --surface-outline-60: color-mix(in srgb, var(--surface-outline) 60%, transparent);
 }
-
-:root[data-theme="light"] {
-    --bg-deep: #F4F4F4;
-    --bg-surface: #FFFFFF;
-    --bg-surface-alt: #EBEBEB;
-    --status-connected: #15803D;
-    --status-error: #DC2626;
-    --text-primary: #18181B;
-    --text-secondary: #5F5F5F;
-}
-
-:root[data-accent="pink"]  { --accent-gradient: linear-gradient(120deg, #A78BFA, #F472B6, #7DD3FC); --accent-solid: #A78BFA; --accent-solid-bright: #C9B8FF; --accent-glow: rgba(167, 139, 250, 0.35); --accent-glow-soft: rgba(167, 139, 250, 0.15); }
-:root[data-accent="green"] { --accent-gradient: linear-gradient(120deg, #34D399, #4ADE80, #BEF264); --accent-solid: #34D399; --accent-solid-bright: #6EE7B7; --accent-glow: rgba(52, 211, 153, 0.35); --accent-glow-soft: rgba(52, 211, 153, 0.15); }
-:root[data-accent="blue"]  { --accent-gradient: linear-gradient(120deg, #60A5FA, #38BDF8, #22D3EE); --accent-solid: #38BDF8; --accent-solid-bright: #7DD3FC; --accent-glow: rgba(56, 189, 248, 0.35); --accent-glow-soft: rgba(56, 189, 248, 0.15); }
-:root[data-accent="red"]   { --accent-gradient: linear-gradient(120deg, #EF4444, #F87171, #FB923C); --accent-solid: #F87171; --accent-solid-bright: #FCA5A5; --accent-glow: rgba(248, 113, 113, 0.35); --accent-glow-soft: rgba(248, 113, 113, 0.15); }
 
 * { box-sizing: border-box; }
 
 html, body {
     margin: 0;
     height: 100%;
-    background: var(--bg-deep);
+    background: var(--bg);
     color: var(--text-primary);
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    font-family: Roboto, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
     -webkit-user-select: none;
     user-select: none;
 }
 
-#app { height: 100vh; position: relative; }
+/* --- Animated backdrop: a gradient wash plus a slow, seamless-looped canvas
+   (see background.js) sitting behind every screen. Both are position:fixed
+   siblings of #app, not #app's background, so screen transitions never
+   restart or clip them. --- */
+.backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 0;
+    background: var(--backdrop);
+}
+#bg-canvas {
+    position: fixed;
+    inset: 0;
+    z-index: 0;
+    width: 100%;
+    height: 100%;
+    pointer-events: none;
+}
+
+#app { height: 100vh; position: relative; z-index: 1; }
 
 .screen {
     height: 100%;
@@ -60,23 +143,47 @@ html, body {
 
 .hidden { display: none !important; }
 
+/* --- App header: fully transparent, no shadow or backing plate - the
+   backdrop/canvas show straight through it. --- */
 .header {
     display: flex;
     align-items: center;
-    padding: 20px 24px;
+    padding: 12px 12px 16px 20px;
     gap: 10px;
 }
 
-.emblem {
+/* The logo sits on its own radial glow rather than a plate/tile background -
+   the glow *is* the backing. */
+.emblem-wrap {
+    position: relative;
     width: 32px;
     height: 32px;
-    border-radius: 8px;
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+.emblem-wrap::before {
+    content: "";
+    position: absolute;
+    inset: -10px;
+    border-radius: 50%;
+    background: radial-gradient(circle, color-mix(in srgb, var(--primary) 34%, transparent) 0%, transparent 70%);
+    z-index: 0;
+}
+.emblem {
+    position: relative;
+    z-index: 1;
+    width: 94%;
+    height: 94%;
     object-fit: cover;
+    border-radius: 8px;
 }
 
 .title {
-    font-size: 19px;
+    font-size: 20px;
     font-weight: 600;
+    letter-spacing: -0.2px;
 }
 
 .spacer { flex: 1; }
@@ -88,39 +195,40 @@ html, body {
     font-size: 20px;
     cursor: pointer;
     padding: 6px 10px;
-    border-radius: 8px;
+    border-radius: 16px;
     line-height: 1;
 }
-.icon-btn:hover { background: var(--bg-surface); color: var(--text-primary); }
+.icon-btn:hover { background: var(--surface-high); color: var(--text-primary); }
 
 .update-btn {
-    color: var(--status-connected);
+    color: var(--success);
 }
-.update-btn:hover { background: rgba(74, 222, 128, 0.15); color: var(--status-connected); }
+.update-btn:hover { background: color-mix(in srgb, var(--success) 15%, transparent); color: var(--success); }
 
 /* --- Update download progress, shown under the header/logo while an update
    is downloading (see 'update:progress' in main.js) --- */
 .update-progress {
     height: 3px;
-    margin: 0 24px 12px;
+    margin: 0 20px 12px;
     border-radius: 2px;
-    background: var(--bg-surface-alt);
+    background: var(--surface-outline);
     overflow: hidden;
 }
 .update-progress-bar {
     height: 100%;
     width: 0%;
-    background: var(--accent-gradient);
+    background: var(--brand-gradient);
     transition: width 0.2s ease;
 }
 
-/* --- Update banner --- */
+/* --- Update banner (snackbar-like: floating, not pinned to an edge) --- */
 .update-banner {
-    margin: 0 24px 16px;
+    margin: 0 20px 16px;
     padding: 10px 14px;
-    border-radius: 10px;
-    background: var(--bg-surface-alt);
-    color: var(--accent-solid-bright);
+    border-radius: 14px;
+    background: var(--surface-high);
+    border: 1px solid var(--surface-outline);
+    color: var(--primary);
     font-size: 13px;
 }
 
@@ -130,7 +238,7 @@ html, body {
     flex: 1;
     display: flex;
     min-height: 0;
-    padding: 0 24px 20px;
+    padding: 0 20px 20px;
     gap: 20px;
 }
 
@@ -143,7 +251,7 @@ html, body {
 
 .main-col-resources {
     flex: 0 0 260px;
-    border-left: 1px solid rgba(156, 156, 156, 0.15);
+    border-left: 1px solid var(--surface-outline);
     padding-left: 20px;
 }
 
@@ -155,9 +263,8 @@ html, body {
 .panel-title {
     font-size: 13px;
     font-weight: 600;
-    color: var(--text-secondary);
-    text-transform: uppercase;
-    letter-spacing: 0.03em;
+    letter-spacing: 0.8px;
+    color: var(--text-muted);
     flex: 1;
 }
 
@@ -167,27 +274,31 @@ html, body {
     overflow: auto;
     display: flex;
     flex-direction: column;
-    gap: 14px;
-    padding: 0 0 20px;
+    gap: 8px;
+    /* Right padding is the scrollbar's reserved gutter (10px max thumb width
+       + 4px margin) - never less than 14px, or the thumb overlaps a tile's
+       own edge under hover/drag (see scrollbar.js/.scrollbar-thumb). */
+    padding: 0 14px 20px 0;
 }
 
 .config-card {
     display: flex;
     align-items: center;
     gap: 12px;
-    background: var(--bg-surface);
-    border-radius: 20px;
-    padding: 18px 20px;
+    background: var(--surface);
+    border-radius: 18px;
+    padding: 12px 14px;
     cursor: default;
-    border: 2px solid transparent;
+    border: 1px solid var(--surface-outline-60);
     transition: border-color 0.25s ease;
 }
 
 /* Gradient outline for whichever tile currently has the active tunnel. */
 .config-card.connected {
+    border-color: transparent;
     background:
-        linear-gradient(var(--bg-surface), var(--bg-surface)) padding-box,
-        var(--accent-gradient) border-box;
+        linear-gradient(var(--surface), var(--surface)) padding-box,
+        var(--brand-gradient) border-box;
 }
 
 .config-info { flex: 1; min-width: 0; }
@@ -201,7 +312,7 @@ html, body {
 }
 
 .config-ip {
-    font-size: 12px;
+    font-size: 13px;
     color: var(--text-secondary);
     font-family: "Consolas", "Cascadia Code", monospace;
     margin-top: 3px;
@@ -211,9 +322,9 @@ html, body {
     display: flex;
     align-items: center;
     gap: 6px;
-    font-size: 12px;
-    color: var(--text-secondary);
-    margin-top: 8px;
+    font-size: 11.5px;
+    color: var(--text-muted);
+    margin-top: 6px;
 }
 
 /* .fi (flag-icons) sizes itself off font-size (1.333em wide x 1em tall) -
@@ -233,7 +344,7 @@ html, body {
     font-size: 16px;
     cursor: pointer;
     padding: 6px 8px;
-    border-radius: 8px;
+    border-radius: 16px;
     align-self: center;
 }
 
@@ -243,24 +354,24 @@ html, body {
 .proxy-toggle {
     flex-shrink: 0;
     align-self: center;
-    background: transparent;
+    background: var(--surface-high);
     color: var(--text-secondary);
     font-size: 10px;
     font-weight: 700;
     letter-spacing: 0.06em;
     cursor: pointer;
     padding: 6px 10px;
-    border-radius: 8px;
-    border: 2px solid rgba(156, 156, 156, 0.35);
+    border-radius: 16px;
+    border: 1px solid var(--surface-outline);
     transition: border-color 0.25s ease, color 0.25s ease;
 }
 .proxy-toggle:hover { color: var(--text-primary); }
 .proxy-toggle.active {
     color: var(--text-primary);
-    border: 2px solid transparent;
+    border: 1px solid transparent;
     background:
-        linear-gradient(var(--bg-surface), var(--bg-surface)) padding-box,
-        var(--accent-gradient) border-box;
+        linear-gradient(var(--surface-high), var(--surface-high)) padding-box,
+        var(--brand-gradient) border-box;
 }
 
 .proxy-block {
@@ -278,17 +389,19 @@ html, body {
     width: 56px;
     background: transparent;
     border: none;
-    border-bottom: 1px solid rgba(156, 156, 156, 0.35);
+    border-bottom: 1px solid var(--surface-outline);
     color: var(--text-secondary);
     font-size: 11px;
     text-align: center;
     padding: 2px 0;
 }
-.proxy-port-input:focus { outline: none; border-bottom-color: var(--accent-solid); color: var(--text-primary); }
+.proxy-port-input:focus { outline: none; border-bottom-color: var(--primary); color: var(--text-primary); }
 .proxy-port-input:disabled { border-bottom-color: transparent; color: var(--text-secondary); }
 
-.config-edit-btn:hover { background: var(--bg-surface-alt); color: var(--text-primary); }
+.config-edit-btn:hover { background: var(--surface-high); color: var(--text-primary); }
 
+/* --- Empty state: a ringed circle, an icon, a title and a hint - centred
+   with room to breathe either side. --- */
 .empty-state {
     flex: 1;
     display: flex;
@@ -297,14 +410,40 @@ html, body {
     justify-content: center;
     gap: 8px;
     text-align: center;
+    padding: 0 48px;
 }
-.empty-title { font-size: 16px; font-weight: 500; }
-.empty-hint { font-size: 13px; color: var(--text-secondary); }
+.empty-state-circle {
+    width: 96px;
+    height: 96px;
+    border-radius: 50%;
+    background: var(--surface);
+    border: 1px solid var(--surface-outline);
+    margin-bottom: 24px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+.empty-icon {
+    width: 42px;
+    height: 42px;
+    fill: none;
+    stroke: var(--text-muted);
+    stroke-width: 1.6;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+}
+.empty-title { font-size: 20px; font-weight: 600; }
+.empty-hint { font-size: 14.5px; color: var(--text-secondary); line-height: 1.5; margin-top: 8px; }
 
+/* --- Error banner --- */
 .error-text {
-    font-size: 13px;
-    color: var(--status-error);
-    padding-bottom: 16px;
+    font-size: 13.5px;
+    color: var(--danger);
+    background: color-mix(in srgb, var(--danger) 12%, transparent);
+    border: 1px solid color-mix(in srgb, var(--danger) 30%, transparent);
+    border-radius: 12px;
+    padding: 14px 10px;
+    margin-bottom: 16px;
 }
 
 /* --- Circular connect button, mirrors android ConnectButton.kt --- */
@@ -319,21 +458,21 @@ html, body {
     display: flex;
     align-items: center;
     justify-content: center;
-    background: var(--bg-surface-alt);
+    background: var(--surface-high);
     transition: box-shadow 0.25s ease, background 0.25s ease;
 }
 
 .power-btn.idle,
 .power-btn.error {
-    background: var(--bg-surface-alt);
+    background: var(--surface-high);
 }
-.power-btn.error { box-shadow: 0 0 0 2px var(--status-error) inset; }
+.power-btn.error { box-shadow: 0 0 0 2px var(--danger) inset; }
 
 .power-btn.connecting { cursor: default; }
 
 .power-btn.connected {
-    background: var(--accent-gradient);
-    box-shadow: 0 0 0 6px var(--accent-glow-soft), 0 0 16px 2px var(--accent-glow);
+    background: var(--brand-gradient);
+    box-shadow: 0 0 0 6px var(--primary-glow-soft), 0 0 16px 2px var(--primary-glow);
 }
 
 .power-icon {
@@ -344,8 +483,8 @@ html, body {
     stroke-width: 2.4;
     z-index: 1;
 }
-.power-btn.connected .power-icon { stroke: var(--bg-deep); }
-.power-btn.error .power-icon { stroke: var(--status-error); }
+.power-btn.connected .power-icon { stroke: var(--bg); }
+.power-btn.error .power-icon { stroke: var(--danger); }
 
 .spinner {
     display: none;
@@ -357,7 +496,7 @@ html, body {
 .power-btn.connecting .spinner { display: block; }
 .power-btn.connecting .power-icon { stroke: var(--text-secondary); opacity: 0.5; }
 .spinner circle {
-    stroke: var(--accent-solid-bright);
+    stroke: var(--primary);
     stroke-linecap: round;
     stroke-dasharray: 110;
     stroke-dashoffset: 60;
@@ -372,18 +511,22 @@ html, body {
     overflow: auto;
     display: flex;
     flex-direction: column;
-    gap: 10px;
+    gap: 8px;
+    /* See .config-list's own comment - same reserved-gutter reasoning,
+       shared by the excluded-app list on the split-tunnel screen too. */
+    padding: 0 14px 0 0;
 }
 
 .resource-card {
     position: relative;
-    background: var(--bg-surface);
-    border-radius: 14px;
+    background: var(--surface);
+    border: 1px solid var(--surface-outline-60);
+    border-radius: 18px;
     padding: 12px 14px;
 }
 
 .resource-name {
-    font-size: 14px;
+    font-size: 15px;
     font-weight: 600;
     padding-right: 20px;
     white-space: nowrap;
@@ -392,12 +535,12 @@ html, body {
 }
 
 .resource-status {
-    font-size: 12px;
+    font-size: 13px;
     color: var(--text-secondary);
     margin-top: 4px;
 }
-.resource-status.reachable { color: var(--status-connected); }
-.resource-status.unreachable { color: var(--status-error); }
+.resource-status.reachable { color: var(--success); }
+.resource-status.unreachable { color: var(--danger); }
 
 .resource-remove-btn {
     position: absolute;
@@ -410,24 +553,56 @@ html, body {
     line-height: 1;
     cursor: pointer;
     padding: 4px 6px;
-    border-radius: 6px;
+    border-radius: 16px;
 }
-.resource-remove-btn:hover { background: var(--bg-surface-alt); color: var(--status-error); }
+.resource-remove-btn:hover { background: var(--surface-high); color: var(--danger); }
 
 /* --- Config / Settings / Log screens --- */
+/* Base scrolling container for Config/Settings/Log/Split-tunnel - full
+   window width. Settings/Log/Split-tunnel are "list" screens (per the
+   scrollbar spec's own screen-type rules) and stay this width; only
+   Config-edit centers a form *inside* this, via .form-inner below - a form's
+   scrollbar belongs at the window's edge, not the form's own. */
 .content {
     flex: 1;
     display: flex;
     flex-direction: column;
-    gap: 14px;
+    gap: 28px;
     padding: 0 20px 20px;
     overflow: auto;
+    width: 100%;
 }
 
+/* Settings screen specifically: 20/8/20/32 (left/top/right/bottom). */
+.settings-content {
+    padding-top: 8px;
+    padding-bottom: 32px;
+}
+
+/* Config-edit's actual fields, centered as a 400px form inside the full-width
+   .content scroller above - the scrollbar still lands at the window's right
+   edge, not this column's. */
+.form-inner {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 28px;
+    max-width: 400px;
+    width: 100%;
+    margin: 0 auto;
+}
+/* The 14px title->content gap inside each section (see .settings-section)
+   already comes from the flex gap below; this is the *extra* space between
+   the Палитра and Фон sections specifically, on top of the page's own 28px
+   rhythm, to land on exactly 32px between them. */
+.settings-section + .settings-section { margin-top: 4px; }
+
 .settings-hint {
-    font-size: 12px;
+    font-size: 13px;
     color: var(--text-secondary);
-    margin-top: -6px;
+    line-height: 1.5;
+    margin-top: -20px;
 }
 
 .excluded-app-path {
@@ -447,13 +622,13 @@ html, body {
 }
 
 textarea, .log-text {
-    background: var(--bg-surface);
-    border: 1px solid rgba(156, 156, 156, 0.4);
-    border-radius: 8px;
+    background: var(--surface-high);
+    border: 1px solid var(--surface-outline);
+    border-radius: 16px;
     color: var(--text-primary);
     font-family: "Consolas", "Cascadia Code", monospace;
     font-size: 13px;
-    padding: 12px;
+    padding: 18px;
 }
 
 textarea {
@@ -461,20 +636,20 @@ textarea {
     min-height: 220px;
     resize: none;
 }
-textarea:focus { outline: none; border-color: var(--accent-solid); }
-textarea::placeholder { color: var(--text-secondary); }
+textarea:focus { outline: none; border-color: var(--primary); border-width: 1.6px; }
+textarea::placeholder { color: var(--text-muted); }
 
 .text-input {
-    background: var(--bg-surface);
-    border: 1px solid rgba(156, 156, 156, 0.4);
-    border-radius: 8px;
+    background: var(--surface-high);
+    border: 1px solid var(--surface-outline);
+    border-radius: 16px;
     color: var(--text-primary);
-    font-size: 13px;
-    padding: 10px 12px;
+    font-size: 15px;
+    padding: 18px;
     font-family: inherit;
 }
-.text-input:focus { outline: none; border-color: var(--accent-solid); }
-.text-input::placeholder { color: var(--text-secondary); }
+.text-input:focus { outline: none; border-color: var(--primary); border-width: 1.6px; }
+.text-input::placeholder { color: var(--text-muted); }
 
 .log-text {
     flex: 1;
@@ -486,32 +661,49 @@ textarea::placeholder { color: var(--text-secondary); }
 }
 
 .row { display: flex; gap: 10px; justify-content: space-between; }
+.row .btn { flex: 1; }
 
+/* --- Buttons: two families, "primary" (filled, dominant action) and "text"
+   (no fill/border, quieter). No third bordered/outline variant - a
+   destructive text button just turns danger-coloured instead of gaining a
+   border. --- */
 .btn {
-    font-size: 14px;
+    font-size: 16px;
     font-weight: 600;
-    padding: 12px 18px;
-    border-radius: 24px;
+    height: 54px;
+    padding: 0 18px;
+    border-radius: 16px;
     border: none;
     cursor: pointer;
 }
 .btn-primary {
-    background: var(--accent-solid);
-    color: var(--bg-deep);
+    background: var(--primary);
+    color: #FFFFFF;
 }
-.btn-primary:hover { background: var(--accent-solid-bright); }
+.btn-primary:hover { background: var(--primary-deep); }
+.btn-primary:disabled {
+    background: var(--surface-outline);
+    color: var(--text-muted);
+    cursor: default;
+}
 .btn-outline {
     background: transparent;
-    color: var(--accent-solid);
-    border: 1px solid var(--accent-solid);
+    color: var(--text-secondary);
+    font-size: 14px;
+    font-weight: 500;
+    height: auto;
+    padding: 10px 12px;
 }
-.btn-outline:hover { background: var(--accent-glow-soft); }
+.btn-outline:hover { color: var(--text-primary); }
 .btn-danger {
     background: transparent;
-    color: var(--status-error);
-    border: 1px solid var(--status-error);
+    color: var(--danger);
+    font-size: 14px;
+    font-weight: 500;
+    height: auto;
+    padding: 10px 12px;
 }
-.btn-danger:hover { background: rgba(248, 113, 113, 0.1); }
+.btn-danger:hover { background: color-mix(in srgb, var(--danger) 10%, transparent); }
 
 /* --- Delete confirmation overlay --- */
 .overlay {
@@ -519,7 +711,7 @@ textarea::placeholder { color: var(--text-secondary); }
     inset: 0;
     z-index: 10;
     /* Opaque enough to fully obscure a connected config tile's glow behind it
-       (box-shadow: 0 0 16px var(--accent-glow) on .power-btn.connected) - at
+       (box-shadow: 0 0 16px var(--primary-glow) on .power-btn.connected) - at
        0.5 alpha that glow was still visibly showing through the backdrop. */
     background: rgba(4, 4, 10, 0.92);
     display: flex;
@@ -528,18 +720,19 @@ textarea::placeholder { color: var(--text-secondary); }
     padding: 24px;
 }
 .dialog {
-    background: var(--bg-surface);
-    border-radius: 16px;
+    background: var(--surface-high);
+    border: 1px solid var(--surface-outline);
+    border-radius: 24px;
     padding: 20px;
     max-width: 320px;
     display: flex;
     flex-direction: column;
     gap: 10px;
 }
-.dialog-title { font-size: 16px; font-weight: 600; }
-.dialog-text { font-size: 13px; color: var(--text-secondary); }
+.dialog-title { font-size: 19px; font-weight: 600; }
+.dialog-text { font-size: 15px; color: var(--text-secondary); line-height: 1.5; }
 .dialog-row { display: flex; gap: 10px; justify-content: flex-end; margin-top: 6px; }
-.dialog-row .btn { padding: 10px 16px; }
+.dialog-row .btn { height: 44px; padding: 0 16px; flex: initial; }
 
 /* --- Language selector (Settings screen) --- */
 .lang-row {
@@ -547,18 +740,11 @@ textarea::placeholder { color: var(--text-secondary); }
     align-items: center;
     justify-content: space-between;
     gap: 12px;
-    margin-bottom: 4px;
 }
-.lang-label { color: var(--text-secondary); font-size: 14px; }
+.lang-label { color: var(--text-muted); font-size: 13px; font-weight: 600; letter-spacing: 0.8px; }
 .lang-options { display: flex; gap: 8px; }
-.lang-btn { padding: 8px 14px; }
-.lang-btn.active {
-    color: var(--text-primary);
-    border: 1px solid transparent;
-    background:
-        linear-gradient(var(--bg-surface), var(--bg-surface)) padding-box,
-        var(--accent-gradient) border-box;
-}
+.lang-btn { height: 36px; padding: 0 14px; font-size: 14px; font-weight: 500; color: var(--text-secondary); }
+.lang-btn.active { color: var(--primary); }
 
 /* Version line at the bottom of the settings panel. Deliberately quiet: it is
    reference information for "which build am I on", not a control. */
@@ -566,30 +752,190 @@ textarea::placeholder { color: var(--text-secondary); }
     margin-top: auto;
     padding-top: 16px;
     text-align: center;
-    font-size: 12px;
-    color: var(--text-secondary);
+    font-size: 11.5px;
+    color: var(--text-muted);
 }
 
-/* --- Accent gradient picker (settings) --- */
-.accent-options { display: flex; gap: 10px; }
+/* --- Appearance settings: a palette picker (cards, each drawn in the
+   colours of the palette it represents - see renderPaletteGrid in main.js)
+   and a background picker (rows with a live animated thumbnail - see
+   renderBackgroundList). --- */
+.settings-section { display: flex; flex-direction: column; gap: 14px; }
+.settings-section-title { font-size: 13px; font-weight: 600; letter-spacing: 0.8px; color: var(--text-muted); }
 
-.accent-swatch {
-    width: 34px;
-    height: 34px;
-    border-radius: 50%;
+/* grid-template-columns is set inline by renderPaletteGrid: ceil(width/200),
+   matching Flutter's SliverGridDelegateWithMaxCrossAxisExtent rounding
+   (CSS's own auto-fill rounds down, which can land one column short). */
+.palette-grid {
+    display: grid;
+    gap: 12px;
+}
+
+.palette-card {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    aspect-ratio: 1.55;
+    padding: 14px;
+    border-radius: 18px;
     cursor: pointer;
-    padding: 0;
-    /* A ring in the primary colour rather than one of the gradient's own stops,
-       which would vanish against the swatch it is meant to outline. */
-    border: 2px solid transparent;
-    box-shadow: inset 0 0 0 2px var(--bg-deep);
+    text-align: left;
+    background: var(--p-surface);
+    border: 1px solid var(--p-outline);
+    transition: border-color 200ms ease, border-width 200ms ease;
 }
-/* Neutral (not accent-coloured) on purpose: the ring marks the selected
-   swatch, so tying its colour to that same swatch's own accent would make it
-   nearly invisible against exactly the one it's meant to highlight. */
-.accent-swatch.active { border-color: var(--text-primary); }
+.palette-card.active {
+    border-width: 2px;
+    border-color: var(--p-primary);
+}
 
-.accent-swatch[data-accent="pink"]  { background: linear-gradient(120deg, #A78BFA, #F472B6, #7DD3FC); }
-.accent-swatch[data-accent="green"] { background: linear-gradient(120deg, #34D399, #4ADE80, #BEF264); }
-.accent-swatch[data-accent="blue"]  { background: linear-gradient(120deg, #60A5FA, #38BDF8, #22D3EE); }
-.accent-swatch[data-accent="red"]   { background: linear-gradient(120deg, #EF4444, #F87171, #FB923C); }
+.palette-card-top { display: flex; align-items: center; }
+.palette-card-dots { display: flex; align-items: center; gap: 6px; }
+.palette-card-dot { width: 16px; height: 16px; border-radius: 50%; flex-shrink: 0; }
+
+/* Always in the DOM, only shown for the active card - so selecting a
+   different palette is a pure class toggle, same reasoning as
+   .background-row-icon below. */
+.palette-card-check {
+    margin-left: auto;
+    width: 19px;
+    height: 19px;
+    border-radius: 50%;
+    background: var(--p-primary);
+    color: #FFFFFF;
+    font-size: 11px;
+    font-weight: 700;
+    display: none;
+    align-items: center;
+    justify-content: center;
+}
+.palette-card.active .palette-card-check { display: flex; }
+
+.palette-card-spacer { flex: 1; }
+
+.palette-card-name { font-size: 15px; font-weight: 600; color: var(--p-text-primary); }
+
+.palette-card-bar {
+    margin-top: 4px;
+    height: 6px;
+    border-radius: 100px;
+    background: linear-gradient(135deg, var(--p-primary), var(--p-accent));
+}
+
+.background-list { display: flex; flex-direction: column; }
+
+.background-row {
+    display: flex;
+    align-items: center;
+    margin-bottom: 10px;
+    border-radius: 18px;
+    background: var(--surface);
+    border: 1px solid var(--surface-outline);
+    cursor: pointer;
+    text-align: left;
+    padding: 0;
+    overflow: hidden;
+    transition: border-color 200ms ease, border-width 200ms ease;
+}
+.background-row.active { border-width: 2px; border-color: var(--primary); }
+
+.background-thumb {
+    width: 96px;
+    height: 68px;
+    flex-shrink: 0;
+    display: block;
+    /* 1px less than the row's own 18px radius, so it nests inside the border
+       instead of leaving a visible sliver of square corner. */
+    border-radius: 17px 0 0 17px;
+}
+
+.background-row-text {
+    flex: 1;
+    min-width: 0;
+    padding: 0 14px;
+}
+.background-row-name { font-size: 15.5px; font-weight: 600; color: var(--text-primary); }
+.background-row-desc { font-size: 13px; color: var(--text-secondary); margin-top: 3px; }
+
+/* Always renders the checkmark glyph; unselected rows just keep it
+   transparent behind a plain outline circle, so switching selection is a
+   pure style toggle on .background-row.active - no DOM rebuild needed, which
+   matters here since each row's canvas thumbnail has its own live rAF loop
+   that a rebuild would tear down and restart. */
+.background-row-icon {
+    flex-shrink: 0;
+    width: 21px;
+    height: 21px;
+    margin-right: 14px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border: 1.5px solid var(--text-muted);
+    color: transparent;
+    font-size: 12px;
+    font-weight: 700;
+}
+.background-row.active .background-row-icon {
+    background: var(--primary);
+    border-color: transparent;
+    color: #FFFFFF;
+}
+
+/* --- Custom overlay scrollbar (scrollbar.js) ---
+   An indicator, not a control surface: invisible at rest, a thin capsule
+   that barely reads against the background until there's a reason to look
+   at it. Lives entirely in the scrollable element's own reserved right-edge
+   padding (see .content/.config-list/.resource-list), never over content. */
+
+/* The OS scrollbar is fully replaced, not just skinned - hidden here so it
+   never draws alongside the custom one. */
+.scroll-area {
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+}
+.scroll-area::-webkit-scrollbar { display: none; width: 0; height: 0; }
+
+/* Takes over the flex sizing role .content/.config-list/.resource-list used
+   to have directly in their parent; the scroll-area itself just fills this
+   wrapper (100% via its own flex:1 in a single-child flex context) and keeps
+   every one of its original rules (overflow, internal flex-direction, etc)
+   exactly as before. */
+.scrollbar-wrapper {
+    position: relative;
+    flex: 1;
+    min-height: 0;
+    display: flex;
+}
+
+.scrollbar-thumb {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    right: 4px;
+    width: 6px;
+    border-radius: 100px;
+    background-color: var(--surface-outline);
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 200ms, width 160ms ease-out, background-color 160ms ease-out;
+}
+.scrollbar-thumb.visible { opacity: 1; pointer-events: auto; }
+/* Widening/recolouring is specifically a hover-the-thumb response, not a
+   hover-the-area one (area-hover only cancels the idle auto-hide, driven by
+   scrollbar.js's `hovering` flag) - reads as "this is something you can
+   grab", not just "something is scrollable". */
+.scrollbar-thumb.visible:hover,
+.scrollbar-thumb.dragging {
+    width: 10px;
+}
+.scrollbar-thumb.visible:hover { background-color: var(--text-muted); }
+.scrollbar-thumb.dragging { background-color: var(--primary); }
+/* Touch is an indicator only - scrollbar.js never attaches drag/click
+   listeners for it, this is just belt-and-suspenders against any stray
+   hover-alike state on a touch+mouse hybrid device. */
+.scrollbar-thumb.coarse { pointer-events: none !important; }
+
+@media (prefers-reduced-motion: reduce) {
+    .scrollbar-thumb { transition: none; }
+}

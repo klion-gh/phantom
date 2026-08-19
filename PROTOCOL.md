@@ -687,28 +687,40 @@ alone isn't sufficient starting with that API level.
 the service and the Compose UI; `VpnState` carries `status`/`message`/`activeConfigId`
 (the last reset to `null` whenever `status` goes back to `IDLE`).
 
-### 10.3 Theming (`Theme.kt`)
+### 10.3 Theming (`Theme.kt`, `AnimatedBackground.kt`)
 
 Two independent choices, both persisted in the same plain `SharedPreferences` file the
 language toggle uses (neither is sensitive):
 
-- **Theme** — dark or light. Dark is the default and the original look, so an app that
-  is never touched appears exactly as it did before the switch existed.
-- **Accent** — which three-stop gradient paints the "this is on" outlines: a connected
-  config tile and a running proxy toggle. Four presets (`PINK`, `GREEN`, `BLUE`, `RED`),
-  pink being the original. Presets rather than a colour picker: these are hand-picked
-  ramps that stay legible against both backgrounds, which an arbitrary colour would not.
+- **Palette** — one of six complete dark palettes (`MIDNIGHT`, `EMERALD`, `SUNSET`,
+  `OCEAN`, `GRAPHITE`, `SAKURA`; midnight is the original/default), each fixing every
+  colour role at once (background/surface/outline, primary/primary-deep/accent, three text
+  tones, and the 3-stop backdrop wash) - not a theme x accent product, a single choice.
+  There is deliberately no light variant: every colour in the system assumes a dark,
+  saturated-not-neutral background, and inverting just the neutrals would leave the accent
+  colours illegible.
+- **Background** — which of eight `Canvas`-drawn ambient animations plays behind every
+  screen (`ORBS` default, `AURORA`, `STARS`, `MESH`, `METEORS`, `WAVES`, `EMBERS`, or
+  `PLAIN` for none). Every variant is deterministic (a seeded PRNG, never `Random.Default`,
+  so particle layouts don't reshuffle every frame) and loops seamlessly: one cycle is
+  exactly 60 real seconds, driven by `rememberInfiniteTransition`, and every moving piece
+  in it completes a whole number of periods - a fractional frequency would make the frame
+  at the seam visibly jump. Forced to `PLAIN` when the system's
+  "remove animations" accessibility setting is on
+  (`Settings.Global.ANIMATOR_DURATION_SCALE == 0`), Android's nearest equivalent to
+  `prefers-reduced-motion`.
 
-The palette is exposed as *computed properties* (`val BgSurface: Color get() = ...`)
-rather than constants, so reading any colour inside a composable subscribes it to
-`Appearance.theme` - flipping the theme repaints the app with no other plumbing, and every
-existing call site was left unchanged. `Appearance` is loaded in
-`PhantomApplication.onCreate`, before anything composes, so the first frame is already in
-the chosen theme instead of flashing the default.
+Both are exposed as *computed properties* (`val Surface: Color get() = ...`) rather than
+constants, so reading any colour inside a composable subscribes it to `Appearance.palette`
+- switching it repaints the app with no other plumbing, and every existing call site reads
+the same way it always did. `Appearance` is loaded in `PhantomApplication.onCreate`, before
+anything composes, so the first frame is already in the chosen palette instead of flashing
+the default.
 
-The Windows client does the same thing with CSS: `:root[data-theme="light"]` and
-`:root[data-accent="…"]` override variables, so switching either is one attribute write on
-`<html>` and the whole window repaints without re-rendering a single component (§11.5).
+The Windows client mirrors this exactly with CSS: `:root[data-palette="…"]` overrides
+variables and a `<canvas>` element runs the same eight animations off the same formulas, so
+switching either is one attribute write on `<html>` and the whole window repaints without
+re-rendering a single component (§11.5).
 
 ### 10.4 `Protector` / routing-loop prevention
 
@@ -838,21 +850,30 @@ Closing the main window (the X button) doesn't quit the app: `App.beforeClose`
 `true` to cancel the default close-and-quit behavior, so the process (and any active
 tunnel) keeps running in the tray until "Выход" is chosen explicitly.
 
-### 11.5 Theming (`style.css`, `App.GetAppearance`/`SetAppearance`)
+### 11.5 Theming (`style.css`, `background.js`, `App.GetAppearance`/`SetAppearance`)
 
-The same two choices as Android (§10.3) — dark/light and one of four accent gradients —
-with the same defaults, so an untouched app looks exactly as it did before.
+The same two choices as Android (§10.3) — one of six complete palettes, and one of eight
+animated backdrops — with the same defaults, so an untouched app looks exactly as it did
+before either existed. No light theme here either, for the same reason.
 
-Implemented entirely in CSS: `:root` holds the dark palette and the pink gradient,
-`:root[data-theme="light"]` and `:root[data-accent="…"]` override those variables, and
-every rule already referenced the variables rather than literal colours. Switching either
-is therefore one attribute write on `<html>` and the whole window repaints — no component
-re-renders, which is why `applyAppearance` doesn't touch `renderConfigList` and friends
-the way `applyLanguage` has to.
+The palette is implemented entirely in CSS: `:root[data-palette="…"]` overrides a fixed
+set of variables (`--bg`, `--surface`, `--surface-high`, `--surface-outline`, `--primary`,
+`--primary-deep`, `--accent`, three `--text-*` tones, `--backdrop`), and every rule
+references those variables rather than literal colours, so switching palette is one
+attribute write on `<html>` and the whole window repaints — no component re-renders, which
+is why `applyAppearance` doesn't touch `renderConfigList` and friends the way
+`applyLanguage` has to. `--danger`/`--success` are fixed, not part of any palette - an
+error/success that changed colour with the theme would stop reading as one.
+
+The backdrop is a `<canvas>` (`background.js`) sitting behind `#app`, redrawn every
+`requestAnimationFrame` from a single `t = (nowMs/1000 % 60) / 60` clock - see §10.3 for
+the seamless-loop constraint this and the Android `Canvas` version both follow, and why
+every particle layout comes from a seeded PRNG instead of `Math.random()`. Forced to the
+`plain` (undrawn) variant when `prefers-reduced-motion: reduce` matches.
 
 Persistence is Go-side (`settings.go`) so the values survive a WebView reload and sit
 beside the language file. `GetAppearance` is read before the first paint, so the window
-doesn't flash the default theme on its way to the chosen one. `saveSetting` validates
+doesn't flash the default palette on its way to the chosen one. `saveSetting` validates
 against the allowed set on both read and write: a hand-edited or no-longer-supported value
 degrades to the default rather than reaching the UI.
 

@@ -11,9 +11,9 @@ import (
 // files means a corrupt or hand-edited one degrades to its default rather than
 // taking the others with it.
 const (
-	languageFileName = "language"
-	themeFileName    = "theme"
-	accentFileName   = "accent"
+	languageFileName   = "language"
+	paletteFileName    = "palette"
+	backgroundFileName = "background"
 )
 
 // loadSetting returns the persisted value of name, falling back to def when the
@@ -65,19 +65,21 @@ func loadLanguage() string { return loadSetting(languageFileName, "ru", "ru", "e
 
 func saveLanguage(lang string) { saveSetting(languageFileName, lang, "ru", "ru", "en") }
 
-// loadTheme returns "dark" or "light". Dark is the default and the original look:
-// adding a theme switch shouldn't change how the app appears to anyone who never
-// touches it.
-func loadTheme() string { return loadSetting(themeFileName, "dark", "dark", "light") }
+// The six interchangeable palettes and eight animated-backdrop variants - see
+// style.css's [data-palette=...] blocks and background.js's BACKGROUNDS list,
+// which this must stay in sync with. "midnight"/"orbs" are the originals and
+// stay the defaults.
+var (
+	palettes    = []string{"midnight", "emerald", "sunset", "ocean", "graphite", "sakura"}
+	backgrounds = []string{"orbs", "aurora", "stars", "mesh", "meteors", "waves", "embers", "plain"}
+)
 
-func saveTheme(theme string) { saveSetting(themeFileName, theme, "dark", "dark", "light") }
+func loadPalette() string { return loadSetting(paletteFileName, "midnight", palettes...) }
 
-// loadAccent returns which gradient the "this is on" outlines use. "pink" is the
-// original, for the same reason.
-func loadAccent() string {
-	return loadSetting(accentFileName, "pink", "pink", "green", "blue", "red")
-}
+func savePalette(palette string) { saveSetting(paletteFileName, palette, "midnight", palettes...) }
 
-func saveAccent(accent string) {
-	saveSetting(accentFileName, accent, "pink", "pink", "green", "blue", "red")
+func loadBackground() string { return loadSetting(backgroundFileName, "orbs", backgrounds...) }
+
+func saveBackground(background string) {
+	saveSetting(backgroundFileName, background, "orbs", backgrounds...)
 }

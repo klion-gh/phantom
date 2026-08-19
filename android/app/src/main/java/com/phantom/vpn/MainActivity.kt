@@ -1,5 +1,8 @@
 package com.phantom.vpn
 
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -30,6 +33,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.SignalCellularAlt
 import androidx.compose.material.icons.filled.TheaterComedy
 import androidx.compose.material3.*
@@ -92,7 +96,8 @@ class MainActivity : ComponentActivity() {
 
         setContent {
             PhantomTheme {
-                Surface(modifier = Modifier.fillMaxSize(), color = BgDeep) {
+                Box(modifier = Modifier.fillMaxSize()) {
+                    AnimatedBackground(modifier = Modifier.fillMaxSize())
                     PhantomApp(
                         onConnect = { config -> requestConnect(config) },
                         onDisconnect = { stopVpn() },
@@ -465,11 +470,24 @@ private fun MainScreen(
             verticalAlignment = Alignment.CenterVertically,
             modifier = Modifier.fillMaxWidth(),
         ) {
-            Image(
-                painter = painterResource(R.drawable.ic_logo_emblem),
-                contentDescription = null,
-                modifier = Modifier.size(36.dp),
-            )
+            // The logo sits on its own radial glow rather than a plate/tile
+            // background - the glow *is* the backing (see style.css's
+            // .emblem-wrap on Windows for the same treatment).
+            Box(modifier = Modifier.size(36.dp), contentAlignment = Alignment.Center) {
+                Box(
+                    modifier = Modifier
+                        .size(56.dp)
+                        .background(
+                            Brush.radialGradient(listOf(Primary.copy(alpha = 0.34f), Primary.copy(alpha = 0f))),
+                            CircleShape,
+                        ),
+                )
+                Image(
+                    painter = painterResource(R.drawable.ic_logo_emblem),
+                    contentDescription = null,
+                    modifier = Modifier.size(34.dp),
+                )
+            }
             Spacer(modifier = Modifier.width(10.dp))
             Text(
                 "Phantom",
@@ -485,7 +503,7 @@ private fun MainScreen(
                     Text(
                         "⬇",
                         fontSize = 20.sp,
-                        color = if (isUpdating) TextSecondary else StatusConnected,
+                        color = if (isUpdating) TextSecondary else Success,
                     )
                 }
             }
@@ -504,13 +522,13 @@ private fun MainScreen(
                     .padding(top = 8.dp)
                     .height(3.dp)
                     .clip(RoundedCornerShape(2.dp))
-                    .background(BgSurfaceAlt),
+                    .background(SurfaceOutline),
             ) {
                 Box(
                     modifier = Modifier
                         .fillMaxHeight()
                         .fillMaxWidth((updateProgress / 100f).coerceIn(0f, 1f))
-                        .background(Brush.linearGradient(AccentGradient)),
+                        .background(Brush.linearGradient(BrandGradient)),
                 )
             }
         }
@@ -592,7 +610,7 @@ private fun NavBarItem(
         Icon(
             imageVector = icon,
             contentDescription = null,
-            tint = if (selected) AccentSolid else TextSecondary,
+            tint = if (selected) Primary else TextSecondary,
             modifier = Modifier.size(26.dp),
         )
     }
@@ -632,7 +650,7 @@ private fun ConfigsPage(
             Spacer(modifier = Modifier.height(10.dp))
             Text(
                 text = I18n.t("insecure_storage"),
-                color = StatusError,
+                color = Danger,
                 fontSize = 12.sp,
                 modifier = Modifier.fillMaxWidth(),
             )
@@ -662,32 +680,55 @@ private fun ConfigsPage(
 
             if (status == ConnectionStatus.ERROR && message.isNotBlank()) {
                 Spacer(modifier = Modifier.height(12.dp))
+                val bannerShape = RoundedCornerShape(12.dp)
                 Text(
                     text = message,
-                    color = StatusError,
-                    fontSize = 13.sp,
+                    color = Danger,
+                    fontSize = 13.5.sp,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(bannerShape)
+                        .background(Danger.copy(alpha = 0.12f))
+                        .border(1.dp, Danger.copy(alpha = 0.3f), bannerShape)
+                        .padding(horizontal = 14.dp, vertical = 10.dp),
                 )
             }
         } else {
-            Column(
+            EmptyState(
                 modifier = Modifier.weight(1f).fillMaxWidth(),
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.Center,
-            ) {
-                Text(
-                    text = I18n.t("no_configs"),
-                    color = TextPrimary,
-                    fontSize = 16.sp,
-                    fontWeight = FontWeight.Medium,
-                )
-                Spacer(modifier = Modifier.height(8.dp))
-                Text(
-                    text = I18n.t("no_configs_hint"),
-                    color = TextSecondary,
-                    fontSize = 13.sp,
-                )
-            }
+                title = I18n.t("no_configs"),
+                hint = I18n.t("no_configs_hint"),
+            )
         }
+    }
+}
+
+// A ringed circle with an icon, a title and a hint - matches the Windows
+// client's .empty-state exactly (see style.css).
+@Composable
+private fun EmptyState(modifier: Modifier = Modifier, title: String, hint: String) {
+    Column(
+        modifier = modifier.padding(horizontal = 48.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center,
+    ) {
+        Box(
+            modifier = Modifier
+                .size(96.dp)
+                .clip(CircleShape)
+                .background(Surface)
+                .border(1.dp, SurfaceOutline, CircleShape),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(Icons.Filled.Description, contentDescription = null, tint = TextMuted, modifier = Modifier.size(42.dp))
+        }
+        Spacer(modifier = Modifier.height(24.dp))
+        Text(text = title, color = TextPrimary, fontSize = 20.sp, fontWeight = FontWeight.SemiBold)
+        Spacer(modifier = Modifier.height(8.dp))
+        Text(
+            text = hint, color = TextSecondary, fontSize = 14.5.sp,
+            textAlign = TextAlign.Center, lineHeight = 21.75.sp,
+        )
     }
 }
 
@@ -728,24 +769,11 @@ private fun ResourcesPage(
                 }
             }
         } else {
-            Column(
+            EmptyState(
                 modifier = Modifier.weight(1f).fillMaxWidth(),
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.Center,
-            ) {
-                Text(
-                    text = I18n.t("no_resources"),
-                    color = TextPrimary,
-                    fontSize = 16.sp,
-                    fontWeight = FontWeight.Medium,
-                )
-                Spacer(modifier = Modifier.height(8.dp))
-                Text(
-                    text = I18n.t("no_resources_hint"),
-                    color = TextSecondary,
-                    fontSize = 13.sp,
-                )
-            }
+                title = I18n.t("no_resources"),
+                hint = I18n.t("no_resources_hint"),
+            )
         }
     }
 }
@@ -761,14 +789,15 @@ private fun AddResourceDialog(
     val fieldColors = OutlinedTextFieldDefaults.colors(
         focusedTextColor = TextPrimary,
         unfocusedTextColor = TextPrimary,
-        focusedBorderColor = AccentSolid,
+        focusedBorderColor = Primary,
         unfocusedBorderColor = TextSecondary.copy(alpha = 0.4f),
-        cursorColor = AccentSolid,
+        cursorColor = Primary,
     )
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text(I18n.t("add_resource")) },
+        shape = RoundedCornerShape(24.dp),
+        title = { Text(I18n.t("add_resource"), fontSize = 19.sp, fontWeight = FontWeight.SemiBold) },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 OutlinedTextField(
@@ -801,12 +830,12 @@ private fun AddResourceDialog(
                     "https://$trimmedUrl"
                 }
                 onSave(trimmedName, fullUrl)
-            }) { Text(I18n.t("add"), color = AccentSolid) }
+            }) { Text(I18n.t("add"), color = Primary) }
         },
         dismissButton = {
             TextButton(onClick = onDismiss) { Text(I18n.t("cancel")) }
         },
-        containerColor = BgSurface,
+        containerColor = SurfaceHigh,
         titleContentColor = TextPrimary,
         textContentColor = TextSecondary,
     )
@@ -857,9 +886,9 @@ private fun ConfigScreen(
             colors = OutlinedTextFieldDefaults.colors(
                 focusedTextColor = TextPrimary,
                 unfocusedTextColor = TextPrimary,
-                focusedBorderColor = AccentSolid,
+                focusedBorderColor = Primary,
                 unfocusedBorderColor = TextSecondary.copy(alpha = 0.4f),
-                cursorColor = AccentSolid,
+                cursorColor = Primary,
             ),
             modifier = Modifier
                 .fillMaxWidth()
@@ -868,19 +897,19 @@ private fun ConfigScreen(
 
         Button(
             onClick = onSave,
-            colors = ButtonDefaults.buttonColors(containerColor = AccentSolid, contentColor = BgDeep),
-            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(16.dp),
+            colors = ButtonDefaults.buttonColors(containerColor = Primary, contentColor = Color.White),
+            modifier = Modifier.fillMaxWidth().height(54.dp),
         ) {
-            Text(I18n.t("save"))
+            Text(I18n.t("save"), fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
         }
 
         if (isEditing) {
-            OutlinedButton(
+            TextButton(
                 onClick = { showDeleteConfirm = true },
-                colors = ButtonDefaults.outlinedButtonColors(contentColor = StatusError),
                 modifier = Modifier.fillMaxWidth(),
             ) {
-                Text(I18n.t("delete_config"))
+                Text(I18n.t("delete_config"), color = Danger, fontSize = 14.sp, fontWeight = FontWeight.Medium)
             }
         }
     }
@@ -888,18 +917,19 @@ private fun ConfigScreen(
     if (showDeleteConfirm) {
         AlertDialog(
             onDismissRequest = { showDeleteConfirm = false },
-            title = { Text(I18n.t("delete_config_q")) },
-            text = { Text(I18n.t("delete_config_text")) },
+            shape = RoundedCornerShape(24.dp),
+            title = { Text(I18n.t("delete_config_q"), fontSize = 19.sp, fontWeight = FontWeight.SemiBold) },
+            text = { Text(I18n.t("delete_config_text"), fontSize = 15.sp, lineHeight = 22.5.sp) },
             confirmButton = {
                 TextButton(onClick = {
                     showDeleteConfirm = false
                     onDelete()
-                }) { Text(I18n.t("delete"), color = StatusError) }
+                }) { Text(I18n.t("delete"), color = Danger) }
             },
             dismissButton = {
                 TextButton(onClick = { showDeleteConfirm = false }) { Text(I18n.t("cancel")) }
             },
-            containerColor = BgSurface,
+            containerColor = SurfaceHigh,
             titleContentColor = TextPrimary,
             textContentColor = TextSecondary,
         )
@@ -911,101 +941,221 @@ private fun SettingsScreen(
     onBack: () -> Unit,
     onViewLog: () -> Unit,
 ) {
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(20.dp),
-        verticalArrangement = Arrangement.spacedBy(14.dp),
-    ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
+    val context = LocalContext.current
+    Column(modifier = Modifier.fillMaxSize()) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.padding(start = 20.dp, top = 20.dp, end = 20.dp),
+        ) {
             IconButton(onClick = onBack) {
                 Text("←", fontSize = 22.sp, color = TextPrimary)
             }
             Text(I18n.t("settings"), color = TextPrimary, fontSize = 20.sp, fontWeight = FontWeight.SemiBold)
         }
 
-        // Language selector - reading I18n.lang here recomposes the whole app
-        // (every screen goes through I18n.t) when it changes.
-        val context = LocalContext.current
-        Text(I18n.t("language"), color = TextSecondary, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
-        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            LangButton("Русский", I18n.lang == Lang.RU) { setAppLanguage(context, Lang.RU) }
-            LangButton("English", I18n.lang == Lang.EN) { setAppLanguage(context, Lang.EN) }
-        }
-
-        // Theme. Reading Appearance.theme repaints everything for the same reason
-        // the language toggle does - every colour in Theme.kt is a computed
-        // property over this state.
-        Text(I18n.t("theme"), color = TextSecondary, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
-        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            LangButton(I18n.t("theme_dark"), Appearance.isDark) {
-                Appearance.setTheme(context, ThemeMode.DARK)
+        // A single scrollable list, padded 20/8/20/32 (start/top/end/bottom) -
+        // everything below the header lives in here.
+        Column(
+            modifier = Modifier
+                .weight(1f)
+                .verticalScroll(rememberScrollState())
+                .padding(start = 20.dp, top = 8.dp, end = 20.dp, bottom = 32.dp),
+        ) {
+            // Language selector - reading I18n.lang here recomposes the whole
+            // app (every screen goes through I18n.t) when it changes.
+            SectionLabel(I18n.t("language"))
+            Spacer(Modifier.height(14.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                LangButton("Русский", I18n.lang == Lang.RU) { setAppLanguage(context, Lang.RU) }
+                LangButton("English", I18n.lang == Lang.EN) { setAppLanguage(context, Lang.EN) }
             }
-            LangButton(I18n.t("theme_light"), !Appearance.isDark) {
-                Appearance.setTheme(context, ThemeMode.LIGHT)
-            }
-        }
 
-        // Accent gradient. Shown as swatches painted with the actual gradient
-        // rather than named buttons - the whole point is what it looks like.
-        Text(I18n.t("accent"), color = TextSecondary, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
-        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            Accent.entries.forEach { option ->
-                AccentSwatch(
-                    accent = option,
-                    selected = Appearance.accent == option,
-                    onClick = { Appearance.setAccent(context, option) },
+            // Palette. Reading Appearance.palette repaints everything for the
+            // same reason the language toggle does - every colour in Theme.kt
+            // is a computed property over this state. Cards rather than
+            // swatches: each is drawn in the colours of the palette it
+            // represents (not the active one), an honest "what would this
+            // look like" preview.
+            Spacer(Modifier.height(28.dp))
+            SectionLabel(I18n.t("palette"))
+            Spacer(Modifier.height(14.dp))
+            PaletteGrid(context)
+
+            // Animated backdrop. Each row carries a live thumbnail actually
+            // running that variant, not a static description - see
+            // BackgroundThumbnail (AnimatedBackground.kt). 32px here, not the
+            // page's ambient 28px, to set this section apart as a pair with
+            // Палитра above it.
+            Spacer(Modifier.height(32.dp))
+            SectionLabel(I18n.t("background"))
+            Spacer(Modifier.height(14.dp))
+            BackgroundStyle.entries.forEach { option ->
+                BackgroundRow(
+                    style = option,
+                    selected = Appearance.background == option,
+                    onClick = { Appearance.setBackground(context, option) },
                 )
             }
+
+            Spacer(Modifier.height(28.dp))
+            TextButton(onClick = onViewLog) {
+                Text(I18n.t("view_log"), color = TextSecondary, fontSize = 14.sp, fontWeight = FontWeight.Medium)
+            }
+
+            // Worth having somewhere visible: the app updates itself from
+            // GitHub releases, so "which version am I actually running" is
+            // the first thing anyone needs when an update does or doesn't
+            // arrive. Comes from BuildConfig, so it is whatever the APK was
+            // built as and cannot drift from it.
+            Spacer(Modifier.height(16.dp))
+            Text(
+                text = "${I18n.t("version")} ${BuildConfig.VERSION_NAME}",
+                color = TextSecondary,
+                fontSize = 12.sp,
+                modifier = Modifier.fillMaxWidth(),
+                textAlign = TextAlign.Center,
+            )
         }
+    }
+}
 
-        OutlinedButton(onClick = onViewLog, modifier = Modifier.fillMaxWidth()) {
-            Text(I18n.t("view_log"))
+// Flutter's SliverGridDelegateWithMaxCrossAxisExtent(maxCrossAxisExtent: 200)
+// picks columns = ceil(width / 200), stretching that many columns evenly to
+// fill the row - not a lazy grid (only 6 items, and it lives inside the
+// screen's own scrollable Column, where a nested lazy grid would fight it for
+// scroll gestures), just chunked Rows sized off BoxWithConstraints.
+@Composable
+private fun PaletteGrid(context: android.content.Context) {
+    BoxWithConstraints {
+        val columns = kotlin.math.ceil(maxWidth.value / 200f).toInt().coerceAtLeast(1)
+        Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Palette.entries.chunked(columns).forEach { rowPalettes ->
+                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    rowPalettes.forEach { palette ->
+                        PaletteCard(
+                            palette = palette,
+                            selected = Appearance.palette == palette,
+                            onClick = { Appearance.setPalette(context, palette) },
+                            modifier = Modifier.weight(1f),
+                        )
+                    }
+                    // Pads an incomplete last row so its cards stay the same
+                    // width as the full rows above instead of stretching wider.
+                    repeat(columns - rowPalettes.size) { Spacer(modifier = Modifier.weight(1f)) }
+                }
+            }
         }
+    }
+}
 
-        Spacer(modifier = Modifier.weight(1f))
-
-        // Pinned to the bottom of the settings screen. Worth having somewhere
-        // visible: the app updates itself from GitHub releases, so "which version
-        // am I actually running" is the first thing anyone needs when an update
-        // does or doesn't arrive. Comes from BuildConfig, so it is whatever the APK
-        // was built as and cannot drift from it.
-        Text(
-            text = "${I18n.t("version")} ${BuildConfig.VERSION_NAME}",
-            color = TextSecondary,
-            fontSize = 12.sp,
-            modifier = Modifier.fillMaxWidth(),
-            textAlign = TextAlign.Center,
+// Drawn entirely in [palette]'s own colours, not the active theme's - every
+// card is an honest preview of what selecting it looks like. Selection is a
+// border colour + width change (1px outline -> 2px primary), animated so it
+// reads as a response without changing the card's size.
+@Composable
+private fun PaletteCard(palette: Palette, selected: Boolean, onClick: () -> Unit, modifier: Modifier = Modifier) {
+    val borderWidth by animateDpAsState(if (selected) 2.dp else 1.dp, animationSpec = tween(200), label = "paletteCardBorderWidth")
+    val borderColor by animateColorAsState(if (selected) palette.primary else palette.surfaceOutline, animationSpec = tween(200), label = "paletteCardBorderColor")
+    val shape = RoundedCornerShape(18.dp)
+    Column(
+        modifier = modifier
+            .aspectRatio(1.55f)
+            .clip(shape)
+            .background(palette.surface)
+            .border(borderWidth, borderColor, shape)
+            .clickable(onClick = onClick)
+            .padding(14.dp),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                Box(Modifier.size(16.dp).clip(CircleShape).background(palette.primary))
+                Box(Modifier.size(16.dp).clip(CircleShape).background(palette.accent))
+                Box(Modifier.size(16.dp).clip(CircleShape).background(palette.surfaceHigh))
+            }
+            Spacer(Modifier.weight(1f))
+            if (selected) {
+                Box(
+                    modifier = Modifier.size(19.dp).clip(CircleShape).background(palette.primary),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text("✓", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                }
+            }
+        }
+        Spacer(Modifier.weight(1f))
+        Text(palette.displayName, color = palette.textPrimary, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
+        Spacer(Modifier.height(4.dp))
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(6.dp)
+                .clip(RoundedCornerShape(100.dp))
+                .background(Brush.linearGradient(listOf(palette.primary, palette.accent))),
         )
     }
 }
 
-// A round chip filled with the accent's own gradient. The selected one gets a
-// ring in the primary colour: a border in one of the gradient's own stops would
-// vanish against the swatch it is meant to outline.
+// Unlike the palette cards, these use the *active* palette's colours - see
+// the class doc on BackgroundThumbnail for why the thumbnail itself doesn't
+// need special-casing here (it's a genuinely independent live animation).
 @Composable
-private fun AccentSwatch(accent: Accent, selected: Boolean, onClick: () -> Unit) {
-    val ringColour = if (selected) TextPrimary else Color.Transparent
-    Box(
+private fun BackgroundRow(style: BackgroundStyle, selected: Boolean, onClick: () -> Unit) {
+    val borderWidth by animateDpAsState(if (selected) 2.dp else 1.dp, animationSpec = tween(200), label = "bgRowBorderWidth")
+    val borderColor by animateColorAsState(if (selected) Primary else SurfaceOutline, animationSpec = tween(200), label = "bgRowBorderColor")
+    val shape = RoundedCornerShape(18.dp)
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
         modifier = Modifier
-            .size(44.dp)
-            .border(2.dp, ringColour, CircleShape)
-            .padding(4.dp)
-            .clip(CircleShape)
-            .background(Brush.linearGradient(accent.stops))
+            .fillMaxWidth()
+            .padding(bottom = 10.dp)
+            .clip(shape)
+            .background(Surface)
+            .border(borderWidth, borderColor, shape)
             .clickable(onClick = onClick),
-    )
+    ) {
+        // 1px less than the row's own 18dp radius, so it nests inside the
+        // border instead of leaving a visible sliver of square corner.
+        BackgroundThumbnail(
+            style = style,
+            modifier = Modifier
+                .size(width = 96.dp, height = 68.dp)
+                .clip(RoundedCornerShape(topStart = 17.dp, bottomStart = 17.dp)),
+        )
+        Column(modifier = Modifier.weight(1f).padding(horizontal = 14.dp)) {
+            Text(style.label, color = TextPrimary, fontSize = 15.5.sp, fontWeight = FontWeight.SemiBold)
+            Spacer(Modifier.height(3.dp))
+            Text(style.description, color = TextSecondary, fontSize = 13.sp)
+        }
+        Box(
+            modifier = Modifier
+                .padding(end = 14.dp)
+                .size(21.dp)
+                .clip(CircleShape)
+                .then(
+                    if (selected) Modifier.background(Primary)
+                    else Modifier.border(1.5.dp, TextMuted, CircleShape)
+                ),
+            contentAlignment = Alignment.Center,
+        ) {
+            if (selected) Text("✓", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+        }
+    }
 }
 
+// Section header: 13sp/600, +0.8sp tracking, muted - matches the Windows
+// client's .settings-section-title exactly (see style.css).
+@Composable
+private fun SectionLabel(text: String) {
+    Text(text, color = TextMuted, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, letterSpacing = 0.8.sp)
+}
+
+// Text button family - no fill/border, quieter than the primary action
+// buttons; the active one in a toggle group (language) just turns primary-
+// coloured rather than gaining a background.
 @Composable
 private fun LangButton(label: String, active: Boolean, onClick: () -> Unit) {
-    if (active) {
-        Button(
-            onClick = onClick,
-            colors = ButtonDefaults.buttonColors(containerColor = AccentSolid, contentColor = BgDeep),
-        ) { Text(label) }
-    } else {
-        OutlinedButton(onClick = onClick) { Text(label) }
+    TextButton(onClick = onClick) {
+        Text(label, color = if (active) Primary else TextSecondary, fontSize = 14.sp, fontWeight = FontWeight.Medium)
     }
 }
 
@@ -1056,10 +1206,11 @@ private fun LogScreen(onClose: () -> Unit) {
                 }
                 context.startActivity(Intent.createChooser(shareIntent, "Share Phantom log"))
             },
-            colors = ButtonDefaults.buttonColors(containerColor = AccentSolid, contentColor = BgDeep),
-            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(16.dp),
+            colors = ButtonDefaults.buttonColors(containerColor = Primary, contentColor = Color.White),
+            modifier = Modifier.fillMaxWidth().height(54.dp),
         ) {
-            Text(I18n.t("share"))
+            Text(I18n.t("share"), fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
         }
     }
 }

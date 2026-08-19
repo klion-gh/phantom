@@ -1,6 +1,7 @@
 package com.phantom.vpn
 
 import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
@@ -155,31 +156,33 @@ fun ConfigInfoCard(
         }
     }
 
-    val cardShape = RoundedCornerShape(20.dp)
+    val cardShape = RoundedCornerShape(18.dp)
     val isConnected = status == ConnectionStatus.CONNECTED
-    val connectedGradient = Brush.linearGradient(colors = AccentGradient)
+    val connectedGradient = Brush.linearGradient(colors = BrandGradient)
 
     Card(
-        colors = CardDefaults.cardColors(containerColor = BgSurface),
+        colors = CardDefaults.cardColors(containerColor = Surface),
         shape = cardShape,
         modifier = Modifier
             .fillMaxWidth()
-            .then(
-                if (isConnected) Modifier.border(2.dp, connectedGradient, cardShape) else Modifier
+            .border(
+                width = 1.dp,
+                brush = if (isConnected) connectedGradient else Brush.linearGradient(listOf(SurfaceOutline.copy(alpha = 0.6f), SurfaceOutline.copy(alpha = 0.6f))),
+                shape = cardShape,
             )
             .combinedClickable(onClick = {}, onLongClick = onLongPress),
     ) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 20.dp, vertical = 12.dp),
+                .padding(horizontal = 14.dp, vertical = 12.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Column(modifier = Modifier.weight(1f)) {
                 Text(
                     text = domain.ifBlank { server.ifBlank { "—" } },
                     color = TextPrimary,
-                    fontSize = 17.sp,
+                    fontSize = 16.sp,
                     fontWeight = FontWeight.SemiBold,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
@@ -244,11 +247,11 @@ private fun ConnectSwitch(status: ConnectionStatus, onClick: () -> Unit) {
         onCheckedChange = { onClick() },
         enabled = status != ConnectionStatus.CONNECTING,
         colors = androidx.compose.material3.SwitchDefaults.colors(
-            checkedThumbColor = AccentSolidBright,
-            checkedTrackColor = AccentSolidDeep,
+            checkedThumbColor = Primary,
+            checkedTrackColor = PrimaryDeep,
             checkedBorderColor = Color.Transparent,
             uncheckedThumbColor = TextSecondary,
-            uncheckedTrackColor = BgSurfaceAlt,
+            uncheckedTrackColor = SurfaceHigh,
             uncheckedBorderColor = TextSecondary.copy(alpha = 0.4f),
         ),
     )
@@ -269,15 +272,16 @@ private fun ProxyBlock(
     onPortTextChange: (String) -> Unit,
     onToggleClick: () -> Unit,
 ) {
-    val shape = RoundedCornerShape(8.dp)
-    val gradient = Brush.linearGradient(colors = AccentGradient)
+    val shape = RoundedCornerShape(16.dp)
+    val gradient = Brush.linearGradient(colors = BrandGradient)
     Column(horizontalAlignment = Alignment.CenterHorizontally) {
         Box(
             modifier = Modifier
                 .clip(shape)
+                .background(SurfaceHigh, shape)
                 .then(
-                    if (running) Modifier.border(2.dp, gradient, shape)
-                    else Modifier.border(2.dp, TextSecondary.copy(alpha = 0.35f), shape)
+                    if (running) Modifier.border(1.dp, gradient, shape)
+                    else Modifier.border(1.dp, SurfaceOutline, shape)
                 )
                 .clickable(onClick = onToggleClick)
                 .padding(horizontal = 8.dp, vertical = 5.dp),

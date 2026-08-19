@@ -5,11 +5,13 @@
     <title>Phantom</title>
   </head>
   <body>
+    <div class="backdrop"></div>
+    <canvas id="bg-canvas"></canvas>
     <div id="app">
       <!-- Main screen: config tiles on the left, resource-reachability tiles on the right -->
       <div id="screen-main" class="screen">
         <div class="header">
-          <img src="./src/assets/images/phantom-emblem.png" class="emblem" alt="" />
+          <div class="emblem-wrap"><img src="./src/assets/images/phantom-emblem.png" class="emblem" alt="" /></div>
           <div class="title">Phantom</div>
           <button id="btn-gear" class="icon-btn" data-i18n-title="settings" title="Настройки">&#9881;</button>
           <button id="btn-update" class="icon-btn update-btn hidden" data-i18n-title="update_available" title="Доступно обновление">&#11015;</button>
@@ -28,6 +30,9 @@
             <div id="config-list" class="config-list"></div>
 
             <div id="empty-state" class="empty-state hidden">
+              <div class="empty-state-circle">
+                <svg viewBox="0 0 24 24" class="empty-icon"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/></svg>
+              </div>
               <div class="empty-title" data-i18n="no_configs">Нет добавленной конфигурации</div>
               <div class="empty-hint" data-i18n="no_configs_hint">Нажмите + чтобы добавить client.yaml</div>
             </div>
@@ -52,11 +57,13 @@
           <div id="config-screen-title" class="title" data-i18n="add_config">Добавить конфигурацию</div>
         </div>
         <div class="content">
-          <div class="label" data-i18n="paste_yaml">Вставьте содержимое client.yaml целиком:</div>
-          <textarea id="config-textarea" placeholder='server: "1.2.3.4:8443"&#10;domain: "your-domain.example"&#10;...'></textarea>
-          <div class="row">
-            <button id="btn-save" class="btn btn-primary" data-i18n="save">Сохранить</button>
-            <button id="btn-delete" class="btn btn-danger hidden" data-i18n="delete">Удалить</button>
+          <div class="form-inner">
+            <div class="label" data-i18n="paste_yaml">Вставьте содержимое client.yaml целиком:</div>
+            <textarea id="config-textarea" placeholder='server: "1.2.3.4:8443"&#10;domain: "your-domain.example"&#10;...'></textarea>
+            <div class="row">
+              <button id="btn-save" class="btn btn-primary" data-i18n="save">Сохранить</button>
+              <button id="btn-delete" class="btn btn-danger hidden" data-i18n="delete">Удалить</button>
+            </div>
           </div>
         </div>
       </div>
@@ -67,7 +74,8 @@
           <button id="btn-back-settings" class="icon-btn">&#8592;</button>
           <div class="title" data-i18n="settings">Настройки</div>
         </div>
-        <div class="content">
+        <div class="content settings-content">
+          <button id="btn-open-split-tunnel" class="btn btn-outline" data-i18n="split_tunnel">Раздельное туннелирование</button>
           <div class="lang-row">
             <div class="lang-label" data-i18n="language">Язык</div>
             <div class="lang-options">
@@ -75,26 +83,21 @@
               <button id="btn-lang-en" class="btn btn-outline lang-btn">English</button>
             </div>
           </div>
-          <div class="lang-row">
-            <div class="lang-label" data-i18n="theme">Тема</div>
-            <div class="lang-options">
-              <button id="btn-theme-dark" class="btn btn-outline lang-btn" data-i18n="theme_dark">Тёмная</button>
-              <button id="btn-theme-light" class="btn btn-outline lang-btn" data-i18n="theme_light">Светлая</button>
-            </div>
+          <div class="settings-section">
+            <div class="settings-section-title" data-i18n="palette">Палитра</div>
+            <!-- Cards, not swatches: each renders in the colours of the
+                 palette it represents (not the active one), so it's an
+                 honest preview of what selecting it looks like - see
+                 renderPaletteGrid in main.js. -->
+            <div id="palette-grid" class="palette-grid"></div>
           </div>
-          <div class="lang-row">
-            <div class="lang-label" data-i18n="accent">Акцент</div>
-            <!-- Swatches painted with the actual gradient rather than named
-                 buttons - what it looks like is the whole point. -->
-            <div class="accent-options">
-              <button class="accent-swatch" data-accent="pink"></button>
-              <button class="accent-swatch" data-accent="green"></button>
-              <button class="accent-swatch" data-accent="blue"></button>
-              <button class="accent-swatch" data-accent="red"></button>
-            </div>
+          <div class="settings-section">
+            <div class="settings-section-title" data-i18n="background">Фон</div>
+            <!-- Rows with a live animated thumbnail, not a description-only
+                 list - see renderBackgroundList in main.js. -->
+            <div id="background-options" class="background-list"></div>
           </div>
           <button id="btn-view-log" class="btn btn-outline" data-i18n="view_log">Посмотреть лог</button>
-          <button id="btn-open-split-tunnel" class="btn btn-outline" data-i18n="split_tunnel">Раздельное туннелирование</button>
           <!-- Filled in at startup from the App.Version binding - the same
                constant the updater compares against the latest release tag. -->
           <div id="app-version" class="app-version"></div>
@@ -129,6 +132,9 @@
           </div>
           <div id="excluded-app-list" class="resource-list"></div>
           <div id="excluded-app-empty" class="empty-state hidden">
+            <div class="empty-state-circle">
+              <svg viewBox="0 0 24 24" class="empty-icon"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/></svg>
+            </div>
             <div class="empty-title" data-i18n="empty_list">Список пуст</div>
             <div class="empty-hint" data-i18n="empty_apps_hint">Нажмите + чтобы выбрать .exe</div>
           </div>

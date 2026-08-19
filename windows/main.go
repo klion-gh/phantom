@@ -52,18 +52,18 @@ func main() {
 
 	// Create application with options
 	err := wails.Run(&options.App{
-		Title: "Phantom",
-		// Wide enough for the two-column main screen (saved configs on the
-		// left, resource-reachability tiles on the right - see
-		// frontend/src/style.css's .main-body).
-		Width:     760,
-		Height:    680,
-		MinWidth:  640,
-		MinHeight: 500,
+		Title:     "Phantom",
+		Width:     1280,
+		Height:    720,
+		MinWidth:  480,
+		MinHeight: 600,
 		AssetServer: &assetserver.Options{
 			Assets: assets,
 		},
-		BackgroundColour: &options.RGBA{R: 7, G: 7, B: 12, A: 255},
+		// Matches the midnight palette's --bg (style.css) - what briefly
+		// shows through before the first paint, so that flash is the right
+		// colour instead of the old fixed near-black.
+		BackgroundColour: &options.RGBA{R: 14, G: 11, B: 24, A: 255},
 		OnStartup:        app.startup,
 		OnShutdown:       app.shutdown,
 		OnBeforeClose:    app.beforeClose,
