@@ -14,15 +14,17 @@
 const TAU = Math.PI * 2;
 const CYCLE_SECONDS = 60;
 
+// name/desc are i18n keys (see i18n.js's "background_*" entries), not the
+// literal display text - main.js's renderBackgroundList runs them through t().
 export const BACKGROUNDS = [
-  { id: 'orbs', name: 'Сферы', desc: 'Плавно плывущие пятна света' },
-  { id: 'aurora', name: 'Сияние', desc: 'Медленные цветные ленты' },
-  { id: 'stars', name: 'Звёзды', desc: 'Мерцающие точки на фоне' },
-  { id: 'mesh', name: 'Сеть', desc: 'Точки, соединённые тонкими линиями' },
-  { id: 'meteors', name: 'Метеоры', desc: 'Редкие росчерки по диагонали' },
-  { id: 'waves', name: 'Волны', desc: 'Слоистые волнистые линии' },
-  { id: 'embers', name: 'Искры', desc: 'Огоньки, поднимающиеся снизу вверх' },
-  { id: 'plain', name: 'Без анимации', desc: 'Только фоновый градиент' },
+  { id: 'orbs', name: 'background_orbs_label', desc: 'background_orbs_desc' },
+  { id: 'aurora', name: 'background_aurora_label', desc: 'background_aurora_desc' },
+  { id: 'stars', name: 'background_stars_label', desc: 'background_stars_desc' },
+  { id: 'mesh', name: 'background_mesh_label', desc: 'background_mesh_desc' },
+  { id: 'meteors', name: 'background_meteors_label', desc: 'background_meteors_desc' },
+  { id: 'waves', name: 'background_waves_label', desc: 'background_waves_desc' },
+  { id: 'embers', name: 'background_embers_label', desc: 'background_embers_desc' },
+  { id: 'plain', name: 'background_plain_label', desc: 'background_plain_desc' },
 ];
 
 // A small, fast, deterministic PRNG (mulberry32-family) - Math.random() can't

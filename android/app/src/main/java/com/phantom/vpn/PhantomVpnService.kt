@@ -43,6 +43,9 @@ class PhantomVpnService : VpnService() {
         private const val CHANNEL_ID = "phantom_vpn"
         private const val NOTIFICATION_ID = 1
         private const val MTU = 1500
+        // How long disconnect() waits for the graceful tunnel.stop() path before
+        // forcing the interface down itself - see forceDisconnect().
+        private const val DISCONNECT_FORCE_TIMEOUT_MS = 3000L
 
         @Volatile
         private var activeInstance: PhantomVpnService? = null
@@ -91,9 +94,14 @@ class PhantomVpnService : VpnService() {
         activeInstance = this
     }
 
-    private val executor = Executors.newSingleThreadExecutor()
-    private var tunInterface: ParcelFileDescriptor? = null
-    private var tunnel: Tunnel? = null
+    // var, not val: forceDisconnect() swaps this out for a fresh executor when
+    // the old one is permanently wedged inside a stuck tunnel.stop() call - see
+    // its class doc.
+    private var executor = Executors.newSingleThreadExecutor()
+    // @Volatile: forceDisconnect() (main thread, via a Handler) can now touch
+    // these concurrently with the executor thread's own graceful teardown.
+    @Volatile private var tunInterface: ParcelFileDescriptor? = null
+    @Volatile private var tunnel: Tunnel? = null
 
     // Reconnect-on-network-change: a plain TCP/TLS socket bound to (say) Wi-Fi
     // doesn't migrate itself when Wi-Fi disappears and cellular takes over - it
@@ -442,8 +450,22 @@ class PhantomVpnService : VpnService() {
         }
     }
 
+    /**
+     * Occasionally the Go core's tunnel.stop() below wedges on a stuck socket and
+     * never returns. Since it runs on [executor] - a single-thread executor - that
+     * leaves the thread jammed forever, and every future connect()/disconnect()
+     * call (which all go through the same executor) silently queues up behind it
+     * and never runs: from the user's side, the app just stops responding to the
+     * disconnect toggle, and the only fix used to be force-killing it. The
+     * [DISCONNECT_FORCE_TIMEOUT_MS] watchdog below is the fix - see
+     * forceDisconnect().
+     */
     private fun disconnect() {
+        val forceRunnable = Runnable { forceDisconnect() }
+        reconnectHandler.postDelayed(forceRunnable, DISCONNECT_FORCE_TIMEOUT_MS)
+
         executor.execute {
+            reconnectHandler.removeCallbacks(forceRunnable)
             unregisterNetworkCallback()
             activeConfigId = null
             activeConfigYaml = null
@@ -469,6 +491,37 @@ class PhantomVpnService : VpnService() {
             stopForeground(STOP_FOREGROUND_DETACH)
             stopSelf()
         }
+    }
+
+    /**
+     * Escalation path for [disconnect]: fires only if the graceful teardown on
+     * [executor] hasn't finished within [DISCONNECT_FORCE_TIMEOUT_MS], which means
+     * that thread is now permanently stuck inside tunnel.stop(). Runs on the main
+     * thread (this is a Handler(Looper.getMainLooper()) callback), so it doesn't
+     * wait on the wedged executor at all: it closes the OS-level tun interface
+     * directly - the part that actually matters to the user - resets visible
+     * state, and swaps in a fresh executor so connect()/disconnect() work again
+     * immediately. The old executor thread, and whatever tunnel.stop() call it's
+     * stuck in, is simply abandoned.
+     */
+    private fun forceDisconnect() {
+        FileLog.e("disconnect did not finish within ${DISCONNECT_FORCE_TIMEOUT_MS}ms - forcing it")
+        executor = Executors.newSingleThreadExecutor()
+        unregisterNetworkCallback()
+        activeConfigId = null
+        activeConfigYaml = null
+        tunnel = null
+        try {
+            tunInterface?.close()
+        } catch (e: Throwable) {
+            FileLog.e("tun close error (forced)", e)
+        }
+        tunInterface = null
+
+        VpnStateHolder.update(ConnectionStatus.IDLE, "")
+        showPersistentNotification(ConnectionStatus.IDLE)
+        stopForeground(STOP_FOREGROUND_DETACH)
+        stopSelf()
     }
 
     override fun onDestroy() {
@@ -522,7 +575,14 @@ class PhantomVpnService : VpnService() {
             ConnectionStatus.IDLE -> I18n.t("inactive")
         }
         val proxyRunning = ProxyManager.hasAnyRunning()
-        val text = "VPN: $vpnText | Proxy: ${if (proxyRunning) I18n.t("active") else I18n.t("inactive")}"
+        // Mirrors Settings' "show proxy settings" toggle - when the proxy controls
+        // are hidden from the config tiles, they should not leak back in here either.
+        val showProxy = Appearance.showProxySettings
+        val text = if (showProxy) {
+            "VPN: $vpnText | Proxy: ${if (proxyRunning) I18n.t("active") else I18n.t("inactive")}"
+        } else {
+            "VPN: $vpnText"
+        }
 
         val vpnAction = when (status) {
             ConnectionStatus.CONNECTED -> I18n.t("disconnect_vpn") to disconnectPendingIntent()
@@ -541,15 +601,17 @@ class PhantomVpnService : VpnService() {
 
         val actionIcon = Icon.createWithResource(this, R.drawable.ic_notification)
 
-        return Notification.Builder(this, CHANNEL_ID)
+        val builder = Notification.Builder(this, CHANNEL_ID)
             .setContentTitle("Phantom VPN")
             .setContentText(text)
             .setSmallIcon(R.drawable.ic_notification)
             .setContentIntent(openAppIntent)
             .addAction(Notification.Action.Builder(actionIcon, vpnAction.first, vpnAction.second).build())
-            .addAction(Notification.Action.Builder(actionIcon, proxyAction.first, proxyAction.second).build())
             .setOngoing(true)
-            .build()
+        if (showProxy) {
+            builder.addAction(Notification.Action.Builder(actionIcon, proxyAction.first, proxyAction.second).build())
+        }
+        return builder.build()
     }
 
     private fun ensureChannel() {

@@ -8,7 +8,7 @@ import './style.css';
 // install ever shows, so the app's own footprint grows by the whole set
 // (~2.4MB) once, not per flag shown.
 import 'flag-icons/css/flag-icons.min.css';
-import { Connect, Disconnect, Status, ReadLog, ListConfigs, AddConfig, UpdateConfig, DeleteConfig, SetConfigGeo, ClearConfigCountry, Ping, ListResources, AddResource, DeleteResource, ListExcludedApps, PickExcludedAppExe, AddExcludedApp, DeleteExcludedApp, ApplyUpdate, StartProxy, StopProxy, GetLanguage, SetLanguage, Version, LookupCountry, GetAppearance, SetAppearance } from '../wailsjs/go/main/App';
+import { Connect, Disconnect, Status, ReadLog, ListConfigs, AddConfig, UpdateConfig, DeleteConfig, SetConfigGeo, ClearConfigCountry, Ping, ListResources, AddResource, DeleteResource, ListExcludedApps, PickExcludedAppExe, AddExcludedApp, DeleteExcludedApp, ApplyUpdate, StartProxy, StopProxy, GetLanguage, SetLanguage, Version, LookupCountry, GetAppearance, SetAppearance, GetShowProxySettings, SetShowProxySettings } from '../wailsjs/go/main/App';
 import { t, getLang, setLang, applyStaticTranslations } from './i18n.js';
 import { BACKGROUNDS, initBackground, initMiniBackground } from './background.js';
 import { PALETTES } from './palettes.js';
@@ -311,10 +311,23 @@ function renderResourceList() {
     const card = document.createElement('div');
     card.className = 'resource-card';
     card.dataset.id = resource.id;
+    // Same favicon source as the Android client's fetchFaviconBitmap - loaded
+    // as a plain <img> (not fetch()), so it's not subject to CORS at all;
+    // onerror just hides it, matching Android's "leave it off if the fetch
+    // failed" behaviour instead of showing a broken-image glyph.
+    const domain = (() => { try { return new URL(resource.url).hostname; } catch { return null; } })();
+    const faviconImg = domain
+      ? `<img class="resource-favicon" alt="" src="https://www.google.com/s2/favicons?domain=${encodeURIComponent(domain)}&sz=64" onerror="this.style.visibility='hidden'" />`
+      : '';
     card.innerHTML = `
       <button class="resource-remove-btn" title="${t('remove')}">&times;</button>
-      <div class="resource-name">${escapeHtml(resource.name)}</div>
-      <div class="resource-status">${t('checking')}</div>
+      <div class="resource-main">
+        ${faviconImg}
+        <div class="resource-text">
+          <div class="resource-name">${escapeHtml(resource.name)}</div>
+          <div class="resource-status">${t('checking')}</div>
+        </div>
+      </div>
     `;
     card.querySelector('.resource-remove-btn').addEventListener('click', async () => {
       await DeleteResource(resource.id);
@@ -388,8 +401,8 @@ function renderConfigList() {
           <span class="geo-text"></span>
         </div>
       </div>
-      <button class="config-edit-btn" title="${t('edit')}">&#9881;</button>
-      <div class="proxy-block">
+      <button class="config-edit-btn icon-btn-gear" title="${t('edit')}"></button>
+      <div class="proxy-block${showProxySettings ? '' : ' hidden'}">
         <button class="proxy-toggle" title="${t('proxy_tooltip')}">PROXY</button>
         <input
           class="proxy-port-input"
@@ -400,20 +413,12 @@ function renderConfigList() {
           title="${t('proxy_port_title')}"
         />
       </div>
-      <button class="power-btn idle" title="${t('connect')}">
-        <svg viewBox="0 0 24 24" class="power-icon">
-          <path d="M12 2v9" stroke-linecap="round" />
-          <path d="M6.5 5.5a8 8 0 1 0 11 0" stroke-linecap="round" fill="none" />
-        </svg>
-        <svg class="spinner" viewBox="0 0 50 50">
-          <circle cx="25" cy="25" r="20" fill="none" stroke-width="4" />
-        </svg>
-      </button>
+      <button class="toggle-switch config-toggle" title="${t('connect')}"><span class="toggle-switch-thumb"></span></button>
     `;
 
     card.querySelector('.config-edit-btn').addEventListener('click', () => openEditScreen(config));
     card.querySelector('.proxy-toggle').addEventListener('click', () => toggleProxy(config));
-    card.querySelector('.power-btn').addEventListener('click', () => toggleConnection(config));
+    card.querySelector('.config-toggle').addEventListener('click', () => toggleConnection(config));
 
     configList.appendChild(card);
     startPingLoop(config);
@@ -490,16 +495,22 @@ function refreshTileStatuses() {
   for (const config of configs) {
     const card = configList.querySelector(`[data-id="${config.id}"]`);
     if (!card) continue;
-    const btn = card.querySelector('.power-btn');
+    const toggle = card.querySelector('.config-toggle');
 
+    // Same idle/connecting/connected/error states as before; the toggle
+    // itself only distinguishes on (connected or connecting, disabled while
+    // connecting to prevent a double-tap) from off (idle or error) - the
+    // Android client's ConnectSwitch doesn't give error its own look either,
+    // and the card's own border gradient (.config-card.connected) still
+    // shows which tile is active.
     let cls = 'idle';
     if (pendingConnectId === config.id) {
       cls = 'connecting';
     } else if (currentStatus.activeConfigId === config.id && currentStatus.connected) {
       cls = currentStatus.alive === false ? 'error' : 'connected';
     }
-    btn.className = 'power-btn ' + cls;
-    btn.disabled = cls === 'connecting';
+    toggle.classList.toggle('active', cls === 'connected' || cls === 'connecting');
+    toggle.disabled = cls === 'connecting';
     card.classList.toggle('connected', cls === 'connected');
   }
 }
@@ -631,6 +642,7 @@ function applyLanguage(lang) {
   renderConfigList();
   renderResourceList();
   renderExcludedAppList();
+  retranslateAppearanceLabels();
   refreshTileStatuses();
   configScreenTitle.textContent = editingId ? t('edit_config_title') : t('add_config');
   document.getElementById('btn-lang-ru').classList.toggle('active', getLang() === 'ru');
@@ -646,6 +658,13 @@ document.getElementById('btn-lang-en').addEventListener('click', async () => {
   applyLanguage('en');
 });
 
+document.getElementById('show-proxy-settings-toggle').addEventListener('click', async () => {
+  showProxySettings = !showProxySettings;
+  document.getElementById('show-proxy-settings-toggle').classList.toggle('active', showProxySettings);
+  await SetShowProxySettings(showProxySettings);
+  renderConfigList();
+});
+
 // --- Appearance -------------------------------------------------------------
 //
 // Both values live as attributes on <html>; every colour (see style.css's
@@ -656,6 +675,10 @@ document.getElementById('btn-lang-en').addEventListener('click', async () => {
 // has to. Always dark: this design has no light variant to switch to.
 
 let appearance = { palette: 'midnight', background: 'orbs' };
+
+// Whether the per-config proxy button/port field are shown - toggled from
+// Settings, above the language switcher. On by default (see settings.go).
+let showProxySettings = true;
 
 const paletteGridEl = document.getElementById('palette-grid');
 const backgroundOptionsEl = document.getElementById('background-options');
@@ -676,15 +699,33 @@ function renderPaletteGrid() {
           <span class="palette-card-dot" style="background:${p.accent}"></span>
           <span class="palette-card-dot" style="background:${p.surfaceHigh}"></span>
         </div>
-        <div class="palette-card-check">&#10003;</div>
       </div>
       <div class="palette-card-spacer"></div>
-      <div class="palette-card-name">${escapeHtml(p.name)}</div>
+      <div class="palette-card-name">${escapeHtml(t(p.name))}</div>
       <div class="palette-card-bar"></div>
     </button>
   `).join('');
   for (const card of paletteGridEl.querySelectorAll('.palette-card')) {
     card.addEventListener('click', () => setAppearance({ palette: card.dataset.palette }));
+  }
+}
+
+// Re-applies just the translated text on the already-rendered palette/
+// background tiles, rather than rebuilding them - a full renderBackgroundList
+// would tear down and recreate each row's live canvas thumbnail, leaking its
+// still-running animation loop (see startLoop in background.js, which has no
+// teardown). Called on every language switch, so it has to stay cheap.
+function retranslateAppearanceLabels() {
+  for (const card of paletteGridEl.querySelectorAll('.palette-card')) {
+    const p = PALETTES.find((x) => x.id === card.dataset.palette);
+    if (p) card.querySelector('.palette-card-name').textContent = t(p.name);
+  }
+  for (const row of backgroundOptionsEl.querySelectorAll('.background-tile')) {
+    const bg = BACKGROUNDS.find((x) => x.id === row.dataset.background);
+    if (bg) {
+      row.querySelector('.background-tile-name').textContent = t(bg.name);
+      row.querySelector('.background-tile-desc').textContent = t(bg.desc);
+    }
   }
 }
 
@@ -708,16 +749,15 @@ if (window.ResizeObserver) {
 // independently of whichever background is actually active.
 function renderBackgroundList() {
   backgroundOptionsEl.innerHTML = BACKGROUNDS.map((bg) => `
-    <button class="background-row" data-background="${bg.id}">
+    <button class="background-tile" data-background="${bg.id}">
       <canvas class="background-thumb" data-background="${bg.id}"></canvas>
-      <div class="background-row-text">
-        <div class="background-row-name">${escapeHtml(bg.name)}</div>
-        <div class="background-row-desc">${escapeHtml(bg.desc)}</div>
+      <div class="background-tile-text">
+        <div class="background-tile-name">${escapeHtml(t(bg.name))}</div>
+        <div class="background-tile-desc">${escapeHtml(t(bg.desc))}</div>
       </div>
-      <div class="background-row-icon">&#10003;</div>
     </button>
   `).join('');
-  for (const row of backgroundOptionsEl.querySelectorAll('.background-row')) {
+  for (const row of backgroundOptionsEl.querySelectorAll('.background-tile')) {
     row.addEventListener('click', () => setAppearance({ background: row.dataset.background }));
     const canvas = row.querySelector('.background-thumb');
     initMiniBackground(canvas, row.dataset.background);
@@ -730,7 +770,7 @@ function applyAppearance() {
   for (const card of document.querySelectorAll('.palette-card')) {
     card.classList.toggle('active', card.dataset.palette === appearance.palette);
   }
-  for (const row of document.querySelectorAll('.background-row')) {
+  for (const row of document.querySelectorAll('.background-tile')) {
     row.classList.toggle('active', row.dataset.background === appearance.background);
   }
 }
@@ -865,6 +905,12 @@ setInterval(refreshStatus, 4000);
   } catch (e) {
     console.error(e);
   }
+  try {
+    showProxySettings = await GetShowProxySettings();
+  } catch (e) {
+    // default (shown) stays if the Go call fails
+  }
+  document.getElementById('show-proxy-settings-toggle').classList.toggle('active', showProxySettings);
   applyAppearance();
   applyStaticTranslations();
   document.getElementById('btn-lang-ru').classList.toggle('active', getLang() === 'ru');

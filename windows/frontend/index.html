@@ -13,9 +13,9 @@
         <div class="header">
           <div class="emblem-wrap"><img src="./src/assets/images/phantom-emblem.png" class="emblem" alt="" /></div>
           <div class="title">Phantom</div>
-          <button id="btn-gear" class="icon-btn" data-i18n-title="settings" title="Настройки">&#9881;</button>
-          <button id="btn-update" class="icon-btn update-btn hidden" data-i18n-title="update_available" title="Доступно обновление">&#11015;</button>
           <div class="spacer"></div>
+          <button id="btn-update" class="icon-btn update-btn hidden" data-i18n-title="update_available" title="Доступно обновление">&#11015;</button>
+          <button id="btn-gear" class="icon-btn icon-btn-gear" data-i18n-title="settings" title="Настройки"></button>
         </div>
 
         <div id="update-progress" class="update-progress hidden"><div id="update-progress-bar" class="update-progress-bar"></div></div>
@@ -75,12 +75,16 @@
           <div class="title" data-i18n="settings">Настройки</div>
         </div>
         <div class="content settings-content">
-          <button id="btn-open-split-tunnel" class="btn btn-outline" data-i18n="split_tunnel">Раздельное туннелирование</button>
+          <button id="btn-open-split-tunnel" class="lang-tile" data-i18n="split_tunnel">Раздельное туннелирование</button>
           <div class="lang-row">
-            <div class="lang-label" data-i18n="language">Язык</div>
+            <div class="lang-label" data-i18n="show_proxy_settings">Отобразить настройки прокси</div>
+            <button id="show-proxy-settings-toggle" class="toggle-switch active"><span class="toggle-switch-thumb"></span></button>
+          </div>
+          <div class="settings-section">
+            <div class="settings-section-title" data-i18n="language">Язык</div>
             <div class="lang-options">
-              <button id="btn-lang-ru" class="btn btn-outline lang-btn">Русский</button>
-              <button id="btn-lang-en" class="btn btn-outline lang-btn">English</button>
+              <button id="btn-lang-ru" class="lang-tile">Русский</button>
+              <button id="btn-lang-en" class="lang-tile">English</button>
             </div>
           </div>
           <div class="settings-section">
@@ -97,7 +101,7 @@
                  list - see renderBackgroundList in main.js. -->
             <div id="background-options" class="background-list"></div>
           </div>
-          <button id="btn-view-log" class="btn btn-outline" data-i18n="view_log">Посмотреть лог</button>
+          <button id="btn-view-log" class="lang-tile" data-i18n="view_log">Посмотреть лог</button>
           <!-- Filled in at startup from the App.Version binding - the same
                constant the updater compares against the latest release tag. -->
           <div id="app-version" class="app-version"></div>

@@ -1,13 +1,26 @@
 package com.phantom.vpn
 
 import android.content.Context
+import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.core.tween
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.offset
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.unit.dp
 
 /**
  * Six interchangeable dark palettes - see PROTOCOL.md's theming section. The
@@ -21,7 +34,8 @@ import androidx.compose.ui.graphics.Color
  * appearance because this feature was added.
  */
 enum class Palette(
-    val displayName: String,
+    // I18n key, not the literal name - see I18n.kt's "palette_*" entries.
+    val nameKey: String,
     val bg: Color,
     val surface: Color,
     val surfaceHigh: Color,
@@ -37,42 +51,42 @@ enum class Palette(
     val backdrop: List<Color>,
 ) {
     MIDNIGHT(
-        displayName = "Полночь",
+        nameKey = "palette_midnight",
         bg = Color(0xFF0E0B18), surface = Color(0xFF171327), surfaceHigh = Color(0xFF211C36), surfaceOutline = Color(0xFF2E2748),
         primary = Color(0xFF8B7CF6), primaryDeep = Color(0xFF6D5AE0), accent = Color(0xFF5B8DEF),
         textPrimary = Color(0xFFF2EFFA), textSecondary = Color(0xFF9C93B8), textMuted = Color(0xFF6B6385),
         backdrop = listOf(Color(0xFF1A162E), Color(0xFF0E0B18), Color(0xFF131325)),
     ),
     EMERALD(
-        displayName = "Изумруд",
+        nameKey = "palette_emerald",
         bg = Color(0xFF07140F), surface = Color(0xFF0F2019), surfaceHigh = Color(0xFF162C23), surfaceOutline = Color(0xFF224034),
         primary = Color(0xFF34D399), primaryDeep = Color(0xFF10B981), accent = Color(0xFF4ECDC4),
         textPrimary = Color(0xFFECFDF5), textSecondary = Color(0xFF8CAFA1), textMuted = Color(0xFF5E7D71),
         backdrop = listOf(Color(0xFF0C271D), Color(0xFF07140F), Color(0xFF0B1F1A)),
     ),
     SUNSET(
-        displayName = "Закат",
+        nameKey = "palette_sunset",
         bg = Color(0xFF17090C), surface = Color(0xFF261216), surfaceHigh = Color(0xFF33191E), surfaceOutline = Color(0xFF48252C),
         primary = Color(0xFFFF7A59), primaryDeep = Color(0xFFE85D3D), accent = Color(0xFFFFB86C),
         textPrimary = Color(0xFFFFF1EC), textSecondary = Color(0xFFC0968D), textMuted = Color(0xFF8C6A63),
         backdrop = listOf(Color(0xFF2E1414), Color(0xFF17090C), Color(0xFF251412)),
     ),
     OCEAN(
-        displayName = "Океан",
+        nameKey = "palette_ocean",
         bg = Color(0xFF061320), surface = Color(0xFF0C2033), surfaceHigh = Color(0xFF122C45), surfaceOutline = Color(0xFF1D3F5E),
         primary = Color(0xFF38BDF8), primaryDeep = Color(0xFF0EA5E9), accent = Color(0xFF6EE7B7),
         textPrimary = Color(0xFFECFAFF), textSecondary = Color(0xFF8AA9BF), textMuted = Color(0xFF5C7A88),
         backdrop = listOf(Color(0xFF0B2436), Color(0xFF061320), Color(0xFF0C2029)),
     ),
     GRAPHITE(
-        displayName = "Графит",
+        nameKey = "palette_graphite",
         bg = Color(0xFF0D0D0F), surface = Color(0xFF17171A), surfaceHigh = Color(0xFF212126), surfaceOutline = Color(0xFF2E2E35),
         primary = Color(0xFFE4E4E7), primaryDeep = Color(0xFFA1A1AA), accent = Color(0xFF7DD3FC),
         textPrimary = Color(0xFFF4F4F5), textSecondary = Color(0xFF9A9AA5), textMuted = Color(0xFF67676F),
         backdrop = listOf(Color(0xFF222225), Color(0xFF0D0D0F), Color(0xFF14191D)),
     ),
     SAKURA(
-        displayName = "Сакура",
+        nameKey = "palette_sakura",
         bg = Color(0xFF15090F), surface = Color(0xFF23121B), surfaceHigh = Color(0xFF301926), surfaceOutline = Color(0xFF452537),
         primary = Color(0xFFFF8FB1), primaryDeep = Color(0xFFE05C8B), accent = Color(0xFFC084FC),
         textPrimary = Color(0xFFFFEFF5), textSecondary = Color(0xFFC195A8), textMuted = Color(0xFF8E6A79),
@@ -84,15 +98,15 @@ enum class Palette(
  * Eight animated-backdrop variants - see AnimatedBackground.kt. "ORBS" is the
  * original/default.
  */
-enum class BackgroundStyle(val label: String, val description: String) {
-    ORBS("Сферы", "Плавно плывущие пятна света"),
-    AURORA("Сияние", "Медленные цветные ленты"),
-    STARS("Звёзды", "Мерцающие точки на фоне"),
-    MESH("Сеть", "Точки, соединённые тонкими линиями"),
-    METEORS("Метеоры", "Редкие росчерки по диагонали"),
-    WAVES("Волны", "Слоистые волнистые линии"),
-    EMBERS("Искры", "Огоньки, поднимающиеся снизу вверх"),
-    PLAIN("Без анимации", "Только фоновый градиент"),
+enum class BackgroundStyle(val labelKey: String, val descriptionKey: String) {
+    ORBS("background_orbs_label", "background_orbs_desc"),
+    AURORA("background_aurora_label", "background_aurora_desc"),
+    STARS("background_stars_label", "background_stars_desc"),
+    MESH("background_mesh_label", "background_mesh_desc"),
+    METEORS("background_meteors_label", "background_meteors_desc"),
+    WAVES("background_waves_label", "background_waves_desc"),
+    EMBERS("background_embers_label", "background_embers_desc"),
+    PLAIN("background_plain_label", "background_plain_desc"),
 }
 
 /**
@@ -107,6 +121,7 @@ object Appearance {
     private const val PREFS = "phantom_settings"
     private const val PALETTE_KEY = "palette"
     private const val BACKGROUND_KEY = "background_style"
+    private const val SHOW_PROXY_SETTINGS_KEY = "show_proxy_settings"
 
     var palette by mutableStateOf(Palette.MIDNIGHT)
         private set
@@ -114,10 +129,14 @@ object Appearance {
     var background by mutableStateOf(BackgroundStyle.ORBS)
         private set
 
+    var showProxySettings by mutableStateOf(true)
+        private set
+
     fun load(context: Context) {
         val p = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
         palette = runCatching { Palette.valueOf(p.getString(PALETTE_KEY, null) ?: "") }.getOrDefault(Palette.MIDNIGHT)
         background = runCatching { BackgroundStyle.valueOf(p.getString(BACKGROUND_KEY, null) ?: "") }.getOrDefault(BackgroundStyle.ORBS)
+        showProxySettings = p.getBoolean(SHOW_PROXY_SETTINGS_KEY, true)
     }
 
     fun setPalette(context: Context, value: Palette) {
@@ -131,6 +150,13 @@ object Appearance {
         background = value
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
             .putString(BACKGROUND_KEY, value.name)
+            .apply()
+    }
+
+    fun setShowProxySettings(context: Context, value: Boolean) {
+        showProxySettings = value
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
+            .putBoolean(SHOW_PROXY_SETTINGS_KEY, value)
             .apply()
     }
 }
@@ -173,4 +199,44 @@ fun PhantomTheme(content: @Composable () -> Unit) {
         error = Danger,
     )
     MaterialTheme(colorScheme = scheme, content = content)
+}
+
+/**
+ * The app's one on/off switch, used everywhere instead of Material3's own
+ * [androidx.compose.material3.Switch]: Material3's SwitchColors only take
+ * flat [Color]s, so it can't give the track a gradient fill, and the track
+ * shimmering with the active palette's [BrandGradient] while on is exactly
+ * what distinguishes "connected"/"on" from a plain neutral toggle elsewhere
+ * in the app. The thumb itself stays plain white regardless of state - only
+ * the track carries the gradient. Track sizing (44x26, 20dp thumb, 3dp
+ * inset) matches the Windows client's .toggle-switch pixel-for-pixel.
+ */
+@Composable
+fun GradientSwitch(
+    checked: Boolean,
+    onCheckedChange: (Boolean) -> Unit,
+    modifier: Modifier = Modifier,
+    enabled: Boolean = true,
+) {
+    val thumbOffset by animateDpAsState(if (checked) 21.dp else 3.dp, tween(200), label = "gradientSwitchThumb")
+    Box(
+        modifier = modifier
+            .size(width = 44.dp, height = 26.dp)
+            .clip(RoundedCornerShape(50))
+            .then(
+                if (checked) Modifier.background(Brush.linearGradient(BrandGradient))
+                else Modifier.background(SurfaceHigh)
+            )
+            .then(
+                if (enabled) Modifier.clickable { onCheckedChange(!checked) } else Modifier
+            ),
+    ) {
+        Box(
+            modifier = Modifier
+                .offset(x = thumbOffset, y = 3.dp)
+                .size(20.dp)
+                .clip(CircleShape)
+                .background(Color.White),
+        )
+    }
 }

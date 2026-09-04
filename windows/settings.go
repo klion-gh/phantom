@@ -11,9 +11,10 @@ import (
 // files means a corrupt or hand-edited one degrades to its default rather than
 // taking the others with it.
 const (
-	languageFileName   = "language"
-	paletteFileName    = "palette"
-	backgroundFileName = "background"
+	languageFileName          = "language"
+	paletteFileName           = "palette"
+	backgroundFileName        = "background"
+	showProxySettingsFileName = "show_proxy_settings"
 )
 
 // loadSetting returns the persisted value of name, falling back to def when the
@@ -82,4 +83,19 @@ func loadBackground() string { return loadSetting(backgroundFileName, "orbs", ba
 
 func saveBackground(background string) {
 	saveSetting(backgroundFileName, background, "orbs", backgrounds...)
+}
+
+// Whether the per-config proxy button and port field are shown at all -
+// stored as "1"/"0" like the other single-token settings; on ("1") by default
+// since that was the only behaviour before this setting existed.
+func loadShowProxySettings() bool {
+	return loadSetting(showProxySettingsFileName, "1", "1", "0") == "1"
+}
+
+func saveShowProxySettings(show bool) {
+	value := "0"
+	if show {
+		value = "1"
+	}
+	saveSetting(showProxySettingsFileName, value, "1", "1", "0")
 }

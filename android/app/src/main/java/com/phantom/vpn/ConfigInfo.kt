@@ -126,6 +126,7 @@ fun ConfigInfoCard(
     pingEnabled: Boolean,
     proxyRunning: Boolean,
     proxyPort: Int?,
+    showProxy: Boolean,
     onToggle: () -> Unit,
     onToggleProxy: (requestedPort: String) -> Unit,
     onLongPress: () -> Unit,
@@ -220,13 +221,15 @@ fun ConfigInfoCard(
             // "controls for this config", not tied to each other's state.
             Column(horizontalAlignment = Alignment.CenterHorizontally) {
                 ConnectSwitch(status = status, onClick = onToggle)
-                Spacer(modifier = Modifier.height(6.dp))
-                ProxyBlock(
-                    running = proxyRunning,
-                    portText = portText,
-                    onPortTextChange = { portText = it },
-                    onToggleClick = { onToggleProxy(portText) },
-                )
+                if (showProxy) {
+                    Spacer(modifier = Modifier.height(6.dp))
+                    ProxyBlock(
+                        running = proxyRunning,
+                        portText = portText,
+                        onPortTextChange = { portText = it },
+                        onToggleClick = { onToggleProxy(portText) },
+                    )
+                }
             }
         }
     }
@@ -242,18 +245,10 @@ fun ConfigInfoCard(
 @Composable
 private fun ConnectSwitch(status: ConnectionStatus, onClick: () -> Unit) {
     val checked = status == ConnectionStatus.CONNECTED || status == ConnectionStatus.CONNECTING
-    androidx.compose.material3.Switch(
+    GradientSwitch(
         checked = checked,
         onCheckedChange = { onClick() },
         enabled = status != ConnectionStatus.CONNECTING,
-        colors = androidx.compose.material3.SwitchDefaults.colors(
-            checkedThumbColor = Primary,
-            checkedTrackColor = PrimaryDeep,
-            checkedBorderColor = Color.Transparent,
-            uncheckedThumbColor = TextSecondary,
-            uncheckedTrackColor = SurfaceHigh,
-            uncheckedBorderColor = TextSecondary.copy(alpha = 0.4f),
-        ),
     )
 }
 

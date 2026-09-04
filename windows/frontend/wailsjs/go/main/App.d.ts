@@ -25,6 +25,8 @@ export function GetAppearance():Promise<string>;
 
 export function GetLanguage():Promise<string>;
 
+export function GetShowProxySettings():Promise<boolean>;
+
 export function ListConfigs():Promise<string>;
 
 export function ListExcludedApps():Promise<string>;
@@ -44,6 +46,8 @@ export function SetAppearance(arg1:string,arg2:string):Promise<void>;
 export function SetConfigGeo(arg1:string,arg2:string,arg3:string,arg4:string):Promise<string>;
 
 export function SetLanguage(arg1:string):Promise<void>;
+
+export function SetShowProxySettings(arg1:boolean):Promise<void>;
 
 export function StartProxy(arg1:string,arg2:string,arg3:number):Promise<string>;
 

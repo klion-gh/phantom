@@ -21,6 +21,7 @@ import android.os.Bundle
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
@@ -34,13 +35,14 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Description
-import androidx.compose.material.icons.filled.SignalCellularAlt
-import androidx.compose.material.icons.filled.TheaterComedy
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.graphics.BlendMode
+import androidx.compose.ui.graphics.ColorFilter
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.res.painterResource
@@ -85,6 +87,15 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         FileLog.i("MainActivity.onCreate")
 
+        // Without this, the system draws its default opaque status/nav bar
+        // background instead of letting AnimatedBackground show through them -
+        // visible as solid black strips top and bottom on gesture-nav phones,
+        // since there's no bezel there to make it read as "chrome" instead of
+        // "broken". WindowInsets.systemBars below (in setContent) keeps actual
+        // content clear of the bars; only the background is meant to run
+        // underneath them.
+        enableEdgeToEdge()
+
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
             ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS)
             != PackageManager.PERMISSION_GRANTED
@@ -97,10 +108,14 @@ class MainActivity : ComponentActivity() {
         setContent {
             PhantomTheme {
                 Box(modifier = Modifier.fillMaxSize()) {
+                    // Deliberately outside the systemBars padding below - the
+                    // backdrop is meant to run edge-to-edge, under the status/nav
+                    // bars, not stop short of them.
                     AnimatedBackground(modifier = Modifier.fillMaxSize())
                     PhantomApp(
                         onConnect = { config -> requestConnect(config) },
                         onDisconnect = { stopVpn() },
+                        modifier = Modifier.windowInsetsPadding(WindowInsets.systemBars),
                     )
                 }
             }
@@ -148,6 +163,7 @@ class MainActivity : ComponentActivity() {
 private fun PhantomApp(
     onConnect: (SavedConfig) -> Unit,
     onDisconnect: () -> Unit,
+    modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
@@ -355,81 +371,83 @@ private fun PhantomApp(
             .forEach { resolveTileMetadataInBackground(it.id, it.yaml, explicit[it.id] == true) }
     }
 
-    when (screen) {
-        Screen.LOG -> LogScreen(onClose = { screen = Screen.SETTINGS })
-        Screen.SETTINGS -> SettingsScreen(
-            onBack = { screen = Screen.MAIN },
-            onViewLog = { screen = Screen.LOG },
-        )
-        Screen.ADD_CONFIG -> ConfigScreen(
-            yaml = editingYaml,
-            isEditing = editingId != null,
-            onYamlChange = { editingYaml = it },
-            onSave = {
-                val id = editingId
-                val targetId = if (id != null) {
-                    ConfigStore.update(context, id, editingYaml)
-                    id
-                } else {
-                    ConfigStore.add(context, editingYaml).id
-                }
-                refreshConfigs()
-                screen = Screen.MAIN
-                resolveGeoInBackground(targetId, editingYaml)
-            },
-            onDelete = {
-                val id = editingId
-                if (id != null) {
-                    if (state.activeConfigId == id) onDisconnect()
-                    ProxyManager.stop(id)
-                    notifyProxyStateChanged()
-                    ConfigStore.delete(context, id)
+    Box(modifier = modifier.fillMaxSize()) {
+        when (screen) {
+            Screen.LOG -> LogScreen(onClose = { screen = Screen.SETTINGS })
+            Screen.SETTINGS -> SettingsScreen(
+                onBack = { screen = Screen.MAIN },
+                onViewLog = { screen = Screen.LOG },
+            )
+            Screen.ADD_CONFIG -> ConfigScreen(
+                yaml = editingYaml,
+                isEditing = editingId != null,
+                onYamlChange = { editingYaml = it },
+                onSave = {
+                    val id = editingId
+                    val targetId = if (id != null) {
+                        ConfigStore.update(context, id, editingYaml)
+                        id
+                    } else {
+                        ConfigStore.add(context, editingYaml).id
+                    }
                     refreshConfigs()
-                }
-                screen = Screen.MAIN
-            },
-            onBack = { screen = Screen.MAIN },
-        )
-        Screen.MAIN -> MainScreen(
-            status = state.status,
-            message = state.message,
-            activeConfigId = state.activeConfigId,
-            configs = configs,
-            resources = resources,
-            appInForeground = appInForeground,
-            hasUpdate = updateInfo != null,
-            updateProgress = updateProgress,
-            isUpdating = isUpdating,
-            onUpdateClick = { applyUpdate() },
-            proxyRunningPorts = proxyRunningPorts,
-            onToggleProxy = { config, portText -> toggleProxy(config, portText) },
-            onToggle = { config ->
-                when {
-                    state.activeConfigId == config.id && state.status == ConnectionStatus.CONNECTED -> onDisconnect()
-                    state.activeConfigId == config.id && state.status == ConnectionStatus.CONNECTING -> Unit
-                    else -> onConnect(config)
-                }
-            },
-            onEditConfig = { config ->
-                editingId = config.id
-                editingYaml = config.yaml
-                screen = Screen.ADD_CONFIG
-            },
-            onAddConfig = {
-                editingId = null
-                editingYaml = ""
-                screen = Screen.ADD_CONFIG
-            },
-            onAddResource = { name, url ->
-                ResourceStore.add(context, name, url)
-                refreshResources()
-            },
-            onDeleteResource = { id ->
-                ResourceStore.delete(context, id)
-                refreshResources()
-            },
-            onOpenSettings = { screen = Screen.SETTINGS },
-        )
+                    screen = Screen.MAIN
+                    resolveGeoInBackground(targetId, editingYaml)
+                },
+                onDelete = {
+                    val id = editingId
+                    if (id != null) {
+                        if (state.activeConfigId == id) onDisconnect()
+                        ProxyManager.stop(id)
+                        notifyProxyStateChanged()
+                        ConfigStore.delete(context, id)
+                        refreshConfigs()
+                    }
+                    screen = Screen.MAIN
+                },
+                onBack = { screen = Screen.MAIN },
+            )
+            Screen.MAIN -> MainScreen(
+                status = state.status,
+                message = state.message,
+                activeConfigId = state.activeConfigId,
+                configs = configs,
+                resources = resources,
+                appInForeground = appInForeground,
+                hasUpdate = updateInfo != null,
+                updateProgress = updateProgress,
+                isUpdating = isUpdating,
+                onUpdateClick = { applyUpdate() },
+                proxyRunningPorts = proxyRunningPorts,
+                onToggleProxy = { config, portText -> toggleProxy(config, portText) },
+                onToggle = { config ->
+                    when {
+                        state.activeConfigId == config.id && state.status == ConnectionStatus.CONNECTED -> onDisconnect()
+                        state.activeConfigId == config.id && state.status == ConnectionStatus.CONNECTING -> Unit
+                        else -> onConnect(config)
+                    }
+                },
+                onEditConfig = { config ->
+                    editingId = config.id
+                    editingYaml = config.yaml
+                    screen = Screen.ADD_CONFIG
+                },
+                onAddConfig = {
+                    editingId = null
+                    editingYaml = ""
+                    screen = Screen.ADD_CONFIG
+                },
+                onAddResource = { name, url ->
+                    ResourceStore.add(context, name, url)
+                    refreshResources()
+                },
+                onDeleteResource = { id ->
+                    ResourceStore.delete(context, id)
+                    refreshResources()
+                },
+                onOpenSettings = { screen = Screen.SETTINGS },
+            )
+        }
     }
 }
 
@@ -473,10 +491,10 @@ private fun MainScreen(
             // The logo sits on its own radial glow rather than a plate/tile
             // background - the glow *is* the backing (see style.css's
             // .emblem-wrap on Windows for the same treatment).
-            Box(modifier = Modifier.size(36.dp), contentAlignment = Alignment.Center) {
+            Box(modifier = Modifier.size(44.dp), contentAlignment = Alignment.Center) {
                 Box(
                     modifier = Modifier
-                        .size(56.dp)
+                        .size(64.dp)
                         .background(
                             Brush.radialGradient(listOf(Primary.copy(alpha = 0.34f), Primary.copy(alpha = 0f))),
                             CircleShape,
@@ -485,7 +503,7 @@ private fun MainScreen(
                 Image(
                     painter = painterResource(R.drawable.ic_logo_emblem),
                     contentDescription = null,
-                    modifier = Modifier.size(34.dp),
+                    modifier = Modifier.size(42.dp),
                 )
             }
             Spacer(modifier = Modifier.width(10.dp))
@@ -495,9 +513,10 @@ private fun MainScreen(
                 fontSize = 20.sp,
                 fontWeight = FontWeight.SemiBold,
             )
-            IconButton(onClick = onOpenSettings) {
-                Text("⚙", fontSize = 22.sp, color = TextSecondary)
-            }
+            // Pushes everything after it (settings, and the update button when
+            // present) to the row's right edge, instead of them trailing right
+            // after the title.
+            Spacer(modifier = Modifier.weight(1f))
             if (hasUpdate) {
                 IconButton(onClick = onUpdateClick, enabled = !isUpdating) {
                     Text(
@@ -507,7 +526,14 @@ private fun MainScreen(
                     )
                 }
             }
-            Spacer(modifier = Modifier.weight(1f))
+            IconButton(onClick = onOpenSettings) {
+                Image(
+                    painter = painterResource(R.drawable.ic_settings_gear),
+                    contentDescription = null,
+                    colorFilter = ColorFilter.tint(TextSecondary),
+                    modifier = Modifier.size(22.dp),
+                )
+            }
         }
 
         // Update download progress, shown under the header/logo while
@@ -538,6 +564,12 @@ private fun MainScreen(
         HorizontalPager(
             state = pagerState,
             modifier = Modifier.weight(1f),
+            // Default pageSpacing is 0 - with no gap, the outgoing and incoming
+            // pages' tiles sit flush against each other mid-swipe (each page's
+            // own content runs edge-to-edge, so nothing but the shared outer
+            // padding separated them). This gives the transition the same
+            // breathing room the pages already have at rest.
+            pageSpacing = 24.dp,
         ) { page ->
             when (page) {
                 0 -> ConfigsPage(
@@ -584,6 +616,10 @@ private fun MainScreen(
  * (configs/mask, resources/signal bars) so tapping is just another way to switch
  * pages alongside swiping, not a separate navigation model.
  */
+// Same tile language as the config/palette cards (18dp rounded, Surface fill,
+// SurfaceOutline border) instead of floating bare over the background - reads
+// as one more piece of the app's tile-based design system rather than a
+// leftover plain icon row.
 @Composable
 private fun BottomNavBar(
     currentPage: Int,
@@ -592,27 +628,54 @@ private fun BottomNavBar(
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(top = 8.dp),
+            .padding(top = 8.dp)
+            .clip(RoundedCornerShape(18.dp))
+            .background(Surface)
+            .border(1.dp, SurfaceOutline, RoundedCornerShape(18.dp)),
         horizontalArrangement = Arrangement.SpaceEvenly,
     ) {
-        NavBarItem(icon = Icons.Filled.TheaterComedy, selected = currentPage == 0, onClick = { onSelect(0) })
-        NavBarItem(icon = Icons.Filled.SignalCellularAlt, selected = currentPage == 1, onClick = { onSelect(1) })
+        NavBarItem(iconRes = R.drawable.ic_nav_lock, selected = currentPage == 0, onClick = { onSelect(0) })
+        NavBarItem(iconRes = R.drawable.ic_nav_globe, selected = currentPage == 1, onClick = { onSelect(1) })
     }
 }
 
+// iconRes is a solid black glyph on transparent - only its alpha channel is
+// used. Unselected just tints it TextSecondary like any other icon; selected
+// recolours it with the active palette's gradient (the same BrandGradient
+// used for the connected-tile border and palette-card bar) via a
+// draw-then-composite trick: paint the glyph normally, then paint the
+// gradient over it with BlendMode.SrcAtop, which only lands where the glyph
+// itself was opaque. graphicsLayer(alpha = 0.99f) is required for the
+// blend mode to actually composite against this content instead of
+// whatever's beneath it.
 @Composable
 private fun NavBarItem(
-    icon: ImageVector,
+    iconRes: Int,
     selected: Boolean,
     onClick: () -> Unit,
 ) {
     IconButton(onClick = onClick) {
-        Icon(
-            imageVector = icon,
-            contentDescription = null,
-            tint = if (selected) Primary else TextSecondary,
-            modifier = Modifier.size(26.dp),
-        )
+        if (selected) {
+            val gradient = Brush.linearGradient(BrandGradient)
+            Image(
+                painter = painterResource(iconRes),
+                contentDescription = null,
+                modifier = Modifier
+                    .size(26.dp)
+                    .graphicsLayer(alpha = 0.99f)
+                    .drawWithContent {
+                        drawContent()
+                        drawRect(brush = gradient, blendMode = BlendMode.SrcAtop)
+                    },
+            )
+        } else {
+            Image(
+                painter = painterResource(iconRes),
+                contentDescription = null,
+                colorFilter = ColorFilter.tint(TextSecondary),
+                modifier = Modifier.size(26.dp),
+            )
+        }
     }
 }
 
@@ -671,6 +734,7 @@ private fun ConfigsPage(
                         pingEnabled = pingEnabled,
                         proxyRunning = proxyRunningPorts.containsKey(config.id),
                         proxyPort = proxyRunningPorts[config.id],
+                        showProxy = Appearance.showProxySettings,
                         onToggle = { onToggle(config) },
                         onToggleProxy = { portText -> onToggleProxy(config, portText) },
                         onLongPress = { onEditConfig(config) },
@@ -861,7 +925,12 @@ private fun ConfigScreen(
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             IconButton(onClick = onBack) {
-                Text("←", fontSize = 22.sp, color = TextPrimary)
+                Image(
+                    painter = painterResource(R.drawable.ic_back_arrow),
+                    contentDescription = null,
+                    colorFilter = ColorFilter.tint(TextPrimary),
+                    modifier = Modifier.size(20.dp),
+                )
             }
             Text(
                 if (isEditing) I18n.t("edit_config_title") else I18n.t("add_config_title"),
@@ -948,7 +1017,12 @@ private fun SettingsScreen(
             modifier = Modifier.padding(start = 20.dp, top = 20.dp, end = 20.dp),
         ) {
             IconButton(onClick = onBack) {
-                Text("←", fontSize = 22.sp, color = TextPrimary)
+                Image(
+                    painter = painterResource(R.drawable.ic_back_arrow),
+                    contentDescription = null,
+                    colorFilter = ColorFilter.tint(TextPrimary),
+                    modifier = Modifier.size(20.dp),
+                )
             }
             Text(I18n.t("settings"), color = TextPrimary, fontSize = 20.sp, fontWeight = FontWeight.SemiBold)
         }
@@ -961,13 +1035,33 @@ private fun SettingsScreen(
                 .verticalScroll(rememberScrollState())
                 .padding(start = 20.dp, top = 8.dp, end = 20.dp, bottom = 32.dp),
         ) {
+            // Show/hide the per-config proxy controls (button + port field) -
+            // read by ConfigInfoCard below. Above the language selector since
+            // it's the setting most likely to be flipped once and forgotten.
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    I18n.t("show_proxy_settings"),
+                    color = TextPrimary,
+                    fontSize = 15.sp,
+                    fontWeight = FontWeight.Medium,
+                    modifier = Modifier.weight(1f),
+                )
+                GradientSwitch(
+                    checked = Appearance.showProxySettings,
+                    onCheckedChange = { setShowProxySettings(context, it) },
+                )
+            }
+            Spacer(Modifier.height(28.dp))
+
             // Language selector - reading I18n.lang here recomposes the whole
-            // app (every screen goes through I18n.t) when it changes.
+            // app (every screen goes through I18n.t) when it changes. Tiles
+            // match the palette cards' visual language rather than the plain
+            // text buttons used previously.
             SectionLabel(I18n.t("language"))
             Spacer(Modifier.height(14.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                LangButton("Русский", I18n.lang == Lang.RU) { setAppLanguage(context, Lang.RU) }
-                LangButton("English", I18n.lang == Lang.EN) { setAppLanguage(context, Lang.EN) }
+                LangTile("Русский", I18n.lang == Lang.RU, modifier = Modifier.weight(1f)) { setAppLanguage(context, Lang.RU) }
+                LangTile("English", I18n.lang == Lang.EN, modifier = Modifier.weight(1f)) { setAppLanguage(context, Lang.EN) }
             }
 
             // Palette. Reading Appearance.palette repaints everything for the
@@ -989,18 +1083,10 @@ private fun SettingsScreen(
             Spacer(Modifier.height(32.dp))
             SectionLabel(I18n.t("background"))
             Spacer(Modifier.height(14.dp))
-            BackgroundStyle.entries.forEach { option ->
-                BackgroundRow(
-                    style = option,
-                    selected = Appearance.background == option,
-                    onClick = { Appearance.setBackground(context, option) },
-                )
-            }
+            BackgroundGrid(context)
 
             Spacer(Modifier.height(28.dp))
-            TextButton(onClick = onViewLog) {
-                Text(I18n.t("view_log"), color = TextSecondary, fontSize = 14.sp, fontWeight = FontWeight.Medium)
-            }
+            LangTile(I18n.t("view_log"), selected = false, onClick = onViewLog)
 
             // Worth having somewhere visible: the app updates itself from
             // GitHub releases, so "which version am I actually running" is
@@ -1066,24 +1152,13 @@ private fun PaletteCard(palette: Palette, selected: Boolean, onClick: () -> Unit
             .clickable(onClick = onClick)
             .padding(14.dp),
     ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                Box(Modifier.size(16.dp).clip(CircleShape).background(palette.primary))
-                Box(Modifier.size(16.dp).clip(CircleShape).background(palette.accent))
-                Box(Modifier.size(16.dp).clip(CircleShape).background(palette.surfaceHigh))
-            }
-            Spacer(Modifier.weight(1f))
-            if (selected) {
-                Box(
-                    modifier = Modifier.size(19.dp).clip(CircleShape).background(palette.primary),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Text("✓", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold)
-                }
-            }
+        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            Box(Modifier.size(16.dp).clip(CircleShape).background(palette.primary))
+            Box(Modifier.size(16.dp).clip(CircleShape).background(palette.accent))
+            Box(Modifier.size(16.dp).clip(CircleShape).background(palette.surfaceHigh))
         }
         Spacer(Modifier.weight(1f))
-        Text(palette.displayName, color = palette.textPrimary, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
+        Text(I18n.t(palette.nameKey), color = palette.textPrimary, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
         Spacer(Modifier.height(4.dp))
         Box(
             modifier = Modifier
@@ -1095,50 +1170,54 @@ private fun PaletteCard(palette: Palette, selected: Boolean, onClick: () -> Unit
     }
 }
 
-// Unlike the palette cards, these use the *active* palette's colours - see
-// the class doc on BackgroundThumbnail for why the thumbnail itself doesn't
-// need special-casing here (it's a genuinely independent live animation).
+// Two per row (unlike the palette grid, not responsive to width - eight
+// variants read better as a fixed 2-column block than a grid that reflows
+// column count). The name sits directly on the live thumbnail rather than
+// beside it, so each tile is the image - no description text, selection is
+// the border alone, same as everywhere else in Settings now.
 @Composable
-private fun BackgroundRow(style: BackgroundStyle, selected: Boolean, onClick: () -> Unit) {
-    val borderWidth by animateDpAsState(if (selected) 2.dp else 1.dp, animationSpec = tween(200), label = "bgRowBorderWidth")
-    val borderColor by animateColorAsState(if (selected) Primary else SurfaceOutline, animationSpec = tween(200), label = "bgRowBorderColor")
+private fun BackgroundGrid(context: android.content.Context) {
+    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        BackgroundStyle.entries.toList().chunked(2).forEach { rowStyles ->
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                rowStyles.forEach { style ->
+                    BackgroundTile(
+                        style = style,
+                        selected = Appearance.background == style,
+                        onClick = { Appearance.setBackground(context, style) },
+                        modifier = Modifier.weight(1f),
+                    )
+                }
+                repeat(2 - rowStyles.size) { Spacer(modifier = Modifier.weight(1f)) }
+            }
+        }
+    }
+}
+
+@Composable
+private fun BackgroundTile(style: BackgroundStyle, selected: Boolean, onClick: () -> Unit, modifier: Modifier = Modifier) {
+    val borderWidth by animateDpAsState(if (selected) 2.dp else 1.dp, animationSpec = tween(200), label = "bgTileBorderWidth")
+    val borderColor by animateColorAsState(if (selected) Primary else SurfaceOutline, animationSpec = tween(200), label = "bgTileBorderColor")
     val shape = RoundedCornerShape(18.dp)
-    Row(
-        verticalAlignment = Alignment.CenterVertically,
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(bottom = 10.dp)
+    Box(
+        contentAlignment = Alignment.Center,
+        modifier = modifier
+            .aspectRatio(1.55f)
             .clip(shape)
-            .background(Surface)
             .border(borderWidth, borderColor, shape)
             .clickable(onClick = onClick),
     ) {
-        // 1px less than the row's own 18dp radius, so it nests inside the
-        // border instead of leaving a visible sliver of square corner.
-        BackgroundThumbnail(
-            style = style,
-            modifier = Modifier
-                .size(width = 96.dp, height = 68.dp)
-                .clip(RoundedCornerShape(topStart = 17.dp, bottomStart = 17.dp)),
+        BackgroundThumbnail(style = style, modifier = Modifier.matchParentSize())
+        // A flat scrim, not a gradient - the name is centered, not anchored
+        // to one edge, so it needs contrast behind it regardless of where a
+        // given variant's brightest particles happen to land.
+        Box(modifier = Modifier.matchParentSize().background(Color.Black.copy(alpha = 0.32f)))
+        Text(
+            I18n.t(style.labelKey),
+            color = Color.White,
+            fontSize = 14.sp,
+            fontWeight = FontWeight.SemiBold,
         )
-        Column(modifier = Modifier.weight(1f).padding(horizontal = 14.dp)) {
-            Text(style.label, color = TextPrimary, fontSize = 15.5.sp, fontWeight = FontWeight.SemiBold)
-            Spacer(Modifier.height(3.dp))
-            Text(style.description, color = TextSecondary, fontSize = 13.sp)
-        }
-        Box(
-            modifier = Modifier
-                .padding(end = 14.dp)
-                .size(21.dp)
-                .clip(CircleShape)
-                .then(
-                    if (selected) Modifier.background(Primary)
-                    else Modifier.border(1.5.dp, TextMuted, CircleShape)
-                ),
-            contentAlignment = Alignment.Center,
-        ) {
-            if (selected) Text("✓", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold)
-        }
     }
 }
 
@@ -1149,13 +1228,30 @@ private fun SectionLabel(text: String) {
     Text(text, color = TextMuted, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, letterSpacing = 0.8.sp)
 }
 
-// Text button family - no fill/border, quieter than the primary action
-// buttons; the active one in a toggle group (language) just turns primary-
-// coloured rather than gaining a background.
+// Same tile language as PaletteCard (18dp rounded, 1px/2px animated border,
+// checkmark badge when selected) so the language switcher reads as part of
+// the same design system rather than a leftover plain button pair.
 @Composable
-private fun LangButton(label: String, active: Boolean, onClick: () -> Unit) {
-    TextButton(onClick = onClick) {
-        Text(label, color = if (active) Primary else TextSecondary, fontSize = 14.sp, fontWeight = FontWeight.Medium)
+private fun LangTile(label: String, selected: Boolean, modifier: Modifier = Modifier, onClick: () -> Unit) {
+    val borderWidth by animateDpAsState(if (selected) 2.dp else 1.dp, animationSpec = tween(200), label = "langTileBorderWidth")
+    val borderColor by animateColorAsState(if (selected) Primary else SurfaceOutline, animationSpec = tween(200), label = "langTileBorderColor")
+    val shape = RoundedCornerShape(18.dp)
+    Box(
+        contentAlignment = Alignment.Center,
+        modifier = modifier
+            .height(52.dp)
+            .clip(shape)
+            .background(Surface)
+            .border(borderWidth, borderColor, shape)
+            .clickable(onClick = onClick)
+            .padding(horizontal = 20.dp),
+    ) {
+        Text(
+            label,
+            color = if (selected) TextPrimary else TextSecondary,
+            fontSize = 14.sp,
+            fontWeight = FontWeight.SemiBold,
+        )
     }
 }
 
@@ -1164,6 +1260,18 @@ private fun LangButton(label: String, active: Boolean, onClick: () -> Unit) {
 // Compose UI.
 private fun setAppLanguage(context: android.content.Context, lang: Lang) {
     I18n.set(context, lang)
+    context.startService(Intent(context, PhantomVpnService::class.java).apply {
+        action = PhantomVpnService.ACTION_SHOW_STATUS
+    })
+}
+
+// Same reasoning as setAppLanguage above: the persistent notification's text
+// and action buttons are built from Appearance.showProxySettings, but the
+// service only re-evaluates that when asked to - without this, the running
+// notification would keep showing/hiding the proxy line until something else
+// (opening the app, connecting, etc.) happened to re-post it.
+private fun setShowProxySettings(context: android.content.Context, show: Boolean) {
+    Appearance.setShowProxySettings(context, show)
     context.startService(Intent(context, PhantomVpnService::class.java).apply {
         action = PhantomVpnService.ACTION_SHOW_STATUS
     })
@@ -1182,7 +1290,12 @@ private fun LogScreen(onClose: () -> Unit) {
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             IconButton(onClick = onClose) {
-                Text("←", fontSize = 22.sp, color = TextPrimary)
+                Image(
+                    painter = painterResource(R.drawable.ic_back_arrow),
+                    contentDescription = null,
+                    colorFilter = ColorFilter.tint(TextPrimary),
+                    modifier = Modifier.size(20.dp),
+                )
             }
             Text(I18n.t("log_title", FileLog.path()), color = TextPrimary, fontSize = 15.sp)
         }

@@ -423,6 +423,17 @@ func (a *App) SetLanguage(lang string) {
 	refreshTrayLanguage()
 }
 
+// GetShowProxySettings returns whether the per-config proxy button and port
+// field should be shown - read once at startup, same as GetAppearance.
+func (a *App) GetShowProxySettings() bool {
+	return loadShowProxySettings()
+}
+
+// SetShowProxySettings persists the show/hide choice for the proxy controls.
+func (a *App) SetShowProxySettings(show bool) {
+	saveShowProxySettings(show)
+}
+
 // ApplyUpdate downloads and installs whatever release checkAndSelfUpdate
 // found (see the "update:available" event) - swapping in the new exe and
 // relaunching. Only ever triggered by the user clicking the update button;
