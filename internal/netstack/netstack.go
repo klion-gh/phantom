@@ -98,6 +98,8 @@ type Tunnel struct {
 	router    RouterFunc
 	direct    DirectDialer
 	dnsWrap   func(io.ReadWriteCloser) io.ReadWriteCloser
+	fakeDNS   string
+	realDNS   string
 
 	refreshSession     func() (*tunnel.Session, error)
 	lastRefreshAttempt time.Time
@@ -152,6 +154,36 @@ func (t *Tunnel) currentRouting() (RouterFunc, DirectDialer, func(io.ReadWriteCl
 	t.sessionMu.Lock()
 	defer t.sessionMu.Unlock()
 	return t.router, t.direct, t.dnsWrap
+}
+
+// SetDNSUpstream makes fakeAddr - a bare IP, with no port, the same address
+// the platform layer hands to the OS as "the VPN's DNS server" - transparently
+// redirect to realUpstream ("ip:port") whenever an app dials it on port 53.
+//
+// This exists because advertising a well-known public resolver (1.1.1.1,
+// 8.8.8.8) as the VPN's own DNS server used to mean Android's "Private DNS:
+// Automatic" would silently upgrade the system resolver to DNS-over-TLS
+// against that same address, since both are well-known DoT providers - once
+// that happens every DNS query leaves as encrypted port-853 traffic that this
+// package's DNS sniffing (see internal/routing.SniffDNS) can never see the
+// plaintext of, so every domain-based smart-routing entry silently stops
+// matching, even though the site is on the list. It reproduced reliably on a
+// real phone and never in the emulator, which doesn't opportunistically
+// upgrade private DNS the same way. Advertising an address nothing real
+// listens on defeats that upgrade outright (the probe just fails and Android
+// falls back to plain UDP:53) - this rewrite is what makes queries to that
+// fake address actually resolve to something instead of timing out.
+func (t *Tunnel) SetDNSUpstream(fakeAddr, realUpstream string) {
+	t.sessionMu.Lock()
+	t.fakeDNS = fakeAddr
+	t.realDNS = realUpstream
+	t.sessionMu.Unlock()
+}
+
+func (t *Tunnel) currentDNSUpstream() (string, string) {
+	t.sessionMu.Lock()
+	defer t.sessionMu.Unlock()
+	return t.fakeDNS, t.realDNS
 }
 
 // SetSessionRefresher installs an optional hook that lets the tunnel recover
@@ -292,6 +324,13 @@ func (t *Tunnel) handleUDP(r *udp.ForwarderRequest) bool {
 //     direct dial was chosen but failed: an excluded app losing its route is
 //     better served by the tunnel than by no connectivity at all.
 func (t *Tunnel) openRemote(network string, localPort uint16, target string) io.ReadWriteCloser {
+	if network == "udp" && isDNSTarget(target) {
+		if fake, real := t.currentDNSUpstream(); fake != "" {
+			if host, _, err := net.SplitHostPort(target); err == nil && host == fake {
+				target = real
+			}
+		}
+	}
 	if bypass := t.currentBypass(); bypass != nil {
 		if conn := bypass(network, localPort, target); conn != nil {
 			return conn

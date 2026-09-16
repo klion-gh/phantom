@@ -28,6 +28,8 @@ type PopularResource struct {
 // wrongly later.
 func PopularResources() []PopularResource {
 	return []PopularResource{
+		res("Telegram", "telegram.org", "t.me", "telegram.me"),
+		res("RuTracker", "rutracker.org", "rutracker.net"),
 		res("Instagram", "instagram.com", "cdninstagram.com"),
 		res("Facebook", "facebook.com", "fbcdn.net"),
 		res("X", "x.com", "twitter.com", "twimg.com"),
@@ -63,11 +65,6 @@ func PopularResources() []PopularResource {
 		res("Bumble", "bumble.com"),
 		res("Badoo", "badoo.com"),
 		res("eBay", "ebay.com", "ebayimg.com"),
-		res("Coursera", "coursera.org"),
-		res("Storytel", "storytel.com"),
-		res("Upwork", "upwork.com"),
-		res("Shutterstock", "shutterstock.com"),
-		res("Depositphotos", "depositphotos.com"),
 	}
 }
 

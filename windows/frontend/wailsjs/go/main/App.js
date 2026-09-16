@@ -46,6 +46,10 @@ export function GetAppearance() {
   return window['go']['main']['App']['GetAppearance']();
 }
 
+export function GetGlassEffect() {
+  return window['go']['main']['App']['GetGlassEffect']();
+}
+
 export function GetLanguage() {
   return window['go']['main']['App']['GetLanguage']();
 }
@@ -120,6 +124,10 @@ export function SetAutoEnabled(arg1) {
 
 export function SetConfigGeo(arg1, arg2, arg3, arg4) {
   return window['go']['main']['App']['SetConfigGeo'](arg1, arg2, arg3, arg4);
+}
+
+export function SetGlassEffect(arg1) {
+  return window['go']['main']['App']['SetGlassEffect'](arg1);
 }
 
 export function SetLanguage(arg1) {

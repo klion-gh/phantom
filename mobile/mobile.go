@@ -45,6 +45,15 @@ import (
 	"gvisor.dev/gvisor/pkg/tcpip/link/fdbased"
 )
 
+// fakeDNSServer is advertised to Android as the VPN's DNS server (see
+// PhantomVpnService.kt's VpnService.Builder) instead of a real public
+// resolver - see netstack.Tunnel.SetDNSUpstream for why. upstreamDNSAddr is
+// where queries to it actually get answered.
+const (
+	fakeDNSServer   = "10.10.0.1"
+	upstreamDNSAddr = "1.1.1.1:53"
+)
+
 // Protector exempts a raw socket fd from the platform's VPN routing, e.g.
 // Android's VpnService.protect(). Implemented on the Kotlin/Swift side and
 // passed into Start.
@@ -232,6 +241,10 @@ func Start(configYAML string, tunFD int, mtu int, protector Protector) (*Tunnel,
 	inner.SetDNSObserver(func(stream io.ReadWriteCloser) io.ReadWriteCloser {
 		return routing.SniffDNS(stream, engine.Domains())
 	})
+	// See netstack.Tunnel.SetDNSUpstream: fakeDNSServer must match whatever
+	// address the platform layer (PhantomVpnService.kt's VpnService.Builder)
+	// hands the OS as the VPN's DNS server.
+	inner.SetDNSUpstream(fakeDNSServer, upstreamDNSAddr)
 
 	return &Tunnel{pool: pool, cancel: cancel, inner: inner, engine: engine}, nil
 }

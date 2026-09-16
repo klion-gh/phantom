@@ -184,18 +184,18 @@
         </div>
       </div>
 
-      <!-- Add/edit config screen -->
-      <div id="screen-config" class="screen hidden">
-        <div class="header">
-          <button id="btn-back-config" class="icon-btn">&#8592;</button>
-          <div id="config-screen-title" class="title" data-i18n="add_config">Добавить конфигурацию</div>
-        </div>
-        <div class="content">
+      <!-- Add/edit config overlay -->
+      <div id="config-overlay" class="overlay hidden">
+        <div class="dialog config-dialog">
+          <div class="header">
+            <button id="btn-back-config" class="icon-btn">&#8592;</button>
+            <div id="config-screen-title" class="title" data-i18n="add_config">Добавить конфигурацию</div>
+          </div>
           <div class="form-inner">
             <div class="label" data-i18n="paste_yaml">Вставьте содержимое client.yaml целиком:</div>
             <textarea id="config-textarea" placeholder='server: "1.2.3.4:8443"&#10;domain: "your-domain.example"&#10;...'></textarea>
             <div class="row">
-              <button id="btn-save" class="btn btn-primary" data-i18n="save">Сохранить</button>
+              <button id="btn-save" class="btn btn-gradient" data-i18n="save">Сохранить</button>
               <button id="btn-delete" class="btn btn-danger hidden" data-i18n="delete">Удалить</button>
             </div>
           </div>
@@ -209,9 +209,15 @@
           <div class="title" data-i18n="settings">Настройки</div>
         </div>
         <div class="content settings-content">
-          <div class="lang-row">
-            <div class="lang-label" data-i18n="show_proxy_settings">Отобразить настройки прокси</div>
-            <button id="show-proxy-settings-toggle" class="toggle-switch active"><span class="toggle-switch-thumb"></span></button>
+          <div class="toggle-row-group">
+            <div class="lang-row">
+              <div class="lang-label" data-i18n="show_proxy_settings">Отобразить настройки прокси</div>
+              <button id="show-proxy-settings-toggle" class="toggle-switch active"><span class="toggle-switch-thumb"></span></button>
+            </div>
+            <div class="lang-row">
+              <div class="lang-label" data-i18n="glass_effect">Эффект прозрачности</div>
+              <button id="glass-effect-toggle" class="toggle-switch"><span class="toggle-switch-thumb"></span></button>
+            </div>
           </div>
           <div class="settings-section">
             <div class="settings-section-title" data-i18n="language">Язык</div>

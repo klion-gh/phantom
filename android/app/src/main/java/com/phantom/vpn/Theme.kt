@@ -122,6 +122,7 @@ object Appearance {
     private const val PALETTE_KEY = "palette"
     private const val BACKGROUND_KEY = "background_style"
     private const val SHOW_PROXY_SETTINGS_KEY = "show_proxy_settings"
+    private const val GLASS_EFFECT_KEY = "glass_effect"
 
     var palette by mutableStateOf(Palette.MIDNIGHT)
         private set
@@ -132,11 +133,17 @@ object Appearance {
     var showProxySettings by mutableStateOf(true)
         private set
 
+    // See [Surface]/[SurfaceHigh]: when on, every tile's fill turns
+    // translucent instead of solid, letting AnimatedBackground show through.
+    var glassEffect by mutableStateOf(false)
+        private set
+
     fun load(context: Context) {
         val p = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
         palette = runCatching { Palette.valueOf(p.getString(PALETTE_KEY, null) ?: "") }.getOrDefault(Palette.MIDNIGHT)
         background = runCatching { BackgroundStyle.valueOf(p.getString(BACKGROUND_KEY, null) ?: "") }.getOrDefault(BackgroundStyle.ORBS)
         showProxySettings = p.getBoolean(SHOW_PROXY_SETTINGS_KEY, true)
+        glassEffect = p.getBoolean(GLASS_EFFECT_KEY, false)
     }
 
     fun setPalette(context: Context, value: Palette) {
@@ -159,14 +166,36 @@ object Appearance {
             .putBoolean(SHOW_PROXY_SETTINGS_KEY, value)
             .apply()
     }
+
+    fun setGlassEffect(context: Context, value: Boolean) {
+        glassEffect = value
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
+            .putBoolean(GLASS_EFFECT_KEY, value)
+            .apply()
+    }
 }
 
 // Exposed as computed properties rather than constants so that reading any of
 // them inside a composable subscribes it to Appearance.palette - switching the
 // palette repaints the app with no other plumbing.
 val Bg: Color get() = Appearance.palette.bg
-val Surface: Color get() = Appearance.palette.surface
-val SurfaceHigh: Color get() = Appearance.palette.surfaceHigh
+
+// Every tile's fill - translucent instead of solid when Appearance.glassEffect
+// is on, so AnimatedBackground bleeds through every card, input and the
+// bottom nav bar alike (they all read this same property already). Dialogs
+// use [DialogSurface] instead: those get their own animated backdrop-blur
+// treatment (see ConfigDialog/AddResourceDialog) where a legible, solid
+// surface on top of the blur reads far better than two competing
+// transparency effects stacked on each other.
+val Surface: Color get() = Appearance.palette.surface.let {
+    if (Appearance.glassEffect) it.copy(alpha = 0.62f) else it
+}
+val SurfaceHigh: Color get() = Appearance.palette.surfaceHigh.let {
+    if (Appearance.glassEffect) it.copy(alpha = 0.72f) else it
+}
+
+// Deliberately ignores glassEffect - see [Surface]'s doc.
+val DialogSurface: Color get() = Appearance.palette.surfaceHigh
 val SurfaceOutline: Color get() = Appearance.palette.surfaceOutline
 val Primary: Color get() = Appearance.palette.primary
 val PrimaryDeep: Color get() = Appearance.palette.primaryDeep

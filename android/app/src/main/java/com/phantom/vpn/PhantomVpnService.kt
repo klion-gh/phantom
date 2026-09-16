@@ -106,6 +106,10 @@ class PhantomVpnService : VpnService() {
          */
         fun applyRoutingToActiveTunnel() {
             RoutingController.applyToTunnel(activeInstance?.tunnel)
+            // Doesn't reconnect anything by itself, so nothing would otherwise
+            // rebuild the notification - and its VPN/Умный VPN label depends on
+            // exactly the flags this just changed.
+            activeInstance?.showPersistentNotification(VpnStateHolder.state.value.status)
         }
     }
 
@@ -275,8 +279,15 @@ class PhantomVpnService : VpnService() {
                     .addAddress("10.10.0.2", 32)
                     .addRoute("0.0.0.0", 0)
                     .addRoute("::", 0)
-                    .addDnsServer("1.1.1.1")
-                    .addDnsServer("8.8.8.8")
+                    // Not a real resolver - nothing listens here. A well-known public
+                    // one (1.1.1.1, 8.8.8.8) used to trigger Android's "Private DNS:
+                    // Automatic" opportunistic upgrade to DNS-over-TLS against that
+                    // same address, since both are recognized DoT providers; once that
+                    // happens DNS leaves as encrypted port-853 traffic this app can
+                    // never see the plaintext of, so smart-routing's domain matching
+                    // silently stops working. mobile.go's netstack.Tunnel.SetDNSUpstream
+                    // rewrites queries aimed here to a real upstream over the tunnel.
+                    .addDnsServer("10.10.0.1")
                     .setMtu(MTU)
                 // Tells Android which physical network the tunnel's own uplink traffic
                 // rides on (metered-status inheritance, and lets the system correctly
@@ -666,14 +677,35 @@ class PhantomVpnService : VpnService() {
             ConnectionStatus.ERROR -> I18n.t("error_short")
             ConnectionStatus.IDLE -> I18n.t("inactive")
         }
+        // "Умный VPN" only when it's actually what's driving the tunnel right now
+        // (see RoutingController.applyToTunnel) - a manual config or "Выбирать
+        // лучшую" both still tunnel the whole device, so they keep the plain
+        // "VPN" label. Read live rather than cached so a mode change that
+        // doesn't itself reconnect (see applyRoutingToActiveTunnel) still shows
+        // up correctly the next time this rebuilds.
+        val smartDriving = status == ConnectionStatus.CONNECTED &&
+            RoutingStore.smartEnabled && !RoutingStore.autoEnabled
+        val vpnLabel = if (smartDriving) I18n.t("smart_vpn") else "VPN"
+        val countrySuffix = activeConfigId
+            ?.let { id -> ConfigStore.loadAll(this).find { it.id == id } }
+            ?.let { cfg ->
+                val name = cfg.country ?: cfg.countryCode ?: return@let null
+                val flag = cfg.countryCode?.let { countryCodeToFlag(it) }.orEmpty()
+                "$flag $name".trim()
+            }
+        val vpnLine = if (status == ConnectionStatus.CONNECTED && countrySuffix != null) {
+            "$vpnLabel: $vpnText | $countrySuffix"
+        } else {
+            "$vpnLabel: $vpnText"
+        }
         val proxyRunning = ProxyManager.hasAnyRunning()
         // Mirrors Settings' "show proxy settings" toggle - when the proxy controls
         // are hidden from the config tiles, they should not leak back in here either.
         val showProxy = Appearance.showProxySettings
         val text = if (showProxy) {
-            "VPN: $vpnText | Proxy: ${if (proxyRunning) I18n.t("active") else I18n.t("inactive")}"
+            "$vpnLine | Proxy: ${if (proxyRunning) I18n.t("active") else I18n.t("inactive")}"
         } else {
-            "VPN: $vpnText"
+            vpnLine
         }
 
         val vpnAction = when (status) {

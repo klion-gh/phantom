@@ -8,7 +8,7 @@ import './style.css';
 // install ever shows, so the app's own footprint grows by the whole set
 // (~2.4MB) once, not per flag shown.
 import 'flag-icons/css/flag-icons.min.css';
-import { Connect, Disconnect, Status, ReadLog, ListConfigs, AddConfig, UpdateConfig, DeleteConfig, SetConfigGeo, ClearConfigCountry, Ping, ListResources, AddResource, DeleteResource, ListExcludedApps, PickExcludedAppExe, AddExcludedApp, DeleteExcludedApp, ApplyUpdate, StartProxy, StopProxy, GetLanguage, SetLanguage, Version, LookupCountry, GetAppearance, SetAppearance, GetShowProxySettings, SetShowProxySettings, GetRoutingState, SetRoutingMode, SetSmartEnabled, SetSmartSites, SetSmartConfigs, SetAutoEnabled, SetAutoConfigs, SetAppsEnabled, SetAppsInclude, ReconnectActive, RoutingHealth, PopularResources } from '../wailsjs/go/main/App';
+import { Connect, Disconnect, Status, ReadLog, ListConfigs, AddConfig, UpdateConfig, DeleteConfig, SetConfigGeo, ClearConfigCountry, Ping, ListResources, AddResource, DeleteResource, ListExcludedApps, PickExcludedAppExe, AddExcludedApp, DeleteExcludedApp, ApplyUpdate, StartProxy, StopProxy, GetLanguage, SetLanguage, Version, LookupCountry, GetAppearance, SetAppearance, GetShowProxySettings, SetShowProxySettings, GetGlassEffect, SetGlassEffect, GetRoutingState, SetRoutingMode, SetSmartEnabled, SetSmartSites, SetSmartConfigs, SetAutoEnabled, SetAutoConfigs, SetAppsEnabled, SetAppsInclude, ReconnectActive, RoutingHealth, PopularResources } from '../wailsjs/go/main/App';
 import { t, getLang, setLang, applyStaticTranslations } from './i18n.js';
 import { BACKGROUNDS, initBackground, initMiniBackground } from './background.js';
 import { PALETTES } from './palettes.js';
@@ -27,7 +27,6 @@ window.addEventListener('unhandledrejection', (e) => {
 
 const screens = {
   main: document.getElementById('screen-main'),
-  config: document.getElementById('screen-config'),
   settings: document.getElementById('screen-settings'),
   log: document.getElementById('screen-log'),
   splitTunnel: document.getElementById('screen-split-tunnel'),
@@ -50,12 +49,28 @@ function showScreen(name) {
   relayoutScrollbars(screens[name]);
 }
 
+// Add-config/add-resource/delete-confirm all sit on top of whatever screen is
+// already showing rather than replacing it, so opening one doesn't need (and
+// must not force) a screen change - only fade+blur the overlay itself in/out.
+// .hidden is still what keeps a closed overlay out of layout and off the tab
+// order; .visible is added a frame later (removed a transition-length later on
+// the way out) purely to give the CSS transition something to animate between.
+function showOverlay(el) {
+  el.classList.remove('hidden');
+  requestAnimationFrame(() => el.classList.add('visible'));
+}
+function hideOverlay(el) {
+  el.classList.remove('visible');
+  setTimeout(() => el.classList.add('hidden'), 260);
+}
+
 const configList = document.getElementById('config-list');
 const emptyState = document.getElementById('empty-state');
 const errorText = document.getElementById('error-text');
 const configTextarea = document.getElementById('config-textarea');
 const configScreenTitle = document.getElementById('config-screen-title');
 const btnDelete = document.getElementById('btn-delete');
+const configOverlay = document.getElementById('config-overlay');
 const deleteConfirm = document.getElementById('delete-confirm');
 const logText = document.getElementById('log-text');
 const resourceList = document.getElementById('resource-list');
@@ -612,7 +627,7 @@ function openEditScreen(config) {
   configTextarea.value = config.yaml;
   configScreenTitle.textContent = t('edit_config_title');
   btnDelete.classList.remove('hidden');
-  showScreen('config');
+  showOverlay(configOverlay);
 }
 
 document.getElementById('btn-add').addEventListener('click', () => {
@@ -620,10 +635,10 @@ document.getElementById('btn-add').addEventListener('click', () => {
   configTextarea.value = '';
   configScreenTitle.textContent = t('add_config');
   btnDelete.classList.add('hidden');
-  showScreen('config');
+  showOverlay(configOverlay);
 });
 
-document.getElementById('btn-back-config').addEventListener('click', () => showScreen('main'));
+document.getElementById('btn-back-config').addEventListener('click', () => hideOverlay(configOverlay));
 
 document.getElementById('btn-save').addEventListener('click', async () => {
   const yaml = configTextarea.value;
@@ -634,7 +649,7 @@ document.getElementById('btn-save').addEventListener('click', async () => {
     targetId = await AddConfig(yaml);
   }
   await reloadConfigs();
-  showScreen('main');
+  hideOverlay(configOverlay);
 
   // Resolve IP/country once in the background - the tile shows "—" for
   // location until this lands, then re-renders itself via reloadConfigs.
@@ -643,16 +658,16 @@ document.getElementById('btn-save').addEventListener('click', async () => {
   }
 });
 
-btnDelete.addEventListener('click', () => deleteConfirm.classList.remove('hidden'));
-document.getElementById('btn-delete-cancel').addEventListener('click', () => deleteConfirm.classList.add('hidden'));
+btnDelete.addEventListener('click', () => showOverlay(deleteConfirm));
+document.getElementById('btn-delete-cancel').addEventListener('click', () => hideOverlay(deleteConfirm));
 document.getElementById('btn-delete-confirm').addEventListener('click', async () => {
-  deleteConfirm.classList.add('hidden');
+  hideOverlay(deleteConfirm);
   if (editingId) {
     await DeleteConfig(editingId);
     proxyState.delete(editingId);
     await reloadConfigs();
   }
-  showScreen('main');
+  hideOverlay(configOverlay);
 });
 
 document.getElementById('btn-gear').addEventListener('click', () => showScreen('settings'));
@@ -691,6 +706,13 @@ document.getElementById('show-proxy-settings-toggle').addEventListener('click', 
   renderConfigList();
 });
 
+document.getElementById('glass-effect-toggle').addEventListener('click', async () => {
+  glassEffect = !glassEffect;
+  document.getElementById('glass-effect-toggle').classList.toggle('active', glassEffect);
+  document.documentElement.classList.toggle('glass-effect', glassEffect);
+  await SetGlassEffect(glassEffect);
+});
+
 // --- Appearance -------------------------------------------------------------
 //
 // Both values live as attributes on <html>; every colour (see style.css's
@@ -705,6 +727,10 @@ let appearance = { palette: 'midnight', background: 'orbs' };
 // Whether the per-config proxy button/port field are shown - toggled from
 // Settings, above the language switcher. On by default (see settings.go).
 let showProxySettings = true;
+
+// Whether tiles/inputs/the nav bar render translucent (see style.css's
+// body.glass-effect) - off by default (see settings.go).
+let glassEffect = false;
 
 const paletteGridEl = document.getElementById('palette-grid');
 const backgroundOptionsEl = document.getElementById('background-options');
@@ -837,10 +863,10 @@ document.getElementById('btn-copy-log').addEventListener('click', async () => {
 document.getElementById('btn-add-resource').addEventListener('click', () => {
   resourceNameInput.value = '';
   resourceUrlInput.value = '';
-  addResourceOverlay.classList.remove('hidden');
+  showOverlay(addResourceOverlay);
 });
 document.getElementById('btn-resource-cancel').addEventListener('click', () => {
-  addResourceOverlay.classList.add('hidden');
+  hideOverlay(addResourceOverlay);
 });
 document.getElementById('btn-resource-save').addEventListener('click', async () => {
   const name = resourceNameInput.value.trim();
@@ -848,7 +874,7 @@ document.getElementById('btn-resource-save').addEventListener('click', async () 
   if (!name || !url) return;
   if (!/^https?:\/\//i.test(url)) url = 'https://' + url;
   await AddResource(name, url);
-  addResourceOverlay.classList.add('hidden');
+  hideOverlay(addResourceOverlay);
   await reloadResources();
 });
 
@@ -937,6 +963,13 @@ setInterval(refreshStatus, 4000);
     // default (shown) stays if the Go call fails
   }
   document.getElementById('show-proxy-settings-toggle').classList.toggle('active', showProxySettings);
+  try {
+    glassEffect = await GetGlassEffect();
+  } catch (e) {
+    // default (off) stays if the Go call fails
+  }
+  document.getElementById('glass-effect-toggle').classList.toggle('active', glassEffect);
+  document.documentElement.classList.toggle('glass-effect', glassEffect);
   applyAppearance();
   applyStaticTranslations();
   document.getElementById('btn-lang-ru').classList.toggle('active', getLang() === 'ru');

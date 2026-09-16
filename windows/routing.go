@@ -182,6 +182,10 @@ func applyRoutingToEngine() {
 // route existed - the same one per-app split tunneling binds to, and the only
 // way a direct dial escapes the tunnel we just created.
 func installRouting(inner *netstack.Tunnel, physicalIfIndex uint32, haveIfIndex bool) {
+	// No SetDNSUpstream call here, unlike mobile.go's Android setup - Windows
+	// hands out real DNS servers (see wintun.go's configureInterface), so
+	// there is no placeholder address for it to rewrite. See wintun.go for
+	// why Windows deliberately doesn't use the same placeholder+rewrite trick.
 	if !haveIfIndex {
 		// Without a physical interface to bind to there is no way to send a
 		// flow around the tunnel, so smart mode can't be honoured. Leaving the

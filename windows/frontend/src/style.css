@@ -100,6 +100,27 @@
     --primary-glow: color-mix(in srgb, var(--primary) 35%, transparent);
     --primary-glow-soft: color-mix(in srgb, var(--primary) 15%, transparent);
     --surface-outline-60: color-mix(in srgb, var(--surface-outline) 60%, transparent);
+
+    /* "Эффект прозрачности" setting - 100% (opaque, identical to --surface/
+       --surface-high) until html.glass-effect overrides these two, at which
+       point every tile using --surface-glass/--surface-high-glass turns
+       translucent at once, letting #bg-canvas show through. Dialogs use the
+       raw --surface-high instead (see .dialog) and stay opaque regardless -
+       they already get their own animated backdrop-blur treatment, and a
+       legible solid surface on top of that reads better than stacking two
+       transparency effects. */
+    --surface-alpha: 100%;
+    --surface-high-alpha: 100%;
+    --surface-glass: color-mix(in srgb, var(--surface) var(--surface-alpha), transparent);
+    --surface-high-glass: color-mix(in srgb, var(--surface-high) var(--surface-high-alpha), transparent);
+}
+
+/* On <html>, not <body> - same element data-palette/data-background already
+   toggle on (see main.js), so this doesn't depend on cross-element custom
+   property inheritance working the way this file assumes everywhere else. */
+html.glass-effect {
+    --surface-alpha: 46%;
+    --surface-high-alpha: 60%;
 }
 
 * { box-sizing: border-box; }
@@ -198,7 +219,7 @@ html, body {
     border-radius: 16px;
     line-height: 1;
 }
-.icon-btn:hover { background: var(--surface-high); color: var(--text-primary); }
+.icon-btn:hover { background: var(--surface-high-glass); color: var(--text-primary); }
 
 /* The gear is a mask, not a glyph, so it can be tinted to match the active
    palette exactly (a filter-based tint on the raw PNG can't reach an exact
@@ -248,7 +269,7 @@ html, body {
     margin: 0 20px 16px;
     padding: 10px 14px;
     border-radius: 14px;
-    background: var(--surface-high);
+    background: var(--surface-high-glass);
     border: 1px solid var(--surface-outline);
     color: var(--primary);
     font-size: 13px;
@@ -307,7 +328,7 @@ html, body {
     display: flex;
     align-items: center;
     gap: 12px;
-    background: var(--surface);
+    background: var(--surface-glass);
     border-radius: 18px;
     padding: 12px 14px;
     cursor: default;
@@ -319,7 +340,7 @@ html, body {
 .config-card.connected {
     border-color: transparent;
     background:
-        linear-gradient(var(--surface), var(--surface)) padding-box,
+        linear-gradient(var(--surface-glass), var(--surface-glass)) padding-box,
         var(--brand-gradient) border-box;
 }
 
@@ -376,7 +397,7 @@ html, body {
 .proxy-toggle {
     flex-shrink: 0;
     align-self: center;
-    background: var(--surface-high);
+    background: var(--surface-high-glass);
     color: var(--text-secondary);
     font-size: 10px;
     font-weight: 700;
@@ -392,7 +413,7 @@ html, body {
     color: var(--text-primary);
     border: 1px solid transparent;
     background:
-        linear-gradient(var(--surface-high), var(--surface-high)) padding-box,
+        linear-gradient(var(--surface-high-glass), var(--surface-high-glass)) padding-box,
         var(--brand-gradient) border-box;
 }
 
@@ -420,7 +441,7 @@ html, body {
 .proxy-port-input:focus { outline: none; border-bottom-color: var(--primary); color: var(--text-primary); }
 .proxy-port-input:disabled { border-bottom-color: transparent; color: var(--text-secondary); }
 
-.config-edit-btn:hover { background: var(--surface-high); color: var(--text-primary); }
+.config-edit-btn:hover { background: var(--surface-high-glass); color: var(--text-primary); }
 
 /* --- Empty state: a ringed circle, an icon, a title and a hint - centred
    with room to breathe either side. --- */
@@ -438,7 +459,7 @@ html, body {
     width: 96px;
     height: 96px;
     border-radius: 50%;
-    background: var(--surface);
+    background: var(--surface-glass);
     border: 1px solid var(--surface-outline);
     margin-bottom: 24px;
     display: flex;
@@ -482,7 +503,7 @@ html, body {
 
 .resource-card {
     position: relative;
-    background: var(--surface);
+    background: var(--surface-glass);
     border: 1px solid var(--surface-outline-60);
     border-radius: 18px;
     padding: 12px 14px;
@@ -530,7 +551,7 @@ html, body {
     padding: 4px 6px;
     border-radius: 16px;
 }
-.resource-remove-btn:hover { background: var(--surface-high); color: var(--danger); }
+.resource-remove-btn:hover { background: var(--surface-high-glass); color: var(--danger); }
 
 /* --- Config / Settings / Log screens --- */
 /* Base scrolling container for Config/Settings/Log/Split-tunnel - full
@@ -597,7 +618,7 @@ html, body {
 }
 
 textarea, .log-text {
-    background: var(--surface-high);
+    background: var(--surface-high-glass);
     border: 1px solid var(--surface-outline);
     border-radius: 16px;
     color: var(--text-primary);
@@ -615,7 +636,7 @@ textarea:focus { outline: none; border-color: var(--primary); border-width: 1.6p
 textarea::placeholder { color: var(--text-muted); }
 
 .text-input {
-    background: var(--surface-high);
+    background: var(--surface-high-glass);
     border: 1px solid var(--surface-outline);
     border-radius: 16px;
     color: var(--text-primary);
@@ -661,6 +682,15 @@ textarea::placeholder { color: var(--text-muted); }
     color: var(--text-muted);
     cursor: default;
 }
+/* The config popup's save button - brand-gradient fill like the active
+   toggle switch and update-progress bar, rather than a flat colour that reads
+   as a generic system button next to the gradient accents used everywhere
+   else the app calls out a primary action. */
+.btn-gradient {
+    background: var(--brand-gradient);
+    color: #FFFFFF;
+}
+.btn-gradient:hover { filter: brightness(1.08); }
 .btn-outline {
     background: transparent;
     color: var(--text-secondary);
@@ -680,19 +710,33 @@ textarea::placeholder { color: var(--text-muted); }
 }
 .btn-danger:hover { background: color-mix(in srgb, var(--danger) 10%, transparent); }
 
-/* --- Delete confirmation overlay --- */
+/* --- Delete confirmation / add-resource / add-config overlays ---
+   Faded + blurred in rather than snapped in - see showOverlay/hideOverlay in
+   main.js, which toggle .visible a frame after removing .hidden (and remove
+   .hidden only after this transition finishes on the way out). The resting
+   (.hidden) state has zero blur/alpha so the transition actually has
+   something to animate from. */
 .overlay {
     position: absolute;
     inset: 0;
     z-index: 10;
-    /* Opaque enough to fully obscure a connected config tile's glow behind it
-       (box-shadow: 0 0 16px var(--primary-glow) on .power-btn.connected) - at
-       0.5 alpha that glow was still visibly showing through the backdrop. */
-    background: rgba(4, 4, 10, 0.92);
+    background: rgba(4, 4, 10, 0);
+    backdrop-filter: blur(0px);
+    -webkit-backdrop-filter: blur(0px);
     display: flex;
     align-items: center;
     justify-content: center;
     padding: 24px;
+    transition: background 260ms ease, backdrop-filter 260ms ease;
+}
+.overlay.visible {
+    /* Opaque enough to fully obscure a connected config tile's glow behind it
+       (box-shadow: 0 0 16px var(--primary-glow) on .power-btn.connected) - at
+       0.5 alpha that glow was still visibly showing through the backdrop, and
+       the blur alone doesn't fully hide a bright glow, only softens it. */
+    background: rgba(4, 4, 10, 0.72);
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
 }
 .dialog {
     background: var(--surface-high);
@@ -709,7 +753,31 @@ textarea::placeholder { color: var(--text-muted); }
 .dialog-row { display: flex; gap: 10px; justify-content: flex-end; margin-top: 6px; }
 .dialog-row .btn { height: 44px; padding: 0 16px; flex: initial; }
 
-/* --- "Show proxy settings" toggle + language selector (Settings screen) --- */
+/* --- Add/edit config overlay: same popup as above, wider for the YAML field
+   and sized to its content instead of a fixed screen fraction - nothing here
+   grows to fill extra height, so imposing one just left empty space under the
+   save button. --- */
+.config-dialog {
+    width: 100%;
+    max-width: 460px;
+    max-height: 88vh;
+    overflow-y: auto;
+}
+.config-dialog .header { padding: 0 0 4px; }
+.config-dialog .form-inner { max-width: none; }
+.config-dialog textarea { flex: none; height: 260px; }
+
+/* --- "Show proxy settings"/"Glass effect" toggles + language selector
+   (Settings screen) --- */
+/* Groups the two toggle rows tightly together, rather than leaving them
+   28px apart via .content's own flex gap - the same spacing every unrelated
+   section on this screen uses, which read as too much air between two
+   closely related on/off switches. */
+.toggle-row-group {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+}
 .lang-row {
     display: flex;
     align-items: center;
@@ -727,7 +795,7 @@ textarea::placeholder { color: var(--text-muted); }
     flex-shrink: 0;
     border-radius: 100px;
     border: none;
-    background: var(--surface-high);
+    background: var(--surface-high-glass);
     cursor: pointer;
     transition: background-color 200ms ease;
 }
@@ -765,7 +833,7 @@ textarea::placeholder { color: var(--text-muted); }
     font-size: 14px;
     font-weight: 600;
     color: var(--text-secondary);
-    background: var(--surface);
+    background: var(--surface-glass);
     border: 1px solid var(--surface-outline);
     white-space: nowrap;
     transition: border-color 200ms ease, border-width 200ms ease, color 200ms ease;
@@ -851,7 +919,7 @@ textarea::placeholder { color: var(--text-muted); }
     display: flex;
     flex-direction: column;
     border-radius: 18px;
-    background: var(--surface);
+    background: var(--surface-glass);
     border: 1px solid var(--surface-outline);
     cursor: pointer;
     text-align: left;
@@ -968,7 +1036,7 @@ textarea::placeholder { color: var(--text-muted); }
     margin: 8px 20px 16px;
     padding: 6px 0;
     border-radius: 18px;
-    background: var(--surface);
+    background: var(--surface-glass);
     border: 1px solid var(--surface-outline);
     flex-shrink: 0;
 }
@@ -1032,7 +1100,7 @@ textarea::placeholder { color: var(--text-muted); }
 }
 
 .routing-tile {
-    background: var(--surface);
+    background: var(--surface-glass);
     border: 1px solid var(--surface-outline-60);
     border-radius: 18px;
     padding: 16px;
@@ -1070,7 +1138,7 @@ textarea::placeholder { color: var(--text-muted); }
     color: var(--primary);
     flex-shrink: 0;
 }
-.routing-link-btn:hover { background: var(--surface-high); }
+.routing-link-btn:hover { background: var(--surface-high-glass); }
 .routing-link-chevron { font-size: 17px; font-weight: 700; line-height: 1; }
 
 .site-add-row { display: flex; align-items: center; gap: 8px; }
@@ -1125,7 +1193,7 @@ textarea::placeholder { color: var(--text-muted); }
     color: var(--primary);
     font-weight: 600;
 }
-.site-remove-btn:hover { background: var(--surface-high); color: var(--danger); }
+.site-remove-btn:hover { background: var(--surface-high-glass); color: var(--danger); }
 
 .routing-config-list { display: flex; flex-direction: column; gap: 8px; margin-top: 4px; }
 .routing-config-row {
@@ -1134,7 +1202,7 @@ textarea::placeholder { color: var(--text-muted); }
     gap: 10px;
     padding: 12px 14px;
     border-radius: 14px;
-    background: var(--surface-high);
+    background: var(--surface-high-glass);
     border: 1px solid var(--surface-outline);
     cursor: pointer;
     transition: border-color 200ms ease, border-width 200ms ease;
@@ -1185,7 +1253,7 @@ textarea::placeholder { color: var(--text-muted); }
     aspect-ratio: 1;
     padding: 10px;
     border-radius: 18px;
-    background: var(--surface);
+    background: var(--surface-glass);
     cursor: pointer;
     text-align: center;
     /* A gradient outline needs a real gradient, which border-color can't be -
@@ -1199,7 +1267,7 @@ textarea::placeholder { color: var(--text-muted); }
 }
 .popular-tile.active {
     border: 2px solid transparent;
-    background-image: linear-gradient(var(--surface), var(--surface)),
+    background-image: linear-gradient(var(--surface-glass), var(--surface-glass)),
                       linear-gradient(135deg, var(--primary), var(--accent));
     background-origin: border-box;
     background-clip: padding-box, border-box;
@@ -1279,7 +1347,7 @@ textarea::placeholder { color: var(--text-muted); }
     border-radius: 18px;
     text-align: center;
     background:
-        linear-gradient(var(--surface), var(--surface)),
+        linear-gradient(var(--surface-glass), var(--surface-glass)),
         linear-gradient(135deg, var(--primary), var(--accent));
     background-origin: border-box;
     background-clip: padding-box, border-box;

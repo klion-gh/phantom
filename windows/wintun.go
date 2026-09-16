@@ -55,6 +55,17 @@ const (
 	channelQueueN = 512
 )
 
+// directDNSResolver looks up hostnames by dialing a fixed public resolver
+// directly, rather than net.DefaultResolver's OS-ambient behaviour - see its
+// one call site in StartWindows for why that distinction matters here.
+var directDNSResolver = &net.Resolver{
+	PreferGo: true,
+	Dial: func(ctx context.Context, network, _ string) (net.Conn, error) {
+		d := net.Dialer{Timeout: 5 * time.Second}
+		return d.DialContext(ctx, network, "1.1.1.1:53")
+	},
+}
+
 // WinTunnel is a running full-tunnel Windows VPN connection: a Wintun device
 // bridged into internal/netstack the same way mobile/mobile.go bridges a raw
 // Android TUN fd, plus the Windows-specific routing table bookkeeping needed
@@ -127,8 +138,17 @@ func StartWindows(configYAML string, onNetworkChanged func()) (*WinTunnel, error
 		// falling back to A, which was most of the total connect time. The
 		// explicit timeout keeps a slow/unresponsive resolver from stalling
 		// connect indefinitely either way.
+		//
+		// directDNSResolver, not net.DefaultResolver: this runs on every
+		// connect/reconnect, and net.DefaultResolver on Windows defers to
+		// whichever adapter's DNS server the OS currently prefers - right after
+		// a previous Phantom session's Wintun adapter goes away, Windows can
+		// keep preferring a now-gone adapter's DNS setting for a stretch, and a
+		// lookup landing on a dead adapter stalls instead of failing fast.
+		// Resolving via a fixed public server directly sidesteps whichever
+		// adapter Windows currently thinks is best.
 		resolveCtx, resolveCancel := context.WithTimeout(context.Background(), 5*time.Second)
-		ips, resolveErr := net.DefaultResolver.LookupIP(resolveCtx, "ip4", host)
+		ips, resolveErr := directDNSResolver.LookupIP(resolveCtx, "ip4", host)
 		resolveCancel()
 		if resolveErr != nil {
 			log.Printf("resolve endpoint %q failed (skipping): %v", ep, resolveErr)
@@ -467,6 +487,21 @@ func configureInterface(ifaceName string) error {
 		// adapter (routing not fully up yet) that probe can stall for
 		// several seconds per server, which was the single biggest chunk of
 		// connect time.
+		//
+		// Real public resolvers, not the unreachable placeholder+rewrite trick
+		// used on Android (see mobile.go's fakeDNSServer) - that exists there
+		// specifically to defeat Android's "Private DNS: Automatic", which
+		// opportunistically upgrades a well-known DoT provider address to
+		// encrypted DNS the moment it's advertised. Windows has no equivalent
+		// automatic-upgrade behaviour by default, so the placeholder bought no
+		// real protection here - it only added a real, measurable cost: right
+		// after a previous Phantom session's adapter disappears, Windows can
+		// keep preferring that now-gone adapter's DNS server for a stretch,
+		// and a query landing on an address nothing ever answers on stalls for
+		// a full timeout instead of failing fast or just working. That showed
+		// up as both slower connects and, worse, ~20s of a still-broken
+		// browser tab after the tunnel itself already reported connected -
+		// this is the fix for that.
 		{"netsh", "interface", "ip", "set", "dns", "name=" + ifaceName, "static", "1.1.1.1", "validate=no"},
 		{"netsh", "interface", "ip", "add", "dns", "name=" + ifaceName, "8.8.8.8", "index=2", "validate=no"},
 		// Windows' actual route preference is (route metric + interface metric),

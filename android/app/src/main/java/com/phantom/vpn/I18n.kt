@@ -73,6 +73,7 @@ object I18n {
             "log_title" to "Лог (%s)",
             "share" to "Поделиться",
             "show_proxy_settings" to "Отобразить настройки прокси",
+            "glass_effect" to "Эффект прозрачности",
             // routing section
             "routing" to "Маршрутизация",
             "smart_vpn" to "Умный VPN",
@@ -170,6 +171,7 @@ object I18n {
             "log_title" to "Log (%s)",
             "share" to "Share",
             "show_proxy_settings" to "Show proxy settings",
+            "glass_effect" to "Glass effect",
             // routing section
             "routing" to "Routing",
             "smart_vpn" to "Smart VPN",

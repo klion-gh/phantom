@@ -15,6 +15,7 @@ const (
 	paletteFileName           = "palette"
 	backgroundFileName        = "background"
 	showProxySettingsFileName = "show_proxy_settings"
+	glassEffectFileName       = "glass_effect"
 )
 
 // loadSetting returns the persisted value of name, falling back to def when the
@@ -98,4 +99,19 @@ func saveShowProxySettings(show bool) {
 		value = "1"
 	}
 	saveSetting(showProxySettingsFileName, value, "1", "1", "0")
+}
+
+// Whether tiles/inputs/the nav bar render translucent (see style.css's
+// --surface-glass/--surface-high-glass) instead of solid - off by default, so
+// nobody's app changes appearance because this feature was added.
+func loadGlassEffect() bool {
+	return loadSetting(glassEffectFileName, "0", "1", "0") == "1"
+}
+
+func saveGlassEffect(enabled bool) {
+	value := "0"
+	if enabled {
+		value = "1"
+	}
+	saveSetting(glassEffectFileName, value, "0", "1", "0")
 }

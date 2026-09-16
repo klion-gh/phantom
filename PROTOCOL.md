@@ -83,10 +83,21 @@ phantom/
 │   │   └── netstack.go            Shared gVisor wiring: stack.New, NIC, TCP/UDP forwarders,
 │   │                              splice loops - platform-neutral, fed by either a raw fd
 │   │                              (Android) or a channel.Endpoint (Windows) - see §9
+│   ├── routing/                    Shared smart-VPN engine: per-site domain/CIDR matching,
+│   │   │                          live DNS learning, the built-in popular-sites catalogue,
+│   │   │                          and the multi-config auto-select failover logic - see §9.3
+│   │   ├── engine.go               Engine.ShouldTunnel - the actual per-flow decision
+│   │   ├── domains.go               DomainSet: literal domain/IP/CIDR matching
+│   │   ├── dns.go                   SniffDNS - learns domain->IP from answers crossing the tunnel
+│   │   ├── selector.go              Selector - probes candidate configs, picks/switches the best
+│   │   └── catalog.go               PopularResources() - the built-in "popular sites" picker list
+│   ├── geoip/                       Third-party IP->country lookup for tile metadata - see §9.2
 │   └── pingcheck/
 │       └── pingcheck.go           One real disguised handshake, timed, no tunnel built -
 │                                  backs both apps' "preview a saved server" UI feature
-├── mobile/mobile.go        gomobile-bind entry point: internal/netstack ⇄ Phantom session
+├── mobile/
+│   ├── mobile.go            gomobile-bind entry point: internal/netstack ⇄ Phantom session
+│   └── autoselect.go        gomobile-safe wrapper around internal/routing.Selector - §9.3
 ├── android/                 Kotlin/Compose app (package com.phantom.vpn) using mobile.aar - §10
 ├── windows/                 Wails v2 app (Go + HTML/CSS/JS), phantom.exe - §11
 ├── configs/                 Working client.yaml / server.yaml
@@ -626,32 +637,122 @@ blocked). All three are HTTPS with no API key, each attempt is capped at 8s, and
 returned code is validated as two ASCII letters before it reaches the flag renderer.
 Rate limits are irrelevant at one lookup per config, ever.
 
+### 9.3 Smart routing and auto-select (`internal/routing`)
+
+Shared, platform-neutral logic behind two independent UI features on both apps -
+**"Умный VPN"** (route only listed sites through the tunnel, everything else direct) and
+**"Выбирать лучшую"/"Автоматически"** (probe the user's saved configs in the background
+and keep the tunnel on whichever one currently works best). Neither app re-implements
+either; both call straight into this package (Android via `mobile.Tunnel`/
+`mobile.AutoSelector`, Windows directly, since it's the same Go binary).
+
+**`Engine` (`engine.go`)** is the live per-flow decision a running tunnel consults via
+`ShouldTunnel(network, target string) bool`, called once per new TCP/UDP flow by
+`internal/netstack.Tunnel.openRemote` (§9) - never per packet. Two modes:
+
+- `ModeAll` - tunnel everything. The default, and what a plain "Автоматически"/manual
+  config connection uses; domain matching plays no part in it.
+- `ModeSmart` - tunnel only what `DomainSet.Match` (below) says belongs to the user's
+  site list; DNS itself (port 53) always rides the tunnel regardless of the list, both
+  because resolving a blocked domain over the local network is how it comes back
+  poisoned/NXDOMAIN, and because the DNS sniffer (below) needs to see the answer to learn
+  from it. An **empty** site list under `ModeSmart` still tunnels everything rather than
+  nothing - the safer reading of "the user turned a VPN on" is the UI's job to prevent by
+  not letting them get here with nothing listed, not the engine's.
+
+**`DomainSet` (`domains.go`)** is what `Match` actually checks against. Each entry the
+user types is a domain (`"youtube.com"`, matches it and every subdomain), a literal IP, or
+a CIDR block. The catch domain-based routing can never fully avoid: **by the time a flow
+reaches the engine, the app has already resolved the name and is dialing a bare IP** - the
+domain the user typed is long gone. `DomainSet.Learn(name, ips)` bridges that gap by
+recording which IPs a listened-for name resolved to, aged out after 30 minutes
+(`learnedTTL` - long enough to outlive a big site's short DNS TTL, short enough that a
+recycled address stops being tunneled on the user's behalf). Two independent sources feed
+`Learn`:
+
+- **`SniffDNS` (`dns.go`)** wraps every tunnelled DNS (UDP:53) flow and parses each
+  response as it streams past, unchanged either way - a malformed message is just not
+  learned from. Its fundamental limit: **an app doing its own DNS-over-HTTPS/TLS resolves
+  nothing through here** - that traffic is encrypted and never touches this sniffer, so a
+  listed site behind DoH can only ever be matched by a literal IP/CIDR entry, not by name.
+- **`seedDomainIPs` (`engine.go`, called from `Engine.SetSites`)** resolves every
+  name-based entry once via `net.LookupIP` the moment the site list changes, feeding the
+  answer in immediately rather than waiting for the *next* DNS lookup to cross the tunnel.
+  This is what makes "add a site, it works right away" true instead of "works once
+  something happens to trigger a fresh lookup" - and it's the only source at all for a
+  domain whose OS-level resolution DoH/DoT bypasses entirely (see §11.2's DNS note for why
+  Windows and Android diverge here).
+
+**`PopularResources` (`catalog.go`)** is the built-in picker catalogue both apps' "Умный
+VPN" site list offers - name, favicon domain, and every domain that service actually needs
+(a video site's CDN host, not just its front door - the classic way domain-based routing
+half-works: the page loads, matched by name, but the video/API host is a different domain
+that goes direct and stays blocked). Maintained once here specifically so Android and
+Windows can't drift on what a given entry means; each client fetches it as JSON
+(`PopularResourcesJSON`) rather than keeping its own copy.
+
+**`Selector` (`selector.go`)** is the "which config should the tunnel be on" half,
+completely independent of `DomainSet`/`Engine` - it answers a different question (which
+*server*, not which *sites*) and backs both "Автоматически" (whole-device) and smart-VPN
+mode's own choice of which config actually carries the listed sites; the only difference
+between the two is what the platform layer does with the selection; the selection logic
+itself doesn't know which one is asking. It probes every candidate with a real Phantom
+handshake (`internal/pingcheck`, never a bare TCP connect, which a blocked-but-listening
+port would pass) every 30s, and is deliberately biased against switching: a currently
+*working* config needs a sustained 2x-latency-and-150ms lead before a switch is considered
+worth the connections it kills, and a fresh switch has a 90s minimum dwell before another
+"merely better" switch is allowed - only a config that's actually confirmed dead (two
+failed probes in a row) skips that dwell. `mobile/autoselect.go` (`AutoSelector`) is the
+gomobile-safe wrapper Android binds to; Windows (`windows/routing.go`) drives the identical
+`Selector` type directly, no wrapper needed since it's already Go on both sides of the
+call.
+
 ---
 
 ## 10. Android app (`android/`, package `com.phantom.vpn`)
 
-Kotlin + Jetpack Compose (`Theme.kt`, see §10.3). Manual state-based screen
-switching (a `Screen` enum in `MainActivity.kt`; no `NavHost`) across four screens:
+Kotlin + Jetpack Compose (`Theme.kt`, see §10.3). Manual state-based screen switching (a
+`Screen` enum in `MainActivity.kt`; no `NavHost`) for full-screen destinations, plus two
+popups (`ConfigDialog`, `AddResourceDialog`) that overlay `Screen.MAIN` instead of
+replacing it - see below.
 
-- **Main** (`MainScreen` in `MainActivity.kt`): a scrollable list of saved-config tiles
-  (`ConfigInfoCard`, `ConfigInfo.kt`), one per entry in `ConfigStore`. Each tile shows
-  the config's domain, resolved IP, live ping (`fetchPing`/`pingcheck.Ping` via the
-  `Mobile.ping` gomobile binding, polled on a jittered 6-10s schedule independently per
-  tile), and an optional country label taken from the config's own `country`/`country_code`
-  fields (§8, §9.2), rendered as a flag emoji via `countryCodeToFlag` - the emoji is built
-  locally from regional-indicator characters, nothing is downloaded. A circular connect
-  button (`ConnectButton.kt`, reused at a smaller `size` for tiles) sits on the right of
-  each tile; the currently-connected tile additionally gets a purple→pink→blue gradient
-  border (`Modifier.border(width, Brush, shape)`). Header has a "+" button (always adds
-  a new tile, never overwrites an existing one) and a gear icon.
-- **Add/edit config** (`ConfigScreen`): a textarea for the full `client.yaml` text plus
-  Save; reached either via "+" (blank, adds a new `SavedConfig`) or a long-press on an
-  existing tile (pre-filled, edits that tile in place and offers a confirm-gated
-  "Удалить конфигурацию" delete button).
-- **Settings** (`SettingsScreen`): language toggle, theme toggle, accent-gradient
-  swatches (§10.3), a "Посмотреть лог" button, and the running version
-  (`BuildConfig.VERSION_NAME`) pinned at the bottom — config management moved out of here
-  into the dedicated add/edit screen above. The version is worth surfacing because the app
+- **Main** (`MainScreen` in `MainActivity.kt`): a fixed header (logo, gear icon) over a
+  3-page `HorizontalPager` with a `BottomNavBar` to jump between pages directly, mirroring
+  the Windows client's own three sections in the same order:
+  - **Конфигурации** - saved-config tiles (`ConfigInfoCard`, `ConfigInfo.kt`), one per
+    `ConfigStore` entry. Each shows the config's domain, resolved IP, live ping
+    (`fetchPing`/`pingcheck.Ping` via the `Mobile.ping` gomobile binding, polled on a
+    jittered 6-10s schedule independently per tile), and an optional country label from
+    the config's own `country`/`country_code` fields (§8, §9.2) as a flag emoji
+    (`countryCodeToFlag`, built locally from regional-indicator characters, nothing
+    downloaded) plus name. A `GradientSwitch` (`Theme.kt`) connects/disconnects that
+    config; the currently-connected tile gets a purple→pink→blue gradient border. "+"
+    opens `ConfigDialog` blank; long-pressing an existing tile opens it pre-filled for
+    editing.
+  - **Маршрутизация** (`RoutingPage.kt`) - the smart-routing UI over §9.3's shared
+    engine: an "Умный VPN" toggle + site list (with a "Популярные ресурсы" picker,
+    `PopularResourcesScreen.kt`, listing §9.3's built-in catalogue) for per-site routing,
+    and a "Выбирать лучшую" toggle for whole-device auto-select. The three ways of
+    driving the tunnel - a manually-connected config, "Выбирать лучшую", and "Умный
+    VPN" - are mutually exclusive in the UI: whichever isn't in charge is dimmed
+    (`InactiveOverlay`, 40% opacity + a tap-swallowing overlay) and explains why, rather
+    than silently conflicting with whichever mode actually owns the tunnel.
+  - **Ресурсы под обход** - a user-maintained list of extra sites pinged for reachability
+    (independent of, and in addition to, the Умный VPN site list above), plus
+    `AddResourceDialog`, a small popup (`androidx.compose.material3.AlertDialog`) for
+    adding one.
+- **Add/edit config** (`ConfigDialog`, `MainActivity.kt`) - a popup over whatever screen
+  is already showing (`androidx.compose.ui.window.Dialog`, `usePlatformDefaultWidth =
+  false`), not a separate screen: back arrow, a textarea for the full `client.yaml` text,
+  a gradient-filled Save button matching the app's other primary accents (the
+  `GradientSwitch` track, the update-progress fill), and - only when editing an existing
+  config - a confirm-gated "Удалить конфигурацию" delete button. Opening it blurs
+  (`Modifier.blur`, animated) whatever's behind it, same treatment as `AddResourceDialog`.
+- **Settings** (`SettingsScreen`): a "Показать настройки прокси" toggle, an "Эффект
+  прозрачности" toggle (below - makes every tile's fill translucent instead of solid, so
+  `AnimatedBackground` shows through; see §10.3), language, one of six palettes and one of
+  eight animated backdrops (§10.3), a "Посмотреть лог" button, and the running version
+  (`BuildConfig.VERSION_NAME`) pinned at the bottom - worth surfacing because the app
   updates itself from GitHub releases, so "which build am I on" is the first question when
   an update does or doesn't arrive.
 - **Log** (`LogScreen`): shows `FileLog`'s persisted plain-text log with a share button.
@@ -675,23 +776,45 @@ new one, rather than requiring an explicit disconnect first.
 A persistent, ongoing notification (posted via `startForeground`/`NotificationManager.notify`
 depending on state, never removed on disconnect — `stopForeground(false)`/`STOP_FOREGROUND_DETACH`
 detaches without clearing it) mirrors the connect/disconnect state with an action button
-("Подключить"/"Отключить"). Tapping "Подключить" from the notification (no fresh config
-extras available from a static `PendingIntent`) resumes whichever config ID was last
-connected (`VpnStateHolder`'s `activeConfigId`, persisted across restarts), falling back
-to the first saved config if none. On Android 13+ (`TIRAMISU`), `MainActivity` requests
-the runtime `POST_NOTIFICATIONS` permission on first launch — without it the
-notification silently never appears, since the manifest `<uses-permission>` declaration
-alone isn't sufficient starting with that API level.
+("Подключить"/"Отключить"). Its text line is `"<label>: <status> | <flag> <country>"` -
+`label` is "Умный VPN" when that mode (and not "Выбирать лучшую") is what's actually
+driving the tunnel right now, otherwise plain "VPN" (a manually-connected config or
+"Выбирать лучшую" both still tunnel the whole device); the country segment is the active
+config's own cached `country`/`country_code` and is only shown while `CONNECTED`. Read
+live off `RoutingStore` on every rebuild, not cached, so a mode change that doesn't itself
+reconnect (`PhantomVpnService.applyRoutingToActiveTunnel`, called when the site list or the
+Умный VPN toggle changes while already connected) still refreshes it. Tapping "Подключить"
+from the notification (no fresh config extras available from a static `PendingIntent`)
+resumes whichever config ID was last connected (`VpnStateHolder`'s `activeConfigId`,
+persisted across restarts), falling back to the first saved config if none. On Android 13+
+(`TIRAMISU`), `MainActivity` requests the runtime `POST_NOTIFICATIONS` permission on first
+launch — without it the notification silently never appears, since the manifest
+`<uses-permission>` declaration alone isn't sufficient starting with that API level.
 
 `VpnStateHolder` (`VpnState.kt`) is a simple `MutableStateFlow<VpnState>` bridge between
 the service and the Compose UI; `VpnState` carries `status`/`message`/`activeConfigId`
 (the last reset to `null` whenever `status` goes back to `IDLE`).
 
+A `ConnectivityManager.NetworkCallback` (filtered to `NET_CAPABILITY_NOT_VPN`, so it never
+fires on the tunnel's own interface and loops) rebuilds the tunnel from scratch on a
+physical network change (Wi-Fi↔cellular, etc.), retrying up to 4 times, 3s apart, before
+giving up - a single failed attempt (e.g. one slow TLS handshake right as the network
+settles) used to tear the tunnel down for good with no retry at all.
+
 ### 10.3 Theming (`Theme.kt`, `AnimatedBackground.kt`)
 
-Two independent choices, both persisted in the same plain `SharedPreferences` file the
-language toggle uses (neither is sensitive):
+Three independent choices, all persisted in the same plain `SharedPreferences` file the
+language toggle uses (none is sensitive):
 
+- **Glass effect** (`Appearance.glassEffect`, off by default) — makes `Surface`/
+  `SurfaceHigh`, the two colours every tile/input/the bottom nav bar already read for
+  their fill, translucent (alpha 0.62/0.72) instead of solid, so `AnimatedBackground`
+  shows through everywhere those colours are used at once - no per-screen plumbing needed
+  since they were already computed properties (below). Popups (`ConfigDialog`,
+  `AddResourceDialog`, the delete-confirmation `AlertDialog`) deliberately read a third,
+  always-opaque `DialogSurface` instead: they already get their own animated
+  backdrop-blur treatment when opened, and stacking that with a translucent fill read as
+  muddy rather than "glass".
 - **Palette** — one of six complete dark palettes (`MIDNIGHT`, `EMERALD`, `SUNSET`,
   `OCEAN`, `GRAPHITE`, `SAKURA`; midnight is the original/default), each fixing every
   colour role at once (background/surface/outline, primary/primary-deep/accent, three text
@@ -765,11 +888,17 @@ bug as Android's routing loop (§10.4), but Windows has no per-socket exemption 
 the fix is routing-table specificity instead. `StartWindows` does, strictly in this
 order:
 
-1. Resolve the server's IP (`net.DefaultResolver.LookupIP(ctx, "ip4", host)` — see the
-   AAAA-stall note in §9.1, identical fix applied here) and find the current default
-   gateway (`route print -4 0.0.0.0`, picking the lowest-metric entry whose gateway is
-   an actual IP — this naturally skips any *other* already-active VPN's own `On-link`
-   default route, which has no real gateway address to parse).
+1. Resolve the server's IP via `directDNSResolver` - a `net.Resolver` that dials
+   `1.1.1.1:53` directly rather than deferring to Windows' own notion of "the current best
+   adapter" (`net.DefaultResolver`). That distinction matters specifically because of step
+   4 below: right after a *previous* Phantom session's Wintun adapter disappears, Windows
+   can keep preferring that now-gone adapter's DNS server for a stretch, and a lookup
+   landing on it stalls for the full 5s timeout instead of failing fast or working -
+   measurably slower connects, traced directly to this. `"ip4"` only, not a dual-stack
+   lookup (see the AAAA-stall note in §9.1, identical fix applied here). Also finds the
+   current default gateway (`route print -4 0.0.0.0`, picking the lowest-metric entry
+   whose gateway is an actual IP — this naturally skips any *other* already-active VPN's
+   own `On-link` default route, which has no real gateway address to parse).
 2. Add a `/32` host route for the server IP via that *original* gateway
    (`route add <ip> mask 255.255.255.255 <gateway>`) — more specific than the `/0` route
    added in step 5, so Windows' longest-prefix-match always prefers it regardless of
@@ -777,10 +906,17 @@ order:
 3. Only now dial and establish the Phantom session (`transport.Dial`, pooled via
    `transport.NewConnPool`).
 4. Create the Wintun device (`golang.zx2c4.com/wireguard/tun.CreateTUN`), assign it
-   `10.10.0.2/24`, set DNS (`netsh interface ip set/add dns ... validate=no` — omitting
-   `validate=no` was previously the single largest chunk of connect time, since `netsh`
-   by default probes each DNS server for reachability before committing, which stalls
-   for several seconds on a freshly-created adapter with routing not fully up yet).
+   `10.10.0.2/24`, set DNS to real public resolvers - `1.1.1.1` primary, `8.8.8.8`
+   secondary (`netsh interface ip set/add dns ... validate=no` — omitting `validate=no`
+   was previously the single largest chunk of connect time, since `netsh` by default
+   probes each DNS server for reachability before committing, which stalls for several
+   seconds on a freshly-created adapter with routing not fully up yet). Deliberately
+   **not** the unreachable-placeholder-plus-rewrite trick Android uses (§9.3, §10.3's
+   sibling note) - that exists there specifically to defeat Android's "Private DNS:
+   Automatic", which opportunistically upgrades a well-known DoT provider address to
+   encrypted DNS the moment it's advertised. Windows has no equivalent automatic-upgrade
+   behaviour by default, so the placeholder bought no real protection on this platform,
+   only the connect-time and post-connect DNS-stall cost above.
 5. Pin the new adapter's own interface metric to `1`
    (`netsh interface ipv4 set interface <name> metric=1`) *and* add the `0.0.0.0/0` route
    at route-metric `1` (`netsh interface ipv4 add route 0.0.0.0/0 name=<name> metric=1`).
@@ -790,7 +926,9 @@ order:
    routing race (traffic keeps going out the old path, external IP never changes) unless
    the interface's own metric is also pinned low, not just the route's.
 6. Bridge the Wintun device into `internal/netstack.New` via a gVisor `channel.Endpoint`
-   (§9) and start the TCP/UDP forwarders.
+   (§9), start the TCP/UDP forwarders, and hand the shared `internal/routing.Engine`
+   (§9.3) to it (`installRouting`, `windows/routing.go`) so smart-VPN/split-tunneling
+   decisions apply from the first packet.
 
 `Stop()` tears down in reverse, and explicitly `route delete`s the step-2 bypass host
 route — it isn't tied to the tunnel interface's lifetime the way the `0.0.0.0/0` route
@@ -833,7 +971,41 @@ a given install ever shows) ships inside the exe alongside everything else `//go
 all:frontend/dist` already covers - exactly why the old code's CDN image fetch, the
 dependency §13.6 removed, isn't repeated here.
 
-### 11.4 System tray (`tray.go`)
+Add/edit config (`#config-overlay`) is a popup over whichever screen is already showing,
+not a screen of its own - same `.overlay`/`.dialog` pattern as the delete-confirmation and
+add-resource popups (`showOverlay`/`hideOverlay` in `main.js` fade+`backdrop-filter: blur`
+it in and out over ~260ms, rather than snapping via the plain `.hidden` toggle every other
+screen transition uses). Its Save button is a `.btn-gradient` (the brand gradient fill,
+matching the active toggle switch and the update-progress bar) rather than the flat
+`.btn-primary` used elsewhere, specifically to read as *the* primary action in a popup that
+otherwise looks identical to a generic dialog.
+
+### 11.4 Routing UI: Умный VPN, "Выбирать лучшую", and split tunneling (`routing.go`)
+
+The Settings screen has a "Режим" switch between two **mutually exclusive** ways of
+splitting traffic - they answer opposite questions ("which sites should use the VPN" vs
+"which apps should skip it"), so running both at once would mean two rules fighting over
+the same flow:
+
+- **Умный VPN** (`RoutingModeSmart`) - the site-list UI over §9.3's `Engine`/`DomainSet`,
+  identical in behaviour to Android's Routing page: add sites (with the same
+  §9.3 popular-resources picker), only those go through the tunnel.
+- **Раздельное туннелирование** (`RoutingModeApps`) - per-**app** exclusion instead of
+  per-site inclusion: pick specific `.exe`s (`PickExcludedAppExe`, a native file dialog)
+  that skip the VPN entirely, everything else tunnelled. This has no Android
+  equivalent - Android has no comparable notion of excluding one app from its VPN's
+  capture at the OS level, only per-site inclusion (§11.7).
+
+Independent of that switch, "Выбирать лучшую" (`Автоматически`, `App.SetAutoEnabled`) is
+the same whole-device auto-select as Android's toggle of the same name, over the identical
+shared `Selector` (§9.3) - Windows drives it directly rather than through a
+gomobile-wrapped `AutoSelector`, since both sides of that call are already Go here. As on
+Android, whichever of {a manually-connected config, "Выбирать лучшую", "Умный VPN"} isn't
+in charge of the tunnel right now is dimmed (`.inactive` - `opacity: 0.4`,
+`pointer-events: none`, `filter: grayscale(0.6)`) and explains why, rather than silently
+conflicting with whichever mode actually owns it.
+
+### 11.5 System tray (`tray.go`)
 
 `github.com/energye/systray` runs its own native message loop on a locked OS thread in
 a separate goroutine (`go runTray(app)` in `main.go`, alongside `wails.Run(...)` on the
@@ -850,11 +1022,23 @@ Closing the main window (the X button) doesn't quit the app: `App.beforeClose`
 `true` to cancel the default close-and-quit behavior, so the process (and any active
 tunnel) keeps running in the tray until "Выход" is chosen explicitly.
 
-### 11.5 Theming (`style.css`, `background.js`, `App.GetAppearance`/`SetAppearance`)
+### 11.6 Theming (`style.css`, `background.js`, `App.GetAppearance`/`SetAppearance`)
 
-The same two choices as Android (§10.3) — one of six complete palettes, and one of eight
-animated backdrops — with the same defaults, so an untouched app looks exactly as it did
-before either existed. No light theme here either, for the same reason.
+The same three choices as Android (§10.3) — a glass-effect toggle, one of six complete
+palettes, and one of eight animated backdrops — with the same defaults, so an untouched
+app looks exactly as it did before either existed. No light theme here either, for the
+same reason.
+
+Glass effect (`App.GetGlassEffect`/`SetGlassEffect`, persisted the same way as the other
+two below) works the same way as Android's: `--surface`/`--surface-high` stay the raw,
+fully-opaque palette colours, and two *derived* variables - `--surface-glass`/
+`--surface-high-glass`, `color-mix(in srgb, var(--surface) var(--surface-alpha),
+transparent)` - are what every tile, input and the bottom nav bar actually reads for their
+fill. `html.glass-effect` overrides `--surface-alpha`/`--surface-high-alpha` from 100% down
+to 46%/60%, and because it's the same element `data-palette`/`data-background` already
+toggle on, every one of those consumers turns translucent at once with no other plumbing.
+`.dialog` (delete-confirmation, add-resource, add-config) deliberately keeps reading the
+raw, always-opaque `--surface-high` instead - same reasoning as Android's `DialogSurface`.
 
 The palette is implemented entirely in CSS: `:root[data-palette="…"]` overrides a fixed
 set of variables (`--bg`, `--surface`, `--surface-high`, `--surface-outline`, `--primary`,
@@ -876,6 +1060,52 @@ beside the language file. `GetAppearance` is read before the first paint, so the
 doesn't flash the default palette on its way to the chosen one. `saveSetting` validates
 against the allowed set on both read and write: a hand-edited or no-longer-supported value
 degrades to the default rather than reaching the UI.
+
+### 11.7 Where Windows and Android genuinely differ
+
+Everything in §9 (netstack, pingcheck, geoip) and §9.3 (the routing engine, DNS learning,
+the popular-sites catalogue, the config auto-selector) is one Go implementation shared
+byte-for-byte by both apps, called from Kotlin via `mobile.aar`/gomobile on Android and
+directly, same binary, on Windows. The UI intentionally mirrors itself as closely as
+possible on top of that (same palettes, same tile layout, same three-section
+Configs/Routing/Resources structure, same glass-effect toggle, same popup-with-blurred-
+backdrop pattern for "add" dialogs). What's left, genuinely different, comes down to five
+things, each traceable to a real platform constraint rather than an oversight:
+
+1. **Split tunneling is Windows-only.** Раздельное туннелирование (exclude specific
+   `.exe`s from the VPN, §11.4) has no Android equivalent - `VpnService` doesn't expose a
+   comparable "let this other app's traffic bypass my capture" primitive the way Windows'
+   routing table does. Android's only traffic-selection axis is Умный VPN's per-site
+   inclusion.
+2. **The VPN adapter's DNS server is a different address on each platform, for a
+   platform-specific reason.** Android advertises an address (10.10.0.1) nothing real
+   listens on and rewrites queries to it onto a real upstream over the tunnel
+   (`mobile.go`'s `fakeDNSServer`, wired via `netstack.Tunnel.SetDNSUpstream`) -
+   specifically to defeat Android's "Private DNS: Automatic", which would otherwise
+   silently upgrade a well-known public resolver address to encrypted DNS-over-TLS the
+   moment it's advertised, blinding the DNS sniffer (§9.3) that makes per-site routing
+   work at all. Windows advertises real resolvers (1.1.1.1/8.8.8.8) directly (§11.2) -
+   Windows has no equivalent automatic-upgrade behaviour by default, so the same
+   placeholder trick there was pure cost (a real, measured connect-time and post-connect
+   slowdown) for zero protective benefit.
+3. **Self-update behaviour.** `phantom.exe` downloads and silently applies its own
+   updates from GitHub Releases. The Android app *checks* the same releases feed but can
+   only ever offer a download - Android gives no app the ability to replace its own APK
+   unattended, so installing the update is always a manual, user-confirmed step (§10's
+   Main screen update button).
+4. **Whole-app-alive UI**: Windows minimizes to a system tray icon on window close and
+   keeps running until "Выход" is chosen explicitly (§11.5); Android has no equivalent
+   concept of "the app but no window" - backgrounding it just backgrounds the Activity,
+   and the running tunnel is represented by the persistent notification (§10.2) instead
+   of a tray icon.
+5. **Country flag rendering.** Android draws the ISO code as a regional-indicator emoji
+   pair, built locally, nothing downloaded or bundled (§10's Main screen bullet). Windows
+   bundles the `flag-icons` SVG set instead (§11.3) - Segoe UI Emoji has no flag glyphs on
+   Windows, a deliberate long-standing Microsoft choice rather than a WebView2 bug.
+
+Everything else that might look like a difference at a glance - button copy, exact pixel
+spacing, which icon set is used - is a rendering-technology accident (Compose vs.
+HTML/CSS), not a functional one.
 
 ---
 

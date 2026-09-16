@@ -29,6 +29,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.PagerState
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
@@ -39,6 +40,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.graphics.BlendMode
 import androidx.compose.ui.graphics.ColorFilter
@@ -52,6 +54,8 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
@@ -59,7 +63,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
-private enum class Screen { MAIN, ADD_CONFIG, SETTINGS, LOG, POPULAR_RESOURCES }
+private enum class Screen { MAIN, SETTINGS, LOG, POPULAR_RESOURCES }
 
 class MainActivity : ComponentActivity() {
 
@@ -196,6 +200,7 @@ class MainActivity : ComponentActivity() {
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun PhantomApp(
     onConnect: (SavedConfig) -> Unit,
@@ -210,7 +215,19 @@ private fun PhantomApp(
     var screen by remember { mutableStateOf(Screen.MAIN) }
     var editingId by remember { mutableStateOf<String?>(null) }
     var editingYaml by remember { mutableStateOf("") }
+    // Add/edit config is a popup over Screen.MAIN now, not its own screen - see
+    // ConfigDialog. Kept as its own flag rather than folded into editingId/
+    // editingYaml being non-null, since "adding" (both null/empty) is a valid,
+    // distinct open state too.
+    var showConfigDialog by remember { mutableStateOf(false) }
+    val configDialogBlur by animateDpAsState(if (showConfigDialog) 20.dp else 0.dp, tween(300), label = "configDialogBlur")
     val state by VpnStateHolder.state.collectAsState()
+    // Hoisted here rather than inside MainScreen: that composable is one branch
+    // of the `when (screen)` below, so it gets torn down (and its remembered
+    // state lost) whenever screen switches away to e.g. POPULAR_RESOURCES -
+    // without hoisting, coming back from there would always reset the pager
+    // to page 0 instead of wherever the user actually was.
+    val pagerState = rememberPagerState(pageCount = { 3 })
 
     // Whether the Activity itself is resumed (visible, interactive) right now - both
     // pages' ping loops must stop the instant this goes false, not just once Android
@@ -436,41 +453,12 @@ private fun PhantomApp(
                 onBack = { screen = Screen.MAIN },
                 onViewLog = { screen = Screen.LOG },
             )
-            Screen.ADD_CONFIG -> ConfigScreen(
-                yaml = editingYaml,
-                isEditing = editingId != null,
-                onYamlChange = { editingYaml = it },
-                onSave = {
-                    val id = editingId
-                    val targetId = if (id != null) {
-                        ConfigStore.update(context, id, editingYaml)
-                        id
-                    } else {
-                        ConfigStore.add(context, editingYaml).id
-                    }
-                    refreshConfigs()
-                    screen = Screen.MAIN
-                    resolveGeoInBackground(targetId, editingYaml)
-                },
-                onDelete = {
-                    val id = editingId
-                    if (id != null) {
-                        if (state.activeConfigId == id) onDisconnect()
-                        ProxyManager.stop(id)
-                        notifyProxyStateChanged()
-                        ConfigStore.delete(context, id)
-                        // Drop it from the routing selections too, or the
-                        // selector would keep probing a config that no longer
-                        // exists and could still "choose" it.
-                        RoutingStore.forgetConfig(context, id)
-                        RoutingController.sync(context)
-                        refreshConfigs()
-                    }
-                    screen = Screen.MAIN
-                },
-                onBack = { screen = Screen.MAIN },
-            )
             Screen.MAIN -> MainScreen(
+                // ConfigDialog is a popup over this screen now (see below),
+                // not a screen of its own - blurred out from behind it while
+                // open, animated by the same boolean that opens the dialog.
+                modifier = Modifier.blur(configDialogBlur),
+                pagerState = pagerState,
                 status = state.status,
                 message = state.message,
                 activeConfigId = state.activeConfigId,
@@ -568,12 +556,12 @@ private fun PhantomApp(
                 onEditConfig = { config ->
                     editingId = config.id
                     editingYaml = config.yaml
-                    screen = Screen.ADD_CONFIG
+                    showConfigDialog = true
                 },
                 onAddConfig = {
                     editingId = null
                     editingYaml = ""
-                    screen = Screen.ADD_CONFIG
+                    showConfigDialog = true
                 },
                 onAddResource = { name, url ->
                     ResourceStore.add(context, name, url)
@@ -584,6 +572,43 @@ private fun PhantomApp(
                     refreshResources()
                 },
                 onOpenSettings = { screen = Screen.SETTINGS },
+            )
+        }
+
+        if (showConfigDialog) {
+            ConfigDialog(
+                yaml = editingYaml,
+                isEditing = editingId != null,
+                onYamlChange = { editingYaml = it },
+                onSave = {
+                    val id = editingId
+                    val targetId = if (id != null) {
+                        ConfigStore.update(context, id, editingYaml)
+                        id
+                    } else {
+                        ConfigStore.add(context, editingYaml).id
+                    }
+                    refreshConfigs()
+                    showConfigDialog = false
+                    resolveGeoInBackground(targetId, editingYaml)
+                },
+                onDelete = {
+                    val id = editingId
+                    if (id != null) {
+                        if (state.activeConfigId == id) onDisconnect()
+                        ProxyManager.stop(id)
+                        notifyProxyStateChanged()
+                        ConfigStore.delete(context, id)
+                        // Drop it from the routing selections too, or the
+                        // selector would keep probing a config that no longer
+                        // exists and could still "choose" it.
+                        RoutingStore.forgetConfig(context, id)
+                        RoutingController.sync(context)
+                        refreshConfigs()
+                    }
+                    showConfigDialog = false
+                },
+                onDismiss = { showConfigDialog = false },
             )
         }
     }
@@ -598,6 +623,8 @@ private fun PhantomApp(
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun MainScreen(
+    modifier: Modifier = Modifier,
+    pagerState: PagerState,
     status: ConnectionStatus,
     message: String,
     activeConfigId: String?,
@@ -625,11 +652,19 @@ private fun MainScreen(
     onDeleteResource: (String) -> Unit,
     onOpenSettings: () -> Unit,
 ) {
-    val pagerState = rememberPagerState(pageCount = { 3 })
     val coroutineScope = rememberCoroutineScope()
     var showAddResourceDialog by remember { mutableStateOf(false) }
+    // Same treatment as ConfigDialog's blur one level up (see PhantomApp) -
+    // this one's local since AddResourceDialog's own open/closed state is.
+    val addResourceBlur by animateDpAsState(if (showAddResourceDialog) 20.dp else 0.dp, tween(300), label = "addResourceBlur")
 
-    Column(modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp, vertical = 24.dp)) {
+    // blur() has to wrap the full-size box, not the padded content inside it -
+    // applied after .padding() here first, the blurred layer was only ever the
+    // inset content rect, leaving an unblurred margin around the actual screen
+    // edges instead of covering everything behind the dialog like ConfigDialog
+    // (whose blur comes in via the modifier parameter, ahead of fillMaxSize)
+    // already did correctly.
+    Column(modifier = modifier.blur(addResourceBlur).fillMaxSize().padding(horizontal = 16.dp, vertical = 24.dp)) {
         Row(
             verticalAlignment = Alignment.CenterVertically,
             modifier = Modifier.fillMaxWidth(),
@@ -1159,86 +1194,109 @@ private fun AddResourceDialog(
         dismissButton = {
             TextButton(onClick = onDismiss) { Text(I18n.t("cancel")) }
         },
-        containerColor = SurfaceHigh,
+        containerColor = DialogSurface,
         titleContentColor = TextPrimary,
         textContentColor = TextSecondary,
     )
 }
 
+// Popup over Screen.MAIN rather than a screen of its own (see PhantomApp,
+// which blurs MAIN out from behind this while it's open) - same "everything
+// behind it blurs" language as AddResourceDialog, just with this screen's own
+// header/back-button layout instead of AlertDialog's title/text/buttons slots,
+// since the YAML field and delete action don't fit that shape.
 @Composable
-private fun ConfigScreen(
+private fun ConfigDialog(
     yaml: String,
     isEditing: Boolean,
     onYamlChange: (String) -> Unit,
     onSave: () -> Unit,
     onDelete: () -> Unit,
-    onBack: () -> Unit,
+    onDismiss: () -> Unit,
 ) {
     var showDeleteConfirm by remember { mutableStateOf(false) }
+    val shape = RoundedCornerShape(24.dp)
 
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(20.dp)
-            .verticalScroll(rememberScrollState()),
-        verticalArrangement = Arrangement.spacedBy(14.dp),
-    ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            IconButton(onClick = onBack) {
-                Image(
-                    painter = painterResource(R.drawable.ic_back_arrow),
-                    contentDescription = null,
-                    colorFilter = ColorFilter.tint(TextPrimary),
-                    modifier = Modifier.size(20.dp),
+    Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth(0.94f)
+                // Wraps its content instead of a fixed screen fraction - the
+                // YAML field's own height is already fixed at 280dp, so there
+                // is nothing that grows to fill a taller box, only empty space
+                // below the save button if one is imposed anyway.
+                .clip(shape)
+                .background(DialogSurface)
+                .border(1.dp, SurfaceOutline.copy(alpha = 0.6f), shape)
+                .padding(20.dp)
+                .verticalScroll(rememberScrollState()),
+            verticalArrangement = Arrangement.spacedBy(14.dp),
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                IconButton(onClick = onDismiss) {
+                    Image(
+                        painter = painterResource(R.drawable.ic_back_arrow),
+                        contentDescription = null,
+                        colorFilter = ColorFilter.tint(TextPrimary),
+                        modifier = Modifier.size(20.dp),
+                    )
+                }
+                Text(
+                    if (isEditing) I18n.t("edit_config_title") else I18n.t("add_config_title"),
+                    color = TextPrimary,
+                    fontSize = 20.sp,
+                    fontWeight = FontWeight.SemiBold,
                 )
             }
+
             Text(
-                if (isEditing) I18n.t("edit_config_title") else I18n.t("add_config_title"),
-                color = TextPrimary,
-                fontSize = 20.sp,
-                fontWeight = FontWeight.SemiBold,
+                I18n.t("paste_yaml"),
+                color = TextSecondary,
+                fontSize = 13.sp,
             )
-        }
 
-        Text(
-            I18n.t("paste_yaml"),
-            color = TextSecondary,
-            fontSize = 13.sp,
-        )
+            OutlinedTextField(
+                value = yaml,
+                onValueChange = onYamlChange,
+                placeholder = { Text("server: \"1.2.3.4:443\"\ndomain: \"your-domain.com\"\n...", color = TextSecondary) },
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Text),
+                textStyle = androidx.compose.ui.text.TextStyle(fontFamily = FontFamily.Monospace, fontSize = 13.sp),
+                colors = OutlinedTextFieldDefaults.colors(
+                    focusedTextColor = TextPrimary,
+                    unfocusedTextColor = TextPrimary,
+                    focusedBorderColor = Primary,
+                    unfocusedBorderColor = TextSecondary.copy(alpha = 0.4f),
+                    cursorColor = Primary,
+                ),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(280.dp),
+            )
 
-        OutlinedTextField(
-            value = yaml,
-            onValueChange = onYamlChange,
-            placeholder = { Text("server: \"1.2.3.4:443\"\ndomain: \"your-domain.com\"\n...", color = TextSecondary) },
-            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Text),
-            textStyle = androidx.compose.ui.text.TextStyle(fontFamily = FontFamily.Monospace, fontSize = 13.sp),
-            colors = OutlinedTextFieldDefaults.colors(
-                focusedTextColor = TextPrimary,
-                unfocusedTextColor = TextPrimary,
-                focusedBorderColor = Primary,
-                unfocusedBorderColor = TextSecondary.copy(alpha = 0.4f),
-                cursorColor = Primary,
-            ),
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(280.dp),
-        )
-
-        Button(
-            onClick = onSave,
-            shape = RoundedCornerShape(16.dp),
-            colors = ButtonDefaults.buttonColors(containerColor = Primary, contentColor = Color.White),
-            modifier = Modifier.fillMaxWidth().height(54.dp),
-        ) {
-            Text(I18n.t("save"), fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
-        }
-
-        if (isEditing) {
-            TextButton(
-                onClick = { showDeleteConfirm = true },
-                modifier = Modifier.fillMaxWidth(),
+            // Matches the app's other primary affordances (GradientSwitch's
+            // active track, the update progress fill) instead of the flat
+            // Material button this used to be - a solid colour read as a
+            // generic system control next to the gradient-accented tiles
+            // everywhere else in the app.
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(54.dp)
+                    .clip(RoundedCornerShape(18.dp))
+                    .background(Brush.linearGradient(BrandGradient))
+                    .clickable(onClick = onSave),
+                contentAlignment = Alignment.Center,
             ) {
-                Text(I18n.t("delete_config"), color = Danger, fontSize = 14.sp, fontWeight = FontWeight.Medium)
+                Text(I18n.t("save"), color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
+            }
+
+            if (isEditing) {
+                TextButton(
+                    onClick = { showDeleteConfirm = true },
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text(I18n.t("delete_config"), color = Danger, fontSize = 14.sp, fontWeight = FontWeight.Medium)
+                }
             }
         }
     }
@@ -1258,7 +1316,7 @@ private fun ConfigScreen(
             dismissButton = {
                 TextButton(onClick = { showDeleteConfirm = false }) { Text(I18n.t("cancel")) }
             },
-            containerColor = SurfaceHigh,
+            containerColor = DialogSurface,
             titleContentColor = TextPrimary,
             textContentColor = TextSecondary,
         )
@@ -1309,6 +1367,25 @@ private fun SettingsScreen(
                 GradientSwitch(
                     checked = Appearance.showProxySettings,
                     onCheckedChange = { setShowProxySettings(context, it) },
+                )
+            }
+            Spacer(Modifier.height(20.dp))
+
+            // Turns every tile's solid fill translucent (see Theme.kt's Surface/
+            // SurfaceHigh) so AnimatedBackground shows through everywhere at
+            // once - cards, inputs, the bottom nav bar - with no per-screen
+            // plumbing needed, since they all already read those same colours.
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    I18n.t("glass_effect"),
+                    color = TextPrimary,
+                    fontSize = 15.sp,
+                    fontWeight = FontWeight.Medium,
+                    modifier = Modifier.weight(1f),
+                )
+                GradientSwitch(
+                    checked = Appearance.glassEffect,
+                    onCheckedChange = { Appearance.setGlassEffect(context, it) },
                 )
             }
             Spacer(Modifier.height(28.dp))
