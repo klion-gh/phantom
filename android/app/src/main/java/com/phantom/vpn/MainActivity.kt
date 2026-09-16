@@ -59,21 +59,57 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
-private enum class Screen { MAIN, ADD_CONFIG, SETTINGS, LOG }
+private enum class Screen { MAIN, ADD_CONFIG, SETTINGS, LOG, POPULAR_RESOURCES }
 
 class MainActivity : ComponentActivity() {
 
     private var pendingConfig: SavedConfig? = null
 
+    // Set only by ensureVpnPermission - the "just tell me if it's granted"
+    // path used by the routing toggles below, as opposed to pendingConfig's
+    // "grant it, then connect this specific config" path used by a manual
+    // per-config toggle. Whichever one is non-null when the launcher's result
+    // comes back is the request that's being answered.
+    private var onVpnPermissionResult: ((Boolean) -> Unit)? = null
+
     private val vpnPrepareLauncher = registerForActivityResult(
         ActivityResultContracts.StartActivityForResult()
     ) { result ->
+        val granted = result.resultCode == RESULT_OK
         val config = pendingConfig
         pendingConfig = null
-        if (result.resultCode == RESULT_OK && config != null) {
-            startVpn(config)
+        val callback = onVpnPermissionResult
+        onVpnPermissionResult = null
+        when {
+            callback != null -> callback(granted)
+            granted && config != null -> startVpn(config)
+            else -> VpnStateHolder.update(ConnectionStatus.ERROR, "VPN permission denied")
+        }
+    }
+
+    /**
+     * Runs [onResult] with whether this app is allowed to establish a VPN,
+     * requesting it first via the system's one-time consent dialog if it
+     * isn't yet.
+     *
+     * The auto-selector behind "Умный VPN" and "Автоматически" (see
+     * RoutingController) connects from a background service call with no
+     * Activity in the picture - which works fine once permission has already
+     * been granted (e.g. by an earlier manual per-config connect), but on a
+     * fresh install where the user goes straight for one of these toggles,
+     * there is no Activity around to show the consent dialog and
+     * VpnService.Builder.establish() just silently returns null. Routing the
+     * toggle through this first, from the one place that *can* show that
+     * dialog, is what makes "turn Умный VPN on" work on its own instead of
+     * requiring an unrelated manual connect to have happened first.
+     */
+    private fun ensureVpnPermission(onResult: (Boolean) -> Unit) {
+        val prepareIntent = VpnService.prepare(this)
+        if (prepareIntent == null) {
+            onResult(true)
         } else {
-            VpnStateHolder.update(ConnectionStatus.ERROR, "VPN permission denied")
+            onVpnPermissionResult = onResult
+            vpnPrepareLauncher.launch(prepareIntent)
         }
     }
 
@@ -115,6 +151,7 @@ class MainActivity : ComponentActivity() {
                     PhantomApp(
                         onConnect = { config -> requestConnect(config) },
                         onDisconnect = { stopVpn() },
+                        onEnsureVpnPermission = { onResult -> ensureVpnPermission(onResult) },
                         modifier = Modifier.windowInsetsPadding(WindowInsets.systemBars),
                     )
                 }
@@ -163,6 +200,7 @@ class MainActivity : ComponentActivity() {
 private fun PhantomApp(
     onConnect: (SavedConfig) -> Unit,
     onDisconnect: () -> Unit,
+    onEnsureVpnPermission: (onResult: (Boolean) -> Unit) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
@@ -211,6 +249,18 @@ private fun PhantomApp(
     // actual bound port. Collected from ProxyManager (not kept as this composable's
     // own copy) because the proxies outlive the Activity - see runningPorts's doc.
     val proxyRunningPorts by ProxyManager.runningPorts.collectAsState()
+
+    // Live health of the configs the smart selector is watching, for the
+    // Маршрутизация page's own rows. Polled rather than pushed: the selector
+    // already probes on its own schedule, and mirroring every probe into
+    // Compose state would just be a second copy of the same thing.
+    var configHealth by remember { mutableStateOf<Map<String, ConfigHealth>>(emptyMap()) }
+    LaunchedEffect(appInForeground) {
+        while (appInForeground && isActive) {
+            configHealth = RoutingController.health()
+            delay(2000)
+        }
+    }
 
     fun applyUpdate() {
         val info = updateInfo ?: return
@@ -374,6 +424,14 @@ private fun PhantomApp(
     Box(modifier = modifier.fillMaxSize()) {
         when (screen) {
             Screen.LOG -> LogScreen(onClose = { screen = Screen.SETTINGS })
+            Screen.POPULAR_RESOURCES -> PopularResourcesScreen(
+                onBack = { screen = Screen.MAIN },
+                onToggle = { resource ->
+                    RoutingStore.togglePopular(context, resource.domains)
+                    PhantomVpnService.applyRoutingToActiveTunnel()
+                    RoutingStore.markSitesDirty()
+                },
+            )
             Screen.SETTINGS -> SettingsScreen(
                 onBack = { screen = Screen.MAIN },
                 onViewLog = { screen = Screen.LOG },
@@ -401,6 +459,11 @@ private fun PhantomApp(
                         ProxyManager.stop(id)
                         notifyProxyStateChanged()
                         ConfigStore.delete(context, id)
+                        // Drop it from the routing selections too, or the
+                        // selector would keep probing a config that no longer
+                        // exists and could still "choose" it.
+                        RoutingStore.forgetConfig(context, id)
+                        RoutingController.sync(context)
                         refreshConfigs()
                     }
                     screen = Screen.MAIN
@@ -419,6 +482,81 @@ private fun PhantomApp(
                 isUpdating = isUpdating,
                 onUpdateClick = { applyUpdate() },
                 proxyRunningPorts = proxyRunningPorts,
+                configHealth = configHealth,
+                onToggleAuto = { enabled ->
+                    if (enabled) {
+                        // The selector connects from a background service call
+                        // with no Activity in the picture - see
+                        // ensureVpnPermission's doc for why this has to happen
+                        // here, before that call, rather than there.
+                        onEnsureVpnPermission { granted ->
+                            if (granted) {
+                                RoutingStore.setAutoEnabled(context, true)
+                                RoutingController.sync(context)
+                            }
+                        }
+                    } else {
+                        RoutingStore.setAutoEnabled(context, false)
+                        RoutingController.sync(context)
+                        // Whole-device routing is what was holding the tunnel
+                        // up; with it off, hand control back rather than
+                        // leaving a tunnel nobody asked for running.
+                        onDisconnect()
+                    }
+                },
+                onToggleSmart = { enabled ->
+                    if (enabled) {
+                        onEnsureVpnPermission { granted ->
+                            if (granted) {
+                                RoutingStore.setSmartEnabled(context, true)
+                                RoutingController.sync(context)
+                                PhantomVpnService.applyRoutingToActiveTunnel()
+                            }
+                        }
+                    } else {
+                        RoutingStore.setSmartEnabled(context, false)
+                        RoutingController.sync(context)
+                        // Умный VPN was what held the tunnel up; with it off,
+                        // hand control back the same way "Выбирать лучшую"
+                        // already does - applyRoutingToActiveTunnel alone
+                        // only swaps the engine to full-tunnel mode, it
+                        // doesn't disconnect, so without this the same
+                        // connection would silently start carrying the whole
+                        // device instead of stopping.
+                        onDisconnect()
+                    }
+                },
+                onAddSite = { pattern ->
+                    RoutingStore.addSite(context, pattern)
+                    PhantomVpnService.applyRoutingToActiveTunnel()
+                    RoutingStore.markSitesDirty()
+                },
+                onRemoveSite = { pattern ->
+                    RoutingStore.removeSite(context, pattern)
+                    PhantomVpnService.applyRoutingToActiveTunnel()
+                    RoutingStore.markSitesDirty()
+                },
+                onOpenPopular = { screen = Screen.POPULAR_RESOURCES },
+                // Clearing sitesDirty happens once the reconnect actually
+                // lands (PhantomVpnService.connect(), right after applying
+                // routing to the fresh tunnel) - not here, so an edit made
+                // while this reconnect is still in flight isn't silently
+                // dropped from the flag.
+                onApplySites = { RoutingController.reconnectActive(context) },
+                onToggleSmartConfig = { id ->
+                    // Selecting the first candidate is exactly the moment
+                    // smart mode goes from "on but nothing to connect to" to
+                    // "about to auto-connect" - the same first-connect gap
+                    // ensureVpnPermission exists for (see its doc). Cheap to
+                    // ask unconditionally: once granted, this is a same-frame
+                    // no-op with no dialog.
+                    onEnsureVpnPermission { granted ->
+                        if (granted) {
+                            RoutingStore.toggleSmartConfig(context, id)
+                            RoutingController.sync(context)
+                        }
+                    }
+                },
                 onToggleProxy = { config, portText -> toggleProxy(config, portText) },
                 onToggle = { config ->
                     when {
@@ -471,15 +609,23 @@ private fun MainScreen(
     updateProgress: Int?,
     onUpdateClick: () -> Unit,
     proxyRunningPorts: Map<String, Int>,
+    configHealth: Map<String, ConfigHealth>,
     onToggleProxy: (SavedConfig, String) -> Unit,
     onToggle: (SavedConfig) -> Unit,
+    onToggleAuto: (Boolean) -> Unit,
+    onToggleSmart: (Boolean) -> Unit,
+    onAddSite: (String) -> Unit,
+    onRemoveSite: (String) -> Unit,
+    onToggleSmartConfig: (String) -> Unit,
+    onOpenPopular: () -> Unit,
+    onApplySites: () -> Unit,
     onEditConfig: (SavedConfig) -> Unit,
     onAddConfig: () -> Unit,
     onAddResource: (String, String) -> Unit,
     onDeleteResource: (String) -> Unit,
     onOpenSettings: () -> Unit,
 ) {
-    val pagerState = rememberPagerState(pageCount = { 2 })
+    val pagerState = rememberPagerState(pageCount = { 3 })
     val coroutineScope = rememberCoroutineScope()
     var showAddResourceDialog by remember { mutableStateOf(false) }
 
@@ -579,14 +725,28 @@ private fun MainScreen(
                     configs = configs,
                     pingEnabled = appInForeground && pagerState.currentPage == 0,
                     proxyRunningPorts = proxyRunningPorts,
+                    autoEnabled = RoutingStore.autoEnabled,
+                    onToggleAuto = onToggleAuto,
                     onToggleProxy = onToggleProxy,
                     onToggle = onToggle,
                     onEditConfig = onEditConfig,
                     onAddConfig = onAddConfig,
                 )
+                1 -> RoutingPage(
+                    configs = configs,
+                    autoEnabled = RoutingStore.autoEnabled,
+                    connected = status == ConnectionStatus.CONNECTED,
+                    health = configHealth,
+                    onToggleSmart = onToggleSmart,
+                    onAddSite = onAddSite,
+                    onRemoveSite = onRemoveSite,
+                    onToggleConfig = onToggleSmartConfig,
+                    onOpenPopular = onOpenPopular,
+                    onApplySites = onApplySites,
+                )
                 else -> ResourcesPage(
                     resources = resources,
-                    pingEnabled = appInForeground && pagerState.currentPage == 1,
+                    pingEnabled = appInForeground && pagerState.currentPage == 2,
                     onAdd = { showAddResourceDialog = true },
                     onDelete = onDeleteResource,
                 )
@@ -635,7 +795,8 @@ private fun BottomNavBar(
         horizontalArrangement = Arrangement.SpaceEvenly,
     ) {
         NavBarItem(iconRes = R.drawable.ic_nav_lock, selected = currentPage == 0, onClick = { onSelect(0) })
-        NavBarItem(iconRes = R.drawable.ic_nav_globe, selected = currentPage == 1, onClick = { onSelect(1) })
+        NavBarItem(iconRes = R.drawable.ic_nav_routing, selected = currentPage == 1, onClick = { onSelect(1) })
+        NavBarItem(iconRes = R.drawable.ic_nav_globe, selected = currentPage == 2, onClick = { onSelect(2) })
     }
 }
 
@@ -679,6 +840,41 @@ private fun NavBarItem(
     }
 }
 
+// "Автоматически": the whole device goes through the VPN and Phantom keeps
+// the tunnel on whichever of the user's configs is actually reachable - see
+// internal/routing.Selector for when it considers a move worth making.
+@Composable
+private fun AutoConfigTile(enabled: Boolean, onToggle: (Boolean) -> Unit) {
+    val shape = RoundedCornerShape(18.dp)
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(shape)
+            .background(Surface)
+            .border(1.dp, SurfaceOutline.copy(alpha = 0.6f), shape)
+            .padding(horizontal = 16.dp, vertical = 14.dp),
+    ) {
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                I18n.t("auto_config"),
+                color = TextPrimary,
+                fontSize = 15.5.sp,
+                fontWeight = FontWeight.SemiBold,
+            )
+            Spacer(Modifier.height(3.dp))
+            Text(
+                I18n.t("auto_config_hint"),
+                color = TextSecondary,
+                fontSize = 12.5.sp,
+                lineHeight = 17.sp,
+            )
+        }
+        Spacer(Modifier.width(12.dp))
+        GradientSwitch(checked = enabled, onCheckedChange = onToggle)
+    }
+}
+
 @Composable
 private fun ConfigsPage(
     status: ConnectionStatus,
@@ -687,11 +883,23 @@ private fun ConfigsPage(
     configs: List<SavedConfig>,
     pingEnabled: Boolean,
     proxyRunningPorts: Map<String, Int>,
+    autoEnabled: Boolean,
+    onToggleAuto: (Boolean) -> Unit,
     onToggleProxy: (SavedConfig, String) -> Unit,
     onToggle: (SavedConfig) -> Unit,
     onEditConfig: (SavedConfig) -> Unit,
     onAddConfig: () -> Unit,
 ) {
+    // Умный VPN never makes a config the whole-device VPN - it only ever
+    // carries the listed sites through whichever one it picked. Showing that
+    // config as "on" here would say the opposite: this page is specifically
+    // about whole-device connections, and a toggle lit up on it means "your
+    // whole device is going through this server", which isn't what's actually
+    // happening. Auto is different - it genuinely is a whole-device
+    // connection, just with the server picked automatically - so its config
+    // is shown truthfully as on, only made non-interactive below.
+    val smartDriving = RoutingStore.smartEnabled && !autoEnabled
+
     Column(modifier = Modifier.fillMaxSize()) {
         Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
             Text(
@@ -721,24 +929,76 @@ private fun ConfigsPage(
 
         Spacer(modifier = Modifier.height(10.dp))
 
+        // Explained before the tile it's about, not after - the user should
+        // know why "Выбирать лучшую" is dimmed before they reach it, not
+        // discover it's inert by tapping first.
+        if (configs.isNotEmpty() && smartDriving) {
+            Text(
+                I18n.t("smart_vpn_configs_warning"),
+                color = Accent,
+                fontSize = 12.5.sp,
+                lineHeight = 17.sp,
+                modifier = Modifier.fillMaxWidth(),
+            )
+            Spacer(modifier = Modifier.height(14.dp))
+        }
+
+        // Whole-device routing with the server picked automatically. Sits
+        // above the config tiles because it takes precedence over them: while
+        // it's on, the per-config switches below are what it drives, not what
+        // the user drives. Mutually exclusive with Умный VPN, the same way
+        // Умный VPN's own switch already goes inert while this is on (see
+        // SmartVpnHeaderTile's `overridden` param) - each mode expresses a
+        // different idea of what the tunnel is for, so only one gets to hold
+        // it at a time, and the switch that's already on is what decides
+        // which. Turning this on always means "whole device" for real, so
+        // unlike the config cards below, nothing here has to lie about status
+        // - it just needs to become unreachable while Умный VPN holds the
+        // tunnel for something else.
         if (configs.isNotEmpty()) {
-            LazyColumn(
+            InactiveOverlay(inactive = smartDriving) {
+                AutoConfigTile(enabled = autoEnabled && !smartDriving, onToggle = onToggleAuto)
+            }
+            Spacer(modifier = Modifier.height(14.dp))
+        }
+
+        if (configs.isNotEmpty()) {
+            // Connecting a config here means "make this the whole-device VPN" -
+            // exactly what "Выбирать лучшую" or "Умный VPN" already have the one
+            // shared tunnel doing, for a different reason, whenever either is
+            // on. Without this, the config that mode is currently using shows
+            // up here as manually toggled on too (there's only one tunnel to
+            // reflect), and switching it off from here kills whatever mode was
+            // actually driving it - confusing, since nothing about this page
+            // suggested it was connected to anything else. Adding a config is
+            // unaffected: it doesn't touch the tunnel, so it stays outside
+            // this overlay (see the + button in the header above).
+            InactiveOverlay(
+                inactive = autoEnabled || RoutingStore.smartEnabled,
                 modifier = Modifier.weight(1f),
-                verticalArrangement = Arrangement.spacedBy(14.dp),
             ) {
-                items(configs, key = { it.id }) { config ->
-                    val cardStatus = if (activeConfigId == config.id) status else ConnectionStatus.IDLE
-                    ConfigInfoCard(
-                        config = config,
-                        status = cardStatus,
-                        pingEnabled = pingEnabled,
-                        proxyRunning = proxyRunningPorts.containsKey(config.id),
-                        proxyPort = proxyRunningPorts[config.id],
-                        showProxy = Appearance.showProxySettings,
-                        onToggle = { onToggle(config) },
-                        onToggleProxy = { portText -> onToggleProxy(config, portText) },
-                        onLongPress = { onEditConfig(config) },
-                    )
+                LazyColumn(
+                    modifier = Modifier.fillMaxSize(),
+                    verticalArrangement = Arrangement.spacedBy(14.dp),
+                ) {
+                    items(configs, key = { it.id }) { config ->
+                        val cardStatus = when {
+                            smartDriving -> ConnectionStatus.IDLE
+                            activeConfigId == config.id -> status
+                            else -> ConnectionStatus.IDLE
+                        }
+                        ConfigInfoCard(
+                            config = config,
+                            status = cardStatus,
+                            pingEnabled = pingEnabled,
+                            proxyRunning = proxyRunningPorts.containsKey(config.id),
+                            proxyPort = proxyRunningPorts[config.id],
+                            showProxy = Appearance.showProxySettings,
+                            onToggle = { onToggle(config) },
+                            onToggleProxy = { portText -> onToggleProxy(config, portText) },
+                            onLongPress = { onEditConfig(config) },
+                        )
+                    }
                 }
             }
 

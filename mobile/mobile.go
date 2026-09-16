@@ -27,7 +27,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net"
+	"strings"
+	"syscall"
 	"time"
 
 	"phantom/internal/config"
@@ -35,6 +38,7 @@ import (
 	"phantom/internal/netstack"
 	"phantom/internal/pingcheck"
 	"phantom/internal/proxy"
+	"phantom/internal/routing"
 	"phantom/internal/transport"
 	"phantom/internal/tunnel"
 
@@ -53,6 +57,66 @@ type Tunnel struct {
 	pool   *transport.ConnPool
 	cancel context.CancelFunc
 	inner  *netstack.Tunnel
+	engine *routing.Engine
+}
+
+// directDialer dials outside the tunnel, protecting the socket first so
+// Android doesn't route it back into the VPN we're trying to bypass. This is
+// what makes smart-VPN mode possible: unlisted traffic has to leave by the
+// normal interface, and on Android VpnService.protect() is the only way to
+// say that about a socket this process opens.
+func directDialer(protect func(fd int) bool) netstack.DirectDialer {
+	return func(network, target string) (io.ReadWriteCloser, error) {
+		dialer := &net.Dialer{Timeout: 10 * time.Second}
+		if protect != nil {
+			dialer.Control = func(_, _ string, c syscall.RawConn) error {
+				var ctrlErr error
+				if err := c.Control(func(fd uintptr) {
+					if !protect(int(fd)) {
+						ctrlErr = fmt.Errorf("protect fd %d failed", fd)
+					}
+				}); err != nil {
+					return err
+				}
+				return ctrlErr
+			}
+		}
+		return dialer.Dial(network, target)
+	}
+}
+
+// SetSmartRouting reconfigures which traffic belongs in the tunnel, live -
+// no reconnect needed, so flipping the toggle or editing the list in the UI
+// takes effect on the next connection an app opens.
+//
+// sites is one entry per line; each may be a domain ("youtube.com", matching
+// subdomains too), a literal IP, or a CIDR block. When enabled is false the
+// tunnel goes back to carrying everything.
+//
+// A domain is matched via the DNS answers that cross the tunnel (see
+// internal/routing), which is why DNS itself keeps being tunnelled in this
+// mode regardless of the list.
+func (t *Tunnel) SetSmartRouting(enabled bool, sites string) {
+	if t.engine == nil {
+		return
+	}
+	t.engine.SetSites(splitLines(sites))
+	if enabled {
+		t.engine.SetMode(routing.ModeSmart)
+	} else {
+		t.engine.SetMode(routing.ModeAll)
+	}
+}
+
+func splitLines(s string) []string {
+	raw := strings.Split(strings.ReplaceAll(s, "\r\n", "\n"), "\n")
+	out := make([]string, 0, len(raw))
+	for _, line := range raw {
+		if trimmed := strings.TrimSpace(line); trimmed != "" {
+			out = append(out, trimmed)
+		}
+	}
+	return out
 }
 
 // Start parses configYAML (the raw contents of a client.yaml file - the
@@ -148,7 +212,28 @@ func Start(configYAML string, tunFD int, mtu int, protector Protector) (*Tunnel,
 		return tunnel.NewSessionFromMux(freshMux), nil
 	})
 
-	return &Tunnel{pool: pool, cancel: cancel, inner: inner}, nil
+	// Routing starts in "carry everything" mode - the tunnel behaves exactly
+	// as it always has until the app calls SetSmartRouting. Both hooks are
+	// installed up front so that call never has to rebuild anything.
+	engine := routing.NewEngine()
+	var protect func(fd int) bool
+	if protector != nil {
+		protect = protector.Protect
+	}
+	inner.SetRouting(
+		func(network, target string) netstack.RouteDecision {
+			if engine.ShouldTunnel(network, target) {
+				return netstack.RouteTunnel
+			}
+			return netstack.RouteDirect
+		},
+		directDialer(protect),
+	)
+	inner.SetDNSObserver(func(stream io.ReadWriteCloser) io.ReadWriteCloser {
+		return routing.SniffDNS(stream, engine.Domains())
+	})
+
+	return &Tunnel{pool: pool, cancel: cancel, inner: inner, engine: engine}, nil
 }
 
 // Stop tears down the tunnel: the netstack, the Phantom session/pool, and

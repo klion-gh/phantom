@@ -230,19 +230,29 @@ func StartWindows(configYAML string, onNetworkChanged func()) (*WinTunnel, error
 		return nil, fmt.Errorf("add default route: %w", err)
 	}
 
-	routeTable, _ := runNetCmd("route", "print", "-4", "0.0.0.0")
+	// No destination filter here (unlike findDefaultGateway's "route print -4
+	// 0.0.0.0" below): that filter matches only the 0.0.0.0 destination
+	// network, so it would silently drop the 128.0.0.0/1 half of our route
+	// pair from the output and this check could never see it - which is
+	// exactly what happened when this used to pass "0.0.0.0" here too. The
+	// unfiltered table costs nothing extra; it's a handful of rows.
+	routeTable, _ := runNetCmd("route", "print", "-4")
 	log.Printf("route table right after tunnel setup:\n%s", routeTable)
 	// netsh's "add route" can print a syntax/usage error to stdout while
 	// still exiting 0 (seen with the wrong parameter name during development -
 	// see addDefaultRoute), so a clean err == nil above doesn't guarantee the
-	// route actually landed. Verify it directly: our route has no explicit
-	// nexthop, so Windows lists it as "0.0.0.0  0.0.0.0  On-link  ...". That
-	// literal "On-link" keyword is printed unlocalized regardless of Windows
-	// display language (unlike the rest of route print's output), and no
-	// other default route on this machine can have it - a normal gateway
-	// route always shows a real IP address there instead.
-	defaultRouteRe := regexp.MustCompile(`(?m)^\s*0\.0\.0\.0\s+0\.0\.0\.0\s+On-link\s`)
-	if !defaultRouteRe.MatchString(routeTable) {
+	// routes actually landed. Verify directly: addDefaultRoute installs
+	// 0.0.0.0/1 and 128.0.0.0/1 rather than a single 0.0.0.0/0 (see
+	// halfDefaultRoutes for why), so route print lists two rows -
+	// "0.0.0.0  128.0.0.0  On-link  ..." and "128.0.0.0  128.0.0.0  On-link
+	// ...". Neither nexthop has an explicit gateway, so Windows prints the
+	// literal "On-link" keyword there - unlocalized regardless of Windows
+	// display language (unlike the rest of route print's output) - and no
+	// other route on this machine can have that exact 128.0.0.0 netmask, so
+	// two matches means both halves are in and the interface really is
+	// covering the full address space.
+	halfRouteRe := regexp.MustCompile(`(?m)^\s*(?:0\.0\.0\.0|128\.0\.0\.0)\s+128\.0\.0\.0\s+On-link\s`)
+	if matches := halfRouteRe.FindAllString(routeTable, -1); len(matches) < len(halfDefaultRoutes) {
 		w.Stop()
 		return nil, fmt.Errorf("default route via %s was not found in the route table after setup - traffic would not be tunneled", ifaceName)
 	}
@@ -276,9 +286,14 @@ func StartWindows(configYAML string, onNetworkChanged func()) (*WinTunnel, error
 		}
 		return tunnel.NewSessionFromMux(freshMux), nil
 	})
-	if physicalIfErr == nil {
+	// Per-app exclusions and per-site routing are mutually exclusive modes
+	// (see routing.go) - installing both would leave two rules arguing over
+	// the same flow.
+	if physicalIfErr == nil && loadRoutingMode() == RoutingModeApps {
 		inner.SetBypass(newSplitTunnelBypass(physicalIfIndex))
 	}
+	applyRoutingToEngine()
+	installRouting(inner, physicalIfIndex, physicalIfErr == nil)
 
 	if onNetworkChanged != nil {
 		if err := startWatchingRouteChanges(gateway, onNetworkChanged); err != nil {
@@ -469,12 +484,32 @@ func configureInterface(ifaceName string) error {
 	return nil
 }
 
+// halfDefaultRoutes together cover the whole IPv4 space exactly as 0.0.0.0/0
+// does, but each is strictly more specific than any /0 - so Windows'
+// longest-prefix-match picks them before it ever compares metrics.
+//
+// A plain 0.0.0.0/0 has to win a metric race instead, and it loses that race
+// outright to the virtual adapters Hyper-V, WSL and Docker install, which
+// publish their own default route at metric 0. The failure is silent and badly
+// misleading: the tunnel connects, reports healthy, and every packet still
+// leaves through the other adapter - so the user's IP never changes and it
+// looks as though the VPN (or whichever routing mode is on) does nothing.
+//
+// Same reasoning the server's own /32 host route already relies on (see the
+// ordering notes at the top of this file); it just has to apply to the default
+// route as well.
+var halfDefaultRoutes = []string{"0.0.0.0/1", "128.0.0.0/1"}
+
 func addDefaultRoute(ifaceName string) error {
 	// Unlike the legacy "netsh interface ip" family used in configureInterface
 	// (which takes name=), "netsh interface ipv4 add route" takes interface=.
 	// Passing name= here doesn't just fail - netsh prints a usage/syntax error
 	// to stdout but still exits 0, so the route silently never gets added
 	// while the Go error check (err != nil) sees nothing wrong.
-	_, err := runNetCmd("netsh", "interface", "ipv4", "add", "route", "0.0.0.0/0", "interface="+ifaceName, "metric=1")
-	return err
+	for _, prefix := range halfDefaultRoutes {
+		if _, err := runNetCmd("netsh", "interface", "ipv4", "add", "route", prefix, "interface="+ifaceName, "metric=1"); err != nil {
+			return fmt.Errorf("add route %s: %w", prefix, err)
+		}
+	}
+	return nil
 }

@@ -8,11 +8,22 @@ import './style.css';
 // install ever shows, so the app's own footprint grows by the whole set
 // (~2.4MB) once, not per flag shown.
 import 'flag-icons/css/flag-icons.min.css';
-import { Connect, Disconnect, Status, ReadLog, ListConfigs, AddConfig, UpdateConfig, DeleteConfig, SetConfigGeo, ClearConfigCountry, Ping, ListResources, AddResource, DeleteResource, ListExcludedApps, PickExcludedAppExe, AddExcludedApp, DeleteExcludedApp, ApplyUpdate, StartProxy, StopProxy, GetLanguage, SetLanguage, Version, LookupCountry, GetAppearance, SetAppearance, GetShowProxySettings, SetShowProxySettings } from '../wailsjs/go/main/App';
+import { Connect, Disconnect, Status, ReadLog, ListConfigs, AddConfig, UpdateConfig, DeleteConfig, SetConfigGeo, ClearConfigCountry, Ping, ListResources, AddResource, DeleteResource, ListExcludedApps, PickExcludedAppExe, AddExcludedApp, DeleteExcludedApp, ApplyUpdate, StartProxy, StopProxy, GetLanguage, SetLanguage, Version, LookupCountry, GetAppearance, SetAppearance, GetShowProxySettings, SetShowProxySettings, GetRoutingState, SetRoutingMode, SetSmartEnabled, SetSmartSites, SetSmartConfigs, SetAutoEnabled, SetAutoConfigs, SetAppsEnabled, SetAppsInclude, ReconnectActive, RoutingHealth, PopularResources } from '../wailsjs/go/main/App';
 import { t, getLang, setLang, applyStaticTranslations } from './i18n.js';
 import { BACKGROUNDS, initBackground, initMiniBackground } from './background.js';
 import { PALETTES } from './palettes.js';
 import { initScrollbars, relayoutScrollbars } from './scrollbar.js';
+
+// The WebView has no console the user can open, so an uncaught frontend error
+// would otherwise be completely invisible - it goes to the app log instead,
+// which is readable from the in-app log viewer.
+window.addEventListener('error', (e) => {
+  try { window.go.main.App.UILog('ERROR ' + e.message + ' @ ' + e.filename + ':' + e.lineno); } catch (_) {}
+});
+window.addEventListener('unhandledrejection', (e) => {
+  try { window.go.main.App.UILog('REJECT ' + (e.reason && e.reason.message ? e.reason.message : String(e.reason))); } catch (_) {}
+});
+
 
 const screens = {
   main: document.getElementById('screen-main'),
@@ -20,6 +31,7 @@ const screens = {
   settings: document.getElementById('screen-settings'),
   log: document.getElementById('screen-log'),
   splitTunnel: document.getElementById('screen-split-tunnel'),
+  popular: document.getElementById('screen-popular'),
 };
 
 function showScreen(name) {
@@ -503,8 +515,16 @@ function refreshTileStatuses() {
     // Android client's ConnectSwitch doesn't give error its own look either,
     // and the card's own border gradient (.config-card.connected) still
     // shows which tile is active.
+    //
+    // Forced to idle while Умный VPN drives the tunnel: this config may well
+    // be the one actually carrying traffic, but only for the sites in the
+    // smart list, never for the whole device - showing it as "connected"
+    // here would say the opposite, since this page is specifically about
+    // whole-device connections.
     let cls = 'idle';
-    if (pendingConnectId === config.id) {
+    if (smartDriving()) {
+      cls = 'idle';
+    } else if (pendingConnectId === config.id) {
       cls = 'connecting';
     } else if (currentStatus.activeConfigId === config.id && currentStatus.connected) {
       cls = currentStatus.alive === false ? 'error' : 'connected';
@@ -540,6 +560,7 @@ async function toggleConnection(config) {
     await Disconnect();
     currentStatus = { connected: false, alive: false, stats: '{}', activeConfigId: '' };
     refreshTileStatuses();
+    refreshModeAvailability();
     return;
   }
 
@@ -570,6 +591,8 @@ async function refreshStatus() {
     console.error(e);
   }
   refreshTileStatuses();
+  renderSitesApplyRow();
+  refreshModeAvailability();
 }
 
 async function reloadConfigs() {
@@ -579,6 +602,9 @@ async function reloadConfigs() {
     configs = [];
   }
   renderConfigList();
+  // The Автоматически tile and the routing config picker are both driven by
+  // this list, so they have to follow it rather than only being built once.
+  renderRouting();
 }
 
 function openEditScreen(config) {
@@ -944,3 +970,440 @@ setInterval(refreshStatus, 4000);
     console.error(e);
   }
 })();
+
+// --- Sections + routing -----------------------------------------------------
+//
+// The main screen is three sections switched by the bottom nav, mirroring the
+// Android client's pager so both apps are navigated the same way.
+
+const SECTIONS = ['configs', 'routing', 'resources'];
+let routingState = {
+  mode: 'smart', smartEnabled: false, sites: [],
+  smartConfigs: [], autoEnabled: false, autoConfigs: [],
+};
+let popularCatalogue = [];
+// True once the routed-sites list has been edited since the last apply - an
+// already-open connection doesn't notice a list edit on its own (see
+// ReconnectActive), so the UI has to offer a way to force one.
+let sitesDirty = false;
+
+function showSection(name) {
+  for (const s of SECTIONS) {
+    document.getElementById('section-' + s).classList.toggle('hidden', s !== name);
+  }
+  for (const item of document.querySelectorAll('.nav-item')) {
+    item.classList.toggle('active', item.dataset.section === name);
+  }
+}
+
+for (const item of document.querySelectorAll('.nav-item')) {
+  item.addEventListener('click', () => showSection(item.dataset.section));
+}
+
+async function reloadRoutingState() {
+  try {
+    const parsed = JSON.parse(await GetRoutingState());
+    // Coerced rather than trusted: an absent list arrives as JSON null, and
+    // every consumer here calls .map()/.some() on it. One throw inside a
+    // render is enough to take out everything downstream of it, so the shape
+    // is normalised once, at the boundary.
+    routingState = {
+      mode: parsed.mode || 'smart',
+      smartEnabled: !!parsed.smartEnabled,
+      autoEnabled: !!parsed.autoEnabled,
+      sites: Array.isArray(parsed.sites) ? parsed.sites : [],
+      smartConfigs: Array.isArray(parsed.smartConfigs) ? parsed.smartConfigs : [],
+      autoConfigs: Array.isArray(parsed.autoConfigs) ? parsed.autoConfigs : [],
+      appsEnabled: !!parsed.appsEnabled,
+      appsInclude: !!parsed.appsInclude,
+    };
+  } catch (e) {
+    console.error(e);
+    try { window.go.main.App.UILog('routing state load failed: ' + e.message); } catch (_) {}
+  }
+  renderRouting();
+}
+
+// Renders every part of the Routing section from routingState. Cheap enough to
+// re-run wholesale after any edit, which keeps "what's on screen" in one place
+// instead of spread across each individual handler.
+// Whole-device automatic routing outranks either per-flow mode - both blocks
+// ask this rather than each re-deriving it.
+function overriddenByAuto() {
+  return routingState.autoEnabled;
+}
+
+// Умный VPN is the one actually driving the tunnel right now - the only case
+// where a config's own toggle would otherwise lie by showing "connected" for
+// a whole-device reason that isn't true.
+function smartDriving() {
+  return routingState.smartEnabled && !routingState.autoEnabled;
+}
+
+// True exactly when neither mode is doing anything and the tunnel is still
+// up - which can only mean the user picked this config by hand from the
+// Конфигурации section. That's a real whole-device connection, so Умный VPN
+// has to go inactive for the same reason it does under "Выбирать лучшую":
+// with nothing else driving it, this manual one already has the tunnel.
+function blockedByManualConfig() {
+  return currentStatus.connected && !routingState.autoEnabled && !routingState.smartEnabled;
+}
+
+// Pulled out of renderRouting so it can also run from refreshStatus's 4s poll
+// and right after a manual connect/disconnect - both change currentStatus,
+// which is what blockedByManualConfig() depends on. Skipping this update
+// after a manual disconnect is exactly what used to leave Умный VPN showing
+// "blocked by a configuration" for a config that had already been
+// disconnected, until switching routing modes happened to force a full
+// re-render. Deliberately lighter than renderRouting() - no list rebuilds -
+// so it's cheap enough to run unconditionally on every status poll.
+function refreshModeAvailability() {
+  // Two separate things can claim the tunnel instead of Умный VPN: "Выбирать
+  // лучшую", or a config connected by hand. Either way this mode can't also
+  // be driving it, so the whole toggle row (not just the settings below it)
+  // goes inactive, the same treatment those other two get.
+  const smartBlocked = overriddenByAuto() || blockedByManualConfig();
+  const smartToggle = document.getElementById('smart-toggle');
+  smartToggle.classList.toggle('active', routingState.smartEnabled && !smartBlocked);
+  smartToggle.disabled = smartBlocked;
+  document.getElementById('smart-toggle-row').classList.toggle('inactive', smartBlocked);
+  document.getElementById('smart-hint').textContent = overriddenByAuto()
+    ? t('auto_overrides_smart')
+    : blockedByManualConfig()
+      ? t('smart_vpn_blocked_by_config')
+      : t('smart_vpn_hint');
+
+  // Dimmed rather than removed: the point of a switch is to show what it
+  // controls, and hiding the controls makes the section jump in height and
+  // leaves the user guessing what turning it on would do.
+  document.getElementById('smart-details')
+    .classList.toggle('inactive', !routingState.smartEnabled || smartBlocked);
+
+  document.getElementById('auto-tile').classList.toggle('inactive', smartDriving());
+  document.getElementById('smart-configs-warning').classList.toggle('hidden', !smartDriving());
+
+  // While either mode is on, the config tiles are driven by it rather than
+  // the user - dimmed and inert beats silently swallowing clicks.
+  configList.classList.toggle('locked', routingState.autoEnabled || smartDriving());
+}
+
+function renderRouting() {
+  const smartMode = routingState.mode === 'smart';
+  document.getElementById('mode-smart-block').classList.toggle('hidden', !smartMode);
+  document.getElementById('mode-apps-block').classList.toggle('hidden', smartMode);
+
+  // Per-app routing has the same two-step shape as smart mode: enable it, then
+  // choose what the list means.
+  const appsToggle = document.getElementById('apps-toggle');
+  appsToggle.classList.toggle('active', routingState.appsEnabled && !overriddenByAuto());
+  appsToggle.disabled = overriddenByAuto();
+  document.getElementById('apps-details')
+    .classList.toggle('inactive', !routingState.appsEnabled || overriddenByAuto());
+  document.getElementById('apps-include-toggle')
+    .classList.toggle('active', routingState.appsInclude);
+  document.getElementById('apps-direction-hint').textContent =
+    routingState.appsInclude ? t('apps_direction_include') : t('apps_direction_exclude');
+  document.getElementById('btn-mode-smart').classList.toggle('active', smartMode);
+  document.getElementById('btn-mode-apps').classList.toggle('active', !smartMode);
+
+  refreshModeAvailability();
+
+  document.getElementById('auto-tile').classList.toggle('hidden', configs.length === 0);
+  document.getElementById('auto-toggle').classList.toggle('active', routingState.autoEnabled);
+  renderAutoBanner();
+
+  renderSiteList();
+  renderSitesApplyRow();
+  renderRoutingConfigs();
+}
+
+
+// The banner's subtitle answers the one question automatic selection creates:
+// "so which server am I actually on?". Falls back to explaining the mode until
+// a server has actually been picked.
+function renderAutoBanner() {
+  const sub = document.getElementById('auto-tile-sub');
+  if (!sub) return;
+
+  const activeId = routingState.autoEnabled ? currentStatus.activeConfigId : '';
+  const active = activeId ? configs.find((c) => c.id === activeId) : null;
+  if (active) {
+    const domain = parseYamlField(active.yaml, 'domain') || parseYamlField(active.yaml, 'server') || '—';
+    sub.textContent = domain;
+    sub.classList.add('resolved');
+  } else {
+    sub.textContent = routingState.autoEnabled ? t('auto_config_picking') : t('auto_config_hint');
+    sub.classList.remove('resolved');
+  }
+}
+
+// Only worth showing while there's both a live tunnel (nothing to reconnect
+// otherwise) and an actual unapplied edit.
+function renderSitesApplyRow() {
+  const row = document.getElementById('sites-apply-row');
+  if (!row) return;
+  row.classList.toggle('hidden', !sitesDirty || !currentStatus.connected);
+}
+
+function renderSiteList() {
+  const el = document.getElementById('site-list');
+  if (routingState.sites.length === 0) {
+    el.innerHTML = '<div class="routing-empty">' + escapeHtml(t('smart_vpn_no_sites_hint')) + '</div>';
+    return;
+  }
+  el.innerHTML = routingState.sites.map((site) => `
+    <div class="site-row">
+      <div class="site-row-name">${escapeHtml(site)}</div>
+      <button class="site-remove-btn" data-site="${escapeHtml(site)}" title="${t('remove')}">&times;</button>
+    </div>
+  `).join('');
+  for (const btn of el.querySelectorAll('.site-remove-btn')) {
+    btn.addEventListener('click', async () => {
+      routingState.sites = routingState.sites.filter((s) => s !== btn.dataset.site);
+      await SetSmartSites(routingState.sites.join('\n'));
+      sitesDirty = true;
+      renderRouting();
+    });
+  }
+}
+
+function renderRoutingConfigs() {
+  const el = document.getElementById('routing-config-list');
+  if (configs.length === 0) {
+    el.innerHTML = '<div class="routing-empty">' + escapeHtml(t('no_configs_for_routing')) + '</div>';
+    return;
+  }
+  el.innerHTML = configs.map((config) => {
+    const domain = parseYamlField(config.yaml, 'domain') || parseYamlField(config.yaml, 'server') || '—';
+    const on = routingState.smartConfigs.includes(config.id);
+    return `
+      <div class="routing-config-row${on ? ' active' : ''}" data-id="${config.id}">
+        <div class="routing-config-text">
+          <div class="routing-config-name">${escapeHtml(domain)}</div>
+          <div class="routing-config-health" data-health-for="${config.id}"></div>
+        </div>
+      </div>`;
+  }).join('');
+  for (const row of el.querySelectorAll('.routing-config-row')) {
+    row.addEventListener('click', async () => {
+      const id = row.dataset.id;
+      routingState.smartConfigs = routingState.smartConfigs.includes(id)
+        ? routingState.smartConfigs.filter((x) => x !== id)
+        : routingState.smartConfigs.concat([id]);
+      await SetSmartConfigs(JSON.stringify(routingState.smartConfigs));
+      renderRouting();
+    });
+  }
+  refreshRoutingHealth();
+}
+
+// Health is polled rather than pushed: the selector already probes on its own
+// schedule, so this just mirrors whatever it last measured.
+async function refreshRoutingHealth() {
+  let health = [];
+  try {
+    health = JSON.parse(await RoutingHealth());
+  } catch (e) {
+    return;
+  }
+  for (const entry of health) {
+    const el = document.querySelector('[data-health-for="' + entry.id + '"]');
+    if (!el) continue;
+    const row = el.closest('.routing-config-row');
+    let label = t('routing_checking');
+    let cls = '';
+    if (entry.probed && !entry.alive) {
+      label = t('routing_unreachable');
+      cls = 'dead';
+    } else if (entry.probed && entry.alive) {
+      label = entry.active
+        ? t('routing_active') + ' · ' + entry.latency_ms + ' ' + t('ms')
+        : entry.latency_ms + ' ' + t('ms');
+      cls = entry.active ? 'alive' : '';
+    }
+    el.textContent = label;
+    el.className = 'routing-config-health ' + cls;
+    if (!row) continue;
+    const existingBar = row.querySelector('.routing-config-active-bar');
+    if (entry.active && !existingBar) {
+      const bar = document.createElement('div');
+      bar.className = 'routing-config-active-bar';
+      row.appendChild(bar);
+    } else if (!entry.active && existingBar) {
+      existingBar.remove();
+    }
+  }
+}
+setInterval(() => {
+  if (!document.getElementById('section-routing').classList.contains('hidden')) {
+    refreshRoutingHealth();
+  }
+}, 2500);
+
+document.getElementById('btn-mode-smart').addEventListener('click', async () => {
+  routingState.mode = 'smart';
+  await SetRoutingMode('smart');
+  renderRouting();
+});
+document.getElementById('btn-mode-apps').addEventListener('click', async () => {
+  routingState.mode = 'apps';
+  await SetRoutingMode('apps');
+  renderRouting();
+});
+
+document.getElementById('apps-toggle').addEventListener('click', async () => {
+  if (overriddenByAuto()) return;
+  routingState.appsEnabled = !routingState.appsEnabled;
+  await SetAppsEnabled(routingState.appsEnabled);
+  renderRouting();
+});
+
+document.getElementById('apps-include-toggle').addEventListener('click', async () => {
+  routingState.appsInclude = !routingState.appsInclude;
+  await SetAppsInclude(routingState.appsInclude);
+  renderRouting();
+});
+
+document.getElementById('smart-toggle').addEventListener('click', async () => {
+  if (routingState.autoEnabled || blockedByManualConfig()) return;
+  routingState.smartEnabled = !routingState.smartEnabled;
+  await SetSmartEnabled(routingState.smartEnabled);
+  // Умный VPN was what held the tunnel up; with it off, hand control back
+  // rather than leaving the connection running (SetSmartEnabled only swaps
+  // the engine to ModeAll - it doesn't tear the tunnel down on its own, so
+  // without this the same connection would silently start carrying every
+  // whole-device flow instead of stopping, and the Конфигурации page would
+  // go on showing that config as connected).
+  if (!routingState.smartEnabled) {
+    await Disconnect();
+    currentStatus = { connected: false, alive: false, stats: '{}', activeConfigId: '' };
+  }
+  renderRouting();
+});
+
+document.getElementById('auto-toggle').addEventListener('click', async () => {
+  if (smartDriving()) return;
+  routingState.autoEnabled = !routingState.autoEnabled;
+  await SetAutoEnabled(routingState.autoEnabled);
+  // Whole-device routing was what held the tunnel up; with it off, hand
+  // control back rather than leaving a tunnel nobody asked for running.
+  if (!routingState.autoEnabled) {
+    await Disconnect();
+    currentStatus = { connected: false, alive: false, stats: '{}', activeConfigId: '' };
+  }
+  renderRouting();
+});
+
+async function addSiteFromInput() {
+  const input = document.getElementById('site-input');
+  const value = input.value.trim();
+  if (!value) return;
+  if (!routingState.sites.some((s) => s.toLowerCase() === value.toLowerCase())) {
+    routingState.sites = routingState.sites.concat([value]);
+    await SetSmartSites(routingState.sites.join('\n'));
+    sitesDirty = true;
+  }
+  input.value = '';
+  renderRouting();
+}
+document.getElementById('btn-add-site').addEventListener('click', addSiteFromInput);
+document.getElementById('site-input').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') addSiteFromInput();
+});
+
+document.getElementById('btn-apply-sites').addEventListener('click', async (e) => {
+  const btn = e.currentTarget;
+  const label = btn.textContent;
+  const hint = document.getElementById('sites-apply-hint');
+  const hintDefault = hint.textContent;
+  btn.disabled = true;
+  btn.textContent = t('applying_changes');
+  try {
+    const err = await ReconnectActive();
+    if (err) {
+      // Not errorText - that element lives in the Конфигурации section, which
+      // isn't necessarily what's on screen when this button is clicked (the
+      // user is looking at Маршрутизация). The hint text right next to the
+      // button is guaranteed visible.
+      console.error('reconnect to apply routing changes failed:', err);
+      hint.textContent = err;
+      hint.classList.add('sites-apply-error');
+      // Left dirty on failure - nothing actually reconnected, so the banner
+      // (and the chance to retry) should stay.
+    } else {
+      sitesDirty = false;
+      hint.textContent = hintDefault;
+      hint.classList.remove('sites-apply-error');
+    }
+  } finally {
+    btn.disabled = false;
+    btn.textContent = label;
+    await refreshStatus();
+    renderRouting();
+  }
+});
+
+// --- Popular resources picker ----------------------------------------------
+
+// Delegated off the routing section rather than bound to the button itself:
+// the block this button lives in is shown/hidden and re-rendered as the mode
+// changes, so a handler bound to one specific element is easy to lose track
+// of. The section element is always present, which makes this robust.
+async function openPopularScreen() {
+  if (popularCatalogue.length === 0) {
+    try {
+      popularCatalogue = JSON.parse(await PopularResources());
+    } catch (e) {
+      console.error('popular resources unavailable', e);
+      popularCatalogue = [];
+    }
+  }
+  renderPopularGrid();
+  showScreen('popular');
+}
+
+document.getElementById('section-routing').addEventListener('click', (e) => {
+  if (e.target.closest('#btn-popular')) openPopularScreen();
+});
+document.getElementById('btn-back-popular').addEventListener('click', () => showScreen('main'));
+
+// Selection is per *service*, not per domain: picking YouTube adds everything
+// YouTube needs (its media hosts included), because a half-added service that
+// loads its page but not its video is the failure this picker exists to avoid.
+function hasAllDomains(domains) {
+  const listed = routingState.sites.map((s) => s.toLowerCase());
+  return domains.every((d) => listed.includes(d.toLowerCase()));
+}
+
+function renderPopularGrid() {
+  const el = document.getElementById('popular-grid');
+  el.innerHTML = popularCatalogue.map((r) => `
+    <button class="popular-tile${hasAllDomains(r.domains) ? ' active' : ''}" data-name="${escapeHtml(r.name)}">
+      <img class="popular-tile-logo" alt=""
+           src="https://www.google.com/s2/favicons?domain=${encodeURIComponent(r.icon)}&sz=64"
+           onerror="this.style.visibility='hidden'" />
+      <span class="popular-tile-name">${escapeHtml(r.name)}</span>
+    </button>
+  `).join('');
+  for (const tile of el.querySelectorAll('.popular-tile')) {
+    tile.addEventListener('click', async () => {
+      const resource = popularCatalogue.find((r) => r.name === tile.dataset.name);
+      if (!resource) return;
+      if (hasAllDomains(resource.domains)) {
+        const drop = resource.domains.map((d) => d.toLowerCase());
+        routingState.sites = routingState.sites.filter((s) => !drop.includes(s.toLowerCase()));
+      } else {
+        const listed = routingState.sites.map((s) => s.toLowerCase());
+        routingState.sites = routingState.sites.concat(
+          resource.domains.filter((d) => !listed.includes(d.toLowerCase()))
+        );
+      }
+      await SetSmartSites(routingState.sites.join('\n'));
+      sitesDirty = true;
+      renderPopularGrid();
+      renderRouting();
+    });
+  }
+}
+
+reloadRoutingState();

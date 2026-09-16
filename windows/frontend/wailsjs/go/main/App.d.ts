@@ -25,6 +25,8 @@ export function GetAppearance():Promise<string>;
 
 export function GetLanguage():Promise<string>;
 
+export function GetRoutingState():Promise<string>;
+
 export function GetShowProxySettings():Promise<boolean>;
 
 export function ListConfigs():Promise<string>;
@@ -39,21 +41,45 @@ export function PickExcludedAppExe():Promise<string>;
 
 export function Ping(arg1:string):Promise<string>;
 
+export function PopularResources():Promise<string>;
+
 export function ReadLog():Promise<string>;
 
+export function ReconnectActive():Promise<string>;
+
+export function RoutingHealth():Promise<string>;
+
 export function SetAppearance(arg1:string,arg2:string):Promise<void>;
+
+export function SetAppsEnabled(arg1:boolean):Promise<void>;
+
+export function SetAppsInclude(arg1:boolean):Promise<void>;
+
+export function SetAutoConfigs(arg1:string):Promise<void>;
+
+export function SetAutoEnabled(arg1:boolean):Promise<void>;
 
 export function SetConfigGeo(arg1:string,arg2:string,arg3:string,arg4:string):Promise<string>;
 
 export function SetLanguage(arg1:string):Promise<void>;
 
+export function SetRoutingMode(arg1:string):Promise<void>;
+
 export function SetShowProxySettings(arg1:boolean):Promise<void>;
+
+export function SetSmartConfigs(arg1:string):Promise<void>;
+
+export function SetSmartEnabled(arg1:boolean):Promise<void>;
+
+export function SetSmartSites(arg1:string):Promise<void>;
 
 export function StartProxy(arg1:string,arg2:string,arg3:number):Promise<string>;
 
 export function Status():Promise<string>;
 
 export function StopProxy(arg1:string):Promise<string>;
+
+export function UILog(arg1:string):Promise<void>;
 
 export function UpdateConfig(arg1:string,arg2:string):Promise<string>;
 

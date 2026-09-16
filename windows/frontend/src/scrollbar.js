@@ -184,7 +184,7 @@ function attach(el) {
 }
 
 export function initScrollbars(root = document) {
-  for (const el of root.querySelectorAll('.content, .config-list, .resource-list')) {
+  for (const el of root.querySelectorAll('.content, .config-list, .resource-list, .routing-scroll')) {
     attach(el);
   }
 }

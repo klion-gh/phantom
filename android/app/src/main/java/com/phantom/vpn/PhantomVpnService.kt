@@ -46,6 +46,13 @@ class PhantomVpnService : VpnService() {
         // How long disconnect() waits for the graceful tunnel.stop() path before
         // forcing the interface down itself - see forceDisconnect().
         private const val DISCONNECT_FORCE_TIMEOUT_MS = 3000L
+        // How many times a network-change reconnect retries before finally
+        // giving up - see attemptReconnect.
+        private const val MAX_NETWORK_CHANGE_RETRIES = 4
+        // Gap between retry attempts, on top of however long the failed dial
+        // itself took (its own timeout is mobile.Start's 15s dial context) -
+        // just enough that a truly-still-settling network isn't hammered.
+        private const val RECONNECT_RETRY_DELAY_MS = 3000L
 
         @Volatile
         private var activeInstance: PhantomVpnService? = null
@@ -86,6 +93,19 @@ class PhantomVpnService : VpnService() {
                 if (!vpnActive) return true
                 return instance.protect(fd.toInt())
             }
+        }
+
+        /**
+         * Pushes the current routing settings into whatever tunnel is running,
+         * if any. Lets the UI edit the site list or flip the smart toggle and
+         * have it take effect immediately - the Go side swaps the decision
+         * live, so nothing needs to reconnect.
+         *
+         * A no-op when no tunnel is up, which is the common case while the
+         * user is still setting the list up.
+         */
+        fun applyRoutingToActiveTunnel() {
+            RoutingController.applyToTunnel(activeInstance?.tunnel)
         }
     }
 
@@ -213,7 +233,13 @@ class PhantomVpnService : VpnService() {
         return START_STICKY
     }
 
-    private fun connect(configId: String, configYaml: String) {
+    // onResult, when given, means a caller has its own retry plan and is
+    // taking responsibility for what happens next - see attemptReconnect. In
+    // that case failure gets a light cleanup (just release the TUN fd) rather
+    // than the full disconnect()/stopSelf() teardown below, since stopping
+    // the service here would kill it before the retry it's about to schedule
+    // ever gets to run.
+    private fun connect(configId: String, configYaml: String, onResult: ((Boolean) -> Unit)? = null) {
         FileLog.i("connect: establishing tunnel")
         VpnStateHolder.update(ConnectionStatus.CONNECTING, "Establishing tunnel...", configId)
         showPersistentNotification(ConnectionStatus.CONNECTING)
@@ -263,8 +289,12 @@ class PhantomVpnService : VpnService() {
                     FileLog.e("VpnService.Builder.establish() returned null (permission not granted)")
                     VpnStateHolder.update(ConnectionStatus.ERROR, "VPN permission not granted")
                     showPersistentNotification(ConnectionStatus.ERROR)
-                    stopForeground(STOP_FOREGROUND_DETACH)
-                    stopSelf()
+                    if (onResult != null) {
+                        onResult(false)
+                    } else {
+                        stopForeground(STOP_FOREGROUND_DETACH)
+                        stopSelf()
+                    }
                     return@execute
                 }
                 tunInterface = pfd
@@ -279,14 +309,37 @@ class PhantomVpnService : VpnService() {
 
                 tunnel = Mobile.start(configYaml, pfd.fd.toLong(), MTU.toLong(), protector)
 
+                // Applied right after the tunnel exists and before it's
+                // announced as connected, so the very first flow already sees
+                // the user's routing choice rather than briefly carrying
+                // everything while the UI catches up.
+                RoutingController.applyToTunnel(tunnel)
+                // A tunnel that was just (re)built - for any reason: a fresh
+                // connect, a config switch, the smart selector moving servers,
+                // a network-change reconnect, or the user's own "Применить" -
+                // is by definition carrying the current site list already, so
+                // there is nothing left to apply.
+                RoutingStore.clearSitesDirty()
+
                 FileLog.i("Mobile.start returned, tunnel connected")
                 VpnStateHolder.update(ConnectionStatus.CONNECTED, "Connected", configId)
                 showPersistentNotification(ConnectionStatus.CONNECTED)
                 registerNetworkCallback(cm)
+                onResult?.invoke(true)
             } catch (e: Throwable) {
                 FileLog.e("connect failed", e)
                 VpnStateHolder.update(ConnectionStatus.ERROR, e.message ?: "connection failed", configId)
-                disconnect()
+                if (onResult != null) {
+                    try {
+                        tunInterface?.close()
+                    } catch (closeErr: Throwable) {
+                        FileLog.e("tun close error (retry pending)", closeErr)
+                    }
+                    tunInterface = null
+                    onResult(false)
+                } else {
+                    disconnect()
+                }
             }
         }
     }
@@ -414,15 +467,54 @@ class PhantomVpnService : VpnService() {
     private fun scheduleReconnect() {
         pendingReconnect?.let { reconnectHandler.removeCallbacks(it) }
         val runnable = Runnable {
+            // The network just changed under us, so whatever the smart
+            // selector last measured is stale - re-probe now rather than
+            // letting the tunnel come back up on a config that is no longer
+            // reachable from this network and waiting out a full tick.
+            executor.execute { RoutingController.probeNow() }
+
             val id = activeConfigId
             val yaml = activeConfigYaml
             if (id != null && yaml != null) {
-                FileLog.i("reconnecting after network change")
-                connect(id, yaml)
+                attemptReconnect(id, yaml, attempt = 1)
             }
         }
         pendingReconnect = runnable
         reconnectHandler.postDelayed(runnable, 1500)
+    }
+
+    /**
+     * Connects, retrying with a short backoff if it doesn't land, up to
+     * [MAX_NETWORK_CHANGE_RETRIES] times before finally tearing the tunnel
+     * down for real.
+     *
+     * A single slow or failed TLS handshake right after a network handover is
+     * far more often transient - the network is still settling, a DNS server
+     * hasn't updated yet - than it is terminal. Without this, connect()'s own
+     * failure path (disconnect(), which stops the service) fires on the very
+     * first miss and nothing ever tries again: the user is left thinking the
+     * VPN is on when it silently isn't, until they notice and reconnect by
+     * hand. Every intermediate attempt passes connect() a completion callback
+     * so its failure path does a light cleanup instead of stopping the
+     * service out from under the retry that's about to be scheduled - only
+     * the final attempt lets connect() tear down for good.
+     */
+    private fun attemptReconnect(id: String, yaml: String, attempt: Int) {
+        FileLog.i("reconnecting after network change (attempt $attempt/$MAX_NETWORK_CHANGE_RETRIES)")
+        val isLastAttempt = attempt >= MAX_NETWORK_CHANGE_RETRIES
+        connect(
+            id,
+            yaml,
+            onResult = if (isLastAttempt) null else { success ->
+                if (!success) {
+                    FileLog.i("reconnect attempt $attempt failed, retrying in ${RECONNECT_RETRY_DELAY_MS}ms")
+                    reconnectHandler.postDelayed(
+                        { attemptReconnect(id, yaml, attempt + 1) },
+                        RECONNECT_RETRY_DELAY_MS,
+                    )
+                }
+            },
+        )
     }
 
     // The notification's "Подключить Proxy" - no Activity involved, so config choice

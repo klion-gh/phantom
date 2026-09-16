@@ -67,7 +67,19 @@ func newSplitTunnelBypass(physicalIfIndex uint32) func(network string, localPort
 			return nil
 		}
 		exePath, err := processOwnerExePath(network == "tcp", localPort)
-		if err != nil || exePath == "" || !isExcludedProcess(exePath, apps) {
+		if err != nil || exePath == "" {
+			return nil
+		}
+		listed := isExcludedProcess(exePath, apps)
+		// Two readings of the same list, chosen by the Включить/Исключить
+		// switch: "exclude" sends the listed apps around the tunnel (the
+		// original behaviour), "include" sends everything *but* them around
+		// it, so only the listed apps are tunnelled.
+		bypass := listed
+		if loadAppsInclude() {
+			bypass = !listed
+		}
+		if !bypass {
 			return nil
 		}
 		conn, err := dialDirect(network, target, physicalIfIndex)

@@ -21,12 +21,32 @@
         <div id="update-progress" class="update-progress hidden"><div id="update-progress-bar" class="update-progress-bar"></div></div>
         <div id="update-banner" class="update-banner hidden"></div>
 
+        <!-- Three sections, one visible at a time, switched by the bottom nav -
+             the same structure (and order) as the Android client's pager, so the
+             two apps are navigated the same way. -->
         <div class="main-body">
-          <div class="main-col">
+          <div id="section-configs" class="section-page">
             <div class="panel-header">
               <div class="panel-title" data-i18n="configs">Конфигурации</div>
               <button id="btn-add" class="icon-btn" data-i18n-title="add_config" title="Добавить конфигурацию">&#43;</button>
             </div>
+
+            <!-- Shown above "Выбирать лучшую" precisely because it explains
+                 why that tile (and the config list below it) is about to look
+                 inactive - the user should know before reaching it, not
+                 discover it's inert by tapping first. -->
+            <div id="smart-configs-warning" class="smart-configs-warning hidden" data-i18n="smart_vpn_configs_warning">Выключите Умный VPN если необходимо включить конфигурацию для всего устройства.</div>
+
+            <!-- Deliberately not styled like the config tiles below it: while
+                 this is on (or while Умный VPN is), it drives them, so it
+                 reads as a mode banner rather than one more item in the same
+                 list. -->
+            <div id="auto-tile" class="auto-tile hidden">
+              <div class="auto-tile-title" data-i18n="auto_config">Выбирать лучшую</div>
+              <div id="auto-tile-sub" class="auto-tile-sub"></div>
+              <button id="auto-toggle" class="toggle-switch"><span class="toggle-switch-thumb"></span></button>
+            </div>
+
             <div id="config-list" class="config-list"></div>
 
             <div id="empty-state" class="empty-state hidden">
@@ -40,13 +60,127 @@
             <div id="error-text" class="error-text hidden"></div>
           </div>
 
-          <div class="main-col main-col-resources">
+          <div id="section-routing" class="section-page hidden">
+            <div class="panel-header">
+              <div class="panel-title" data-i18n="routing">Маршрутизация</div>
+            </div>
+            <div class="routing-scroll">
+              <!-- Mode picker: per-app exclusion and per-site inclusion answer
+                   opposite questions, so only one can be in force at a time. -->
+              <div class="routing-tile routing-tile-row">
+                <div class="routing-tile-title" data-i18n="routing_mode">Режим</div>
+                <div class="lang-options routing-mode-options">
+                  <button id="btn-mode-smart" class="lang-tile" data-i18n="routing_mode_smart">Умный VPN</button>
+                  <button id="btn-mode-apps" class="lang-tile" data-i18n="routing_mode_apps">По приложениям</button>
+                </div>
+              </div>
+
+              <!-- Mirrors the smart-VPN block's shape: one switch for whether
+                   the mode does anything, then its own settings underneath. -->
+              <div id="mode-apps-block" class="routing-block hidden">
+                <div class="routing-tile routing-tile-row">
+                  <div class="routing-tile-text">
+                    <div class="routing-tile-title" data-i18n="split_tunnel">Раздельное туннелирование</div>
+                    <div id="apps-hint" class="routing-tile-hint" data-i18n="split_tunnel_hint">Эти приложения будут работать напрямую, в обход VPN, даже при активном подключении.</div>
+                  </div>
+                  <button id="apps-toggle" class="toggle-switch"><span class="toggle-switch-thumb"></span></button>
+                </div>
+
+                <div id="apps-details" class="routing-block">
+                  <div class="routing-tile routing-tile-row">
+                    <div class="routing-tile-text">
+                      <div class="routing-tile-title" data-i18n="apps_direction">Включить / Исключить</div>
+                      <div id="apps-direction-hint" class="routing-tile-hint"></div>
+                    </div>
+                    <button id="apps-include-toggle" class="toggle-switch"><span class="toggle-switch-thumb"></span></button>
+                  </div>
+
+                  <div class="routing-tile">
+                    <div class="routing-tile-header">
+                      <div class="routing-tile-title" data-i18n="apps">Приложения</div>
+                      <button id="btn-open-split-tunnel" class="routing-link-btn">
+                        <span data-i18n="apps_manage">Настроить</span>
+                        <span class="routing-link-chevron">&#8250;</span>
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <div id="mode-smart-block" class="routing-block">
+                <div id="smart-toggle-row" class="routing-tile routing-tile-row">
+                  <div class="routing-tile-text">
+                    <div class="routing-tile-title" data-i18n="smart_vpn">Умный VPN</div>
+                    <div id="smart-hint" class="routing-tile-hint" data-i18n="smart_vpn_hint">Через VPN пойдут только перечисленные сайты. Остальной трафик — напрямую, как обычно.</div>
+                  </div>
+                  <button id="smart-toggle" class="toggle-switch"><span class="toggle-switch-thumb"></span></button>
+                </div>
+
+                <div id="smart-details" class="routing-block">
+                  <!-- The catalogue button lives inside the list it fills,
+                       rather than floating above as its own tile: picking from
+                       it and typing a domain by hand are two ways to do the
+                       same thing, so they belong together. -->
+                  <div class="routing-tile">
+                    <div class="routing-tile-header">
+                      <div class="routing-tile-title" data-i18n="smart_vpn_sites">Ресурсы под обход:</div>
+                      <button id="btn-popular" class="routing-link-btn">
+                        <span data-i18n="popular_resources">Популярные ресурсы</span>
+                        <span class="routing-link-chevron">&#8250;</span>
+                      </button>
+                    </div>
+                    <div class="site-add-row">
+                      <input id="site-input" class="text-input site-input" type="text" data-i18n-placeholder="smart_vpn_site_ph" placeholder="например, youtube.com" />
+                      <button id="btn-add-site" class="icon-btn">&#43;</button>
+                    </div>
+                    <div id="site-list" class="site-list"></div>
+                    <!-- A brand new connection already honours an edited list
+                         immediately (the engine is consulted per-flow) - this
+                         is for whatever tab was already open before the edit,
+                         sitting on a warm connection dialed under the old
+                         list, which nothing re-evaluates on its own. Only
+                         shown once there's both a live tunnel and an
+                         unapplied edit - nothing to reconnect otherwise. -->
+                    <div id="sites-apply-row" class="sites-apply-row hidden">
+                      <div id="sites-apply-hint" class="sites-apply-hint" data-i18n="smart_vpn_apply_hint">Уже открытые вкладки продолжат идти по старому пути, пока не переподключитесь.</div>
+                      <button id="btn-apply-sites" class="routing-inline-btn lang-tile" data-i18n="apply_changes">Применить</button>
+                    </div>
+                  </div>
+
+                  <div class="routing-tile">
+                    <div class="routing-tile-title" data-i18n="smart_vpn_configs">Конфигурации для обхода</div>
+                    <div class="routing-tile-hint" data-i18n="smart_vpn_configs_hint">Выберите одну или несколько. При нескольких Phantom сам переключится на ту, что на связи.</div>
+                    <div id="routing-config-list" class="routing-config-list"></div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div id="section-resources" class="section-page hidden">
             <div class="panel-header">
               <div class="panel-title" data-i18n="resources">Доступность ресурсов</div>
               <button id="btn-add-resource" class="icon-btn" data-i18n-title="add_resource" title="Добавить ресурс">&#43;</button>
             </div>
             <div id="resource-list" class="resource-list"></div>
           </div>
+        </div>
+
+        <div class="bottom-nav">
+          <button class="nav-item active" data-section="configs"><span class="nav-icon nav-icon-lock"></span></button>
+          <button class="nav-item" data-section="routing"><span class="nav-icon nav-icon-routing"></span></button>
+          <button class="nav-item" data-section="resources"><span class="nav-icon nav-icon-globe"></span></button>
+        </div>
+      </div>
+
+      <!-- Popular resources picker -->
+      <div id="screen-popular" class="screen hidden">
+        <div class="header">
+          <button id="btn-back-popular" class="icon-btn icon-btn-back"></button>
+          <div class="title" data-i18n="popular_resources">Популярные ресурсы</div>
+        </div>
+        <div class="content">
+          <div id="popular-grid" class="popular-grid"></div>
         </div>
       </div>
 
@@ -75,7 +209,6 @@
           <div class="title" data-i18n="settings">Настройки</div>
         </div>
         <div class="content settings-content">
-          <button id="btn-open-split-tunnel" class="lang-tile" data-i18n="split_tunnel">Раздельное туннелирование</button>
           <div class="lang-row">
             <div class="lang-label" data-i18n="show_proxy_settings">Отобразить настройки прокси</div>
             <button id="show-proxy-settings-toggle" class="toggle-switch active"><span class="toggle-switch-thumb"></span></button>

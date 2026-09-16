@@ -53,6 +53,38 @@ const sessionRefreshCooldown = 3 * time.Second
 // nil on Android, which has no equivalent per-app concept at this layer.
 type BypassFunc func(network string, localPort uint16, target string) io.ReadWriteCloser
 
+// RouteDecision is what a RouterFunc says about one new flow.
+type RouteDecision int
+
+const (
+	// RouteTunnel sends the flow through the Phantom session - the default,
+	// and what every flow does when no router is installed.
+	RouteTunnel RouteDecision = iota
+	// RouteDirect sends the flow straight out the physical interface,
+	// bypassing the tunnel.
+	RouteDirect
+)
+
+// RouterFunc decides where a new flow should go, based only on its
+// destination (network is "tcp" or "udp", target is "ip:port").
+//
+// This is the "smart VPN" axis: unlike BypassFunc, which asks *who* opened
+// the connection (per-app split tunneling), this asks *where it's going* - so
+// a user can say "route these sites through the VPN and leave everything else
+// alone". Installing one inverts the client's default posture from "tunnel
+// everything" to "tunnel what this says to".
+//
+// Consulted once per new flow, never per packet, so it can afford a map
+// lookup but not real work.
+type RouterFunc func(network string, target string) RouteDecision
+
+// DirectDialer opens a connection to target *outside* the tunnel. Only the
+// platform layer knows how to do this (binding the socket to the physical
+// interface on Windows, VpnService.protect() on Android), so netstack asks
+// for one rather than dialing itself - a plain net.Dial here would be
+// captured by the client's own default route and loop back into the tunnel.
+type DirectDialer func(network, target string) (io.ReadWriteCloser, error)
+
 // Tunnel routes all IP traffic arriving on a gVisor link endpoint through a
 // Phantom session. Obtain one via New.
 type Tunnel struct {
@@ -63,6 +95,9 @@ type Tunnel struct {
 	bytesUp   int64
 	bytesDown int64
 	bypass    BypassFunc
+	router    RouterFunc
+	direct    DirectDialer
+	dnsWrap   func(io.ReadWriteCloser) io.ReadWriteCloser
 
 	refreshSession     func() (*tunnel.Session, error)
 	lastRefreshAttempt time.Time
@@ -86,6 +121,37 @@ func (t *Tunnel) currentBypass() BypassFunc {
 	t.sessionMu.Lock()
 	defer t.sessionMu.Unlock()
 	return t.bypass
+}
+
+// SetRouting installs the destination-based routing decision and the direct
+// dialer it needs - see RouterFunc and DirectDialer. Passing a nil router
+// restores the default "tunnel everything" behaviour, which is how the smart
+// VPN mode is turned back off without rebuilding the tunnel.
+//
+// Both are set together on purpose: a router with no dialer could only ever
+// answer RouteTunnel, and silently degrading to that would look exactly like
+// the feature being broken.
+func (t *Tunnel) SetRouting(router RouterFunc, direct DirectDialer) {
+	t.sessionMu.Lock()
+	t.router = router
+	t.direct = direct
+	t.sessionMu.Unlock()
+}
+
+// SetDNSObserver installs a wrapper applied to tunnelled DNS flows (UDP port
+// 53) so a caller can watch the answers going past - which is what makes
+// routing by domain name possible at all, see internal/routing's SniffDNS.
+// Kept as an opaque wrapper so this package stays unaware of DNS itself.
+func (t *Tunnel) SetDNSObserver(wrap func(io.ReadWriteCloser) io.ReadWriteCloser) {
+	t.sessionMu.Lock()
+	t.dnsWrap = wrap
+	t.sessionMu.Unlock()
+}
+
+func (t *Tunnel) currentRouting() (RouterFunc, DirectDialer, func(io.ReadWriteCloser) io.ReadWriteCloser) {
+	t.sessionMu.Lock()
+	defer t.sessionMu.Unlock()
+	return t.router, t.direct, t.dnsWrap
 }
 
 // SetSessionRefresher installs an optional hook that lets the tunnel recover
@@ -215,17 +281,30 @@ func (t *Tunnel) handleUDP(r *udp.ForwarderRequest) bool {
 	return true
 }
 
-// openRemote gives the bypass hook (if any) first refusal on a new
-// connection - see BypassFunc - and falls back to tunneling through the
-// Phantom session otherwise (including when a bypass was attempted but the
-// direct dial itself failed, so an excluded app still gets connectivity via
-// the tunnel rather than none at all).
+// openRemote decides how one new flow reaches the internet, in three steps:
+//
+//  1. The per-app bypass hook (BypassFunc) gets first refusal - it answers
+//     "this app was excluded from the VPN entirely", which outranks anything
+//     about the destination.
+//  2. The router (RouterFunc) decides based on the destination - this is what
+//     implements smart-VPN mode, where only listed sites are tunnelled.
+//  3. Otherwise the flow is tunnelled, which is also the fallback whenever a
+//     direct dial was chosen but failed: an excluded app losing its route is
+//     better served by the tunnel than by no connectivity at all.
 func (t *Tunnel) openRemote(network string, localPort uint16, target string) io.ReadWriteCloser {
 	if bypass := t.currentBypass(); bypass != nil {
 		if conn := bypass(network, localPort, target); conn != nil {
 			return conn
 		}
 	}
+
+	router, direct, dnsWrap := t.currentRouting()
+	if router != nil && direct != nil && router(network, target) == RouteDirect {
+		if conn, err := direct(network, target); err == nil {
+			return conn
+		}
+	}
+
 	session := t.currentSession()
 	if session == nil {
 		return nil
@@ -235,6 +314,11 @@ func (t *Tunnel) openRemote(network string, localPort uint16, target string) io.
 		if err != nil {
 			return nil
 		}
+		// Only DNS is worth looking at, and only when someone asked to - see
+		// SetDNSObserver. Every other UDP flow is passed through untouched.
+		if dnsWrap != nil && isDNSTarget(target) {
+			return dnsWrap(stream)
+		}
 		return stream
 	}
 	stream, err := session.Open(target)
@@ -242,6 +326,15 @@ func (t *Tunnel) openRemote(network string, localPort uint16, target string) io.
 		return nil
 	}
 	return stream
+}
+
+// isDNSTarget reports whether target ("ip:port") is a plain DNS destination.
+// Port 53 only: DNS-over-TLS/HTTPS is encrypted and can't be observed here,
+// which is a documented limit of routing by domain name rather than something
+// this check should pretend to handle.
+func isDNSTarget(target string) bool {
+	_, port, err := net.SplitHostPort(target)
+	return err == nil && port == "53"
 }
 
 // splice bridges a netstack-side TCP connection with the corresponding

@@ -5,11 +5,21 @@ import (
 	"encoding/json"
 	"log"
 	"sync"
+	"time"
 
 	"phantom/internal/geoip"
 	"phantom/internal/pingcheck"
+	"phantom/internal/routing"
 
 	"github.com/wailsapp/wails/v2/pkg/runtime"
+)
+
+// How many times a network-change reconnect retries before finally giving up,
+// and the gap between attempts on top of however long the failed dial itself
+// took (its own timeout is StartWindows's 15s dial context - see wintun.go).
+const (
+	maxNetworkChangeRetries = 4
+	networkChangeRetryDelay = 3 * time.Second
 )
 
 // App is the Wails-bound backend: every exported method here is directly
@@ -30,7 +40,82 @@ func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
 	initLog()
 	log.Println("App started")
+
+	// The selector decides *which* config should be carrying traffic, but
+	// connecting is the App's job - so it hands the decision back here rather
+	// than reaching into the tunnel itself. Without this hook the selector
+	// picks a server and nothing ever acts on it.
+	onSelectorSwitch = func(configID string) { a.switchToConfig(configID) }
+	applyRoutingToEngine()
+	syncSelector()
+
 	go checkAndSelfUpdate(ctx)
+}
+
+// switchToConfig connects to a saved config the smart selector has chosen.
+// A no-op when that config is already the live one, so a re-pick of the
+// current server doesn't tear down a working tunnel.
+func (a *App) switchToConfig(configID string) {
+	a.mu.Lock()
+	alreadyLive := a.tunnel != nil && a.activeConfigID == configID
+	a.mu.Unlock()
+	if alreadyLive {
+		return
+	}
+
+	configs, err := loadConfigs()
+	if err != nil {
+		log.Printf("[routing] auto-switch could not read configs: %v", err)
+		return
+	}
+	for _, c := range configs {
+		if c.ID != configID {
+			continue
+		}
+		log.Printf("[routing] auto-selecting config %s", configID)
+		if msg := a.Connect(c.ID, c.Yaml); msg != "" {
+			log.Printf("[routing] auto-connect failed: %s", msg)
+			return
+		}
+		// Nudge the UI instead of making it wait for the next Status() poll.
+		runtime.EventsEmit(a.ctx, "routing:switched", configID)
+		return
+	}
+	log.Printf("[routing] auto-selected config %s no longer exists", configID)
+}
+
+// ReconnectActive rebuilds the tunnel for whatever config is currently
+// connected, re-applying routing settings from scratch. Returns "" on
+// success, an error message on failure, or "" as a no-op if nothing is
+// connected (there's nothing to reconnect).
+//
+// A brand new connection already honours an edited smart-VPN site list
+// immediately - the netstack asks the shared engine fresh on every flow, no
+// reconnect needed. This exists for the flow that ISN'T new: a browser tab
+// already open to a site before it was added, sitting on a warm connection
+// dialed under the old list. Nothing re-evaluates an established connection's
+// routing on its own, so the only reliable way to make the browser open a
+// fresh one is to make the tunnel disappear out from under it.
+func (a *App) ReconnectActive() string {
+	a.mu.Lock()
+	connected := a.tunnel != nil
+	configID := a.activeConfigID
+	a.mu.Unlock()
+	if !connected {
+		return ""
+	}
+
+	configs, err := loadConfigs()
+	if err != nil {
+		return err.Error()
+	}
+	for _, c := range configs {
+		if c.ID == configID {
+			log.Printf("[routing] reconnecting %s to apply routing changes", configID)
+			return a.Connect(c.ID, c.Yaml)
+		}
+	}
+	return "active configuration no longer exists"
 }
 
 // shutdown runs when the window is closed. Without this, closing the window
@@ -75,9 +160,7 @@ func (a *App) Connect(configID string, configYAML string) string {
 	tun, err := StartWindows(configYAML, func() {
 		log.Println("underlying network changed, reconnecting")
 		runtime.EventsEmit(a.ctx, "tunnel:reconnecting")
-		if errMsg := a.Connect(configID, configYAML); errMsg != "" {
-			log.Printf("network-change reconnect failed: %s", errMsg)
-		}
+		a.attemptReconnect(configID, configYAML, 1)
 	})
 	if err != nil {
 		log.Printf("connect failed: %v", err)
@@ -91,6 +174,32 @@ func (a *App) Connect(configID string, configYAML string) string {
 	saveLastActiveID(configID)
 	log.Println("connected")
 	return ""
+}
+
+// attemptReconnect retries a network-change-triggered reconnect with a short
+// backoff, up to maxNetworkChangeRetries times, before finally giving up.
+//
+// A single slow or failed TLS handshake right after a network change is far
+// more often transient - the network is still settling, a DNS server hasn't
+// updated yet - than it is terminal. Without this, the very first miss just
+// leaves the tunnel down (Connect() already tore down any previous one before
+// this dial even started) and nothing ever tries again: the user is left
+// thinking the VPN is on when it silently isn't, until they notice and
+// reconnect by hand.
+func (a *App) attemptReconnect(configID, configYAML string, attempt int) {
+	log.Printf("reconnecting after network change (attempt %d/%d)", attempt, maxNetworkChangeRetries)
+	errMsg := a.Connect(configID, configYAML)
+	if errMsg == "" {
+		return
+	}
+	log.Printf("network-change reconnect attempt %d failed: %s", attempt, errMsg)
+	if attempt >= maxNetworkChangeRetries {
+		log.Printf("giving up reconnecting after %d attempts", maxNetworkChangeRetries)
+		return
+	}
+	time.AfterFunc(networkChangeRetryDelay, func() {
+		a.attemptReconnect(configID, configYAML, attempt+1)
+	})
 }
 
 func (a *App) Disconnect() {
@@ -422,6 +531,112 @@ func (a *App) SetLanguage(lang string) {
 	setTrayLang(lang)
 	refreshTrayLanguage()
 }
+
+// --- routing (Маршрутизация section) ---------------------------------------
+//
+// The decision logic is shared with Android (internal/routing); these are just
+// the accessors the WebView calls. Every setter re-applies the settings to the
+// live engine, so edits take effect on the next connection an app opens rather
+// than needing a reconnect.
+
+// GetRoutingState returns everything the Маршрутизация section renders from,
+// as one JSON blob - a single round trip instead of six, and no chance of the
+// UI seeing a half-updated mix of old and new values.
+func (a *App) GetRoutingState() string {
+	data, _ := json.Marshal(struct {
+		Mode          string   `json:"mode"`
+		SmartEnabled  bool     `json:"smartEnabled"`
+		Sites         []string `json:"sites"`
+		SmartConfigs  []string `json:"smartConfigs"`
+		AutoEnabled   bool     `json:"autoEnabled"`
+		AutoConfigs   []string `json:"autoConfigs"`
+		AppsEnabled   bool     `json:"appsEnabled"`
+		AppsInclude   bool     `json:"appsInclude"`
+	}{
+		Mode:         loadRoutingMode(),
+		SmartEnabled: loadSmartEnabled(),
+		Sites:        loadSmartSites(),
+		SmartConfigs: loadSmartConfigs(),
+		AutoEnabled:  loadAutoEnabled(),
+		AutoConfigs:  loadAutoConfigs(),
+		AppsEnabled:  loadAppsEnabled(),
+		AppsInclude:  loadAppsInclude(),
+	})
+	return string(data)
+}
+
+// SetRoutingMode switches between per-app exclusion and per-site inclusion.
+func (a *App) SetRoutingMode(mode string) {
+	saveRoutingMode(mode)
+	applyRoutingToEngine()
+	syncSelector()
+}
+
+// SetSmartEnabled turns smart routing on or off.
+func (a *App) SetSmartEnabled(enabled bool) {
+	saveSmartEnabled(enabled)
+	applyRoutingToEngine()
+	syncSelector()
+}
+
+// SetSmartSites replaces the routed-site list. sites is newline-separated,
+// matching the textarea the UI edits it in.
+func (a *App) SetSmartSites(sites string) {
+	saveSmartSites(splitSiteLines(sites))
+	applyRoutingToEngine()
+}
+
+// SetSmartConfigs replaces the configs smart mode may choose between.
+func (a *App) SetSmartConfigs(idsJSON string) {
+	var ids []string
+	if err := json.Unmarshal([]byte(idsJSON), &ids); err != nil {
+		return
+	}
+	saveSmartConfigs(ids)
+	syncSelector()
+}
+
+// SetAutoEnabled turns whole-device automatic routing on or off.
+func (a *App) SetAutoEnabled(enabled bool) {
+	saveAutoEnabled(enabled)
+	applyRoutingToEngine()
+	syncSelector()
+}
+
+// SetAutoConfigs narrows which configs "Автоматически" chooses between. An
+// empty list means "all of them".
+func (a *App) SetAutoConfigs(idsJSON string) {
+	var ids []string
+	if err := json.Unmarshal([]byte(idsJSON), &ids); err != nil {
+		return
+	}
+	saveAutoConfigs(ids)
+	syncSelector()
+}
+
+// SetAppsEnabled turns per-app routing on or off.
+func (a *App) SetAppsEnabled(enabled bool) {
+	saveAppsEnabled(enabled)
+	applyRoutingToEngine()
+}
+
+// SetAppsInclude picks which way the app list is read - see loadAppsInclude.
+func (a *App) SetAppsInclude(include bool) {
+	saveAppsInclude(include)
+}
+
+// RoutingHealth returns per-config health from the smart selector for the UI's
+// own rows, as [{"id":..,"alive":..,"latency_ms":..,"probed":..,"active":..}].
+func (a *App) RoutingHealth() string { return selectorHealthJSON() }
+
+// PopularResources returns the built-in catalogue of commonly-blocked services
+// for the picker. Shared with Android so both clients show the same list.
+func (a *App) PopularResources() string { return routing.PopularResourcesJSON() }
+
+// UILog lets the frontend put an uncaught error into the app log. The WebView
+// has no console the user can open, so without this a JS failure is invisible
+// to both them and anyone reading a bug report.
+func (a *App) UILog(msg string) { log.Printf("[ui] %s", msg) }
 
 // GetShowProxySettings returns whether the per-config proxy button and port
 // field should be shown - read once at startup, same as GetAppearance.

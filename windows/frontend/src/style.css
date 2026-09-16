@@ -950,3 +950,405 @@ textarea::placeholder { color: var(--text-muted); }
 @media (prefers-reduced-motion: reduce) {
     .scrollbar-thumb { transition: none; }
 }
+
+/* --- Sections + bottom nav (mirrors the Android client's pager) ------------
+   One section visible at a time, switched by the nav below, rather than the
+   old side-by-side columns - so both clients are navigated identically. */
+.section-page {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.bottom-nav {
+    display: flex;
+    justify-content: space-evenly;
+    margin: 8px 20px 16px;
+    padding: 6px 0;
+    border-radius: 18px;
+    background: var(--surface);
+    border: 1px solid var(--surface-outline);
+    flex-shrink: 0;
+}
+.nav-item {
+    background: transparent;
+    border: none;
+    cursor: pointer;
+    padding: 10px 22px;
+    border-radius: 14px;
+}
+/* The icons are solid-black masks, so they can be tinted to the palette -
+   muted when idle, filled with the brand gradient when their section is the
+   one showing (the same "this is on" language as the config tiles). */
+.nav-icon {
+    display: block;
+    width: 24px;
+    height: 24px;
+    background-color: var(--text-secondary);
+    -webkit-mask-size: contain;
+    mask-size: contain;
+    -webkit-mask-repeat: no-repeat;
+    mask-repeat: no-repeat;
+    -webkit-mask-position: center;
+    mask-position: center;
+}
+.nav-icon-lock {
+    -webkit-mask-image: url('./assets/images/nav-lock.png');
+    mask-image: url('./assets/images/nav-lock.png');
+}
+.nav-icon-routing {
+    -webkit-mask-image: url('./assets/images/nav-routing.png');
+    mask-image: url('./assets/images/nav-routing.png');
+}
+.nav-icon-globe {
+    -webkit-mask-image: url('./assets/images/nav-globe.png');
+    mask-image: url('./assets/images/nav-globe.png');
+}
+.nav-item.active .nav-icon {
+    background-color: transparent;
+    background-image: linear-gradient(135deg, var(--primary), var(--accent));
+}
+
+/* --- Routing section ------------------------------------------------------ */
+.routing-scroll {
+    flex: 1;
+    min-height: 0;
+    overflow: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    padding: 0 14px 0 0; /* reserved scrollbar gutter, as elsewhere */
+}
+
+/* A grouping wrapper inside the scroller is still a flex column of its own -
+   without this the parent's gap stops at the wrapper and every tile nested in
+   it ends up flush against its neighbour. */
+.routing-block {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+}
+
+.routing-tile {
+    background: var(--surface);
+    border: 1px solid var(--surface-outline-60);
+    border-radius: 18px;
+    padding: 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    text-align: left;
+}
+.routing-tile-row { flex-direction: row; align-items: center; gap: 12px; }
+.routing-tile-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+.routing-tile-title { font-size: 15.5px; font-weight: 600; color: var(--text-primary); }
+.routing-tile-hint { font-size: 13px; color: var(--text-secondary); line-height: 1.45; }
+
+.routing-mode-options { margin-top: 4px; }
+.routing-inline-btn { margin-top: 4px; }
+
+.routing-tile-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+}
+.routing-link-btn {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    background: transparent;
+    border: none;
+    cursor: pointer;
+    padding: 6px 10px;
+    border-radius: 12px;
+    font-family: inherit;
+    font-size: 13.5px;
+    font-weight: 600;
+    color: var(--primary);
+    flex-shrink: 0;
+}
+.routing-link-btn:hover { background: var(--surface-high); }
+.routing-link-chevron { font-size: 17px; font-weight: 700; line-height: 1; }
+
+.site-add-row { display: flex; align-items: center; gap: 8px; }
+.site-input { flex: 1; padding: 12px 14px; font-size: 14px; border-radius: 14px; }
+
+.site-list { display: flex; flex-direction: column; }
+.site-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 0;
+}
+.site-row-name {
+    flex: 1;
+    min-width: 0;
+    font-size: 14px;
+    color: var(--text-primary);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.site-remove-btn {
+    background: transparent;
+    border: none;
+    color: var(--text-secondary);
+    font-size: 15px;
+    cursor: pointer;
+    padding: 2px 8px;
+    border-radius: 12px;
+}
+
+.sites-apply-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    margin-top: 10px;
+    padding-top: 10px;
+    border-top: 1px solid var(--surface-outline-60);
+}
+.sites-apply-hint {
+    font-size: 12px;
+    color: var(--text-secondary);
+    line-height: 1.4;
+}
+.sites-apply-hint.sites-apply-error {
+    color: var(--danger);
+}
+.sites-apply-row .routing-inline-btn {
+    flex-shrink: 0;
+    margin-top: 0;
+    color: var(--primary);
+    font-weight: 600;
+}
+.site-remove-btn:hover { background: var(--surface-high); color: var(--danger); }
+
+.routing-config-list { display: flex; flex-direction: column; gap: 8px; margin-top: 4px; }
+.routing-config-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 12px 14px;
+    border-radius: 14px;
+    background: var(--surface-high);
+    border: 1px solid var(--surface-outline);
+    cursor: pointer;
+    transition: border-color 200ms ease, border-width 200ms ease;
+}
+.routing-config-row.active { border-width: 2px; border-color: var(--primary); }
+.routing-config-text { flex: 1; min-width: 0; }
+.routing-config-name {
+    font-size: 14.5px;
+    font-weight: 500;
+    color: var(--text-primary);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.routing-config-health { font-size: 12px; margin-top: 3px; color: var(--text-secondary); }
+.routing-config-health.alive { color: var(--success); }
+.routing-config-health.dead { color: var(--danger); }
+/* The bar marks the config actually carrying traffic, as opposed to merely
+   being one the selector is allowed to pick. */
+.routing-config-active-bar {
+    width: 26px;
+    height: 4px;
+    border-radius: 100px;
+    background: linear-gradient(135deg, var(--primary), var(--accent));
+    flex-shrink: 0;
+}
+
+.routing-empty {
+    font-size: 13px;
+    color: var(--text-muted);
+    text-align: center;
+    padding: 8px 0;
+}
+
+/* --- Popular resources picker --------------------------------------------- */
+.popular-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(112px, 1fr));
+    gap: 10px;
+}
+
+.popular-tile {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    aspect-ratio: 1;
+    padding: 10px;
+    border-radius: 18px;
+    background: var(--surface);
+    cursor: pointer;
+    text-align: center;
+    /* A gradient outline needs a real gradient, which border-color can't be -
+       so the border is drawn as a background layer clipped to the padding box,
+       leaving the border box for the gradient to show through. */
+    border: 1px solid transparent;
+    background-clip: padding-box;
+    transition: border-color 200ms ease;
+    font-family: inherit;
+    border-color: var(--surface-outline);
+}
+.popular-tile.active {
+    border: 2px solid transparent;
+    background-image: linear-gradient(var(--surface), var(--surface)),
+                      linear-gradient(135deg, var(--primary), var(--accent));
+    background-origin: border-box;
+    background-clip: padding-box, border-box;
+}
+.popular-tile-logo {
+    width: 36px;
+    height: 36px;
+    border-radius: 8px;
+    object-fit: contain;
+    flex-shrink: 0;
+}
+.popular-tile-name {
+    font-size: 12px;
+    font-weight: 500;
+    color: var(--text-secondary);
+    line-height: 1.2;
+}
+.popular-tile.active .popular-tile-name { color: var(--text-primary); }
+
+/* Back arrow, same masked-PNG treatment as the gear so it tints to the
+   palette rather than being a glyph the font may or may not have. */
+.icon-btn-back { width: 34px; height: 34px; padding: 8px; }
+.icon-btn-back::before {
+    content: "";
+    display: block;
+    width: 100%;
+    height: 100%;
+    background-color: var(--text-primary);
+    -webkit-mask-image: url('./assets/images/nav-back.png');
+    mask-image: url('./assets/images/nav-back.png');
+    -webkit-mask-size: contain;
+    mask-size: contain;
+    -webkit-mask-repeat: no-repeat;
+    mask-repeat: no-repeat;
+    -webkit-mask-position: center;
+    mask-position: center;
+}
+
+/* Sections fade/lift in when selected, so switching reads as a transition
+   rather than the whole panel teleporting. Only the incoming one animates -
+   the outgoing is display:none immediately, which is what keeps this cheap. */
+@keyframes section-in {
+    from { opacity: 0; transform: translateY(6px); }
+    to   { opacity: 1; transform: none; }
+}
+.section-page:not(.hidden) {
+    animation: section-in 220ms ease-out;
+}
+@media (prefers-reduced-motion: reduce) {
+    .section-page:not(.hidden) { animation: none; }
+}
+
+/* The resting thumb was the neutral outline colour, which read as a stray grey
+   bar against a coloured palette. Tinting it from --primary keeps it part of
+   the theme at every state (hover/drag already were). */
+.scrollbar-thumb {
+    background-color: color-mix(in srgb, var(--primary) 30%, transparent);
+}
+.scrollbar-thumb.visible:hover {
+    background-color: color-mix(in srgb, var(--primary) 65%, transparent);
+}
+
+/* --- "Выбирать автоматически" banner (Конфигурации section) ---------------
+   A mode banner, not a list item: while it's on it drives every config tile
+   below, so it deliberately looks unlike them - centred, gradient-outlined,
+   and wider-spaced. */
+.auto-tile {
+    /* Shrink-wrapped to its own text and centred in the column, rather than
+       stretching the full width like the config tiles: it is a mode switch
+       sitting above that list, not another row in it. */
+    align-self: center;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 6px;
+    padding: 12px 20px;
+    border-radius: 18px;
+    text-align: center;
+    background:
+        linear-gradient(var(--surface), var(--surface)),
+        linear-gradient(135deg, var(--primary), var(--accent));
+    background-origin: border-box;
+    background-clip: padding-box, border-box;
+    border: 1.5px solid transparent;
+    flex-shrink: 0;
+}
+.auto-tile-title {
+    font-size: 15.5px;
+    font-weight: 600;
+    color: var(--text-primary);
+}
+/* Shows which server was picked once one has been - that is the single thing
+   the user gave up choosing manually, so it is the thing worth showing back. */
+.auto-tile-sub {
+    font-size: 13px;
+    color: var(--text-secondary);
+    line-height: 1.4;
+}
+.auto-tile-sub.resolved {
+    color: var(--primary);
+    font-weight: 600;
+    font-family: "Consolas", "Cascadia Code", monospace;
+}
+
+/* While automatic selection is on, the config tiles below are driven by it,
+   not by the user - so they are dimmed and inert rather than silently
+   ignoring clicks. */
+.config-list.locked {
+    opacity: 0.45;
+    pointer-events: none;
+}
+
+/* The mode picker reads as one line: label on the left, the two choices on the
+   right, rather than a heading with a row stranded underneath it. */
+.routing-mode-options {
+    margin-top: 0;
+    margin-left: auto;
+    flex-wrap: nowrap;
+}
+
+/* A mode's settings stay on screen when its switch is off, dimmed and inert -
+   so it's visible what turning it on would control, instead of the section
+   silently changing height and hiding the answer. */
+.routing-block.inactive {
+    opacity: 0.4;
+    pointer-events: none;
+    filter: grayscale(0.6);
+    transition: opacity 200ms ease, filter 200ms ease;
+}
+
+/* Same treatment, for the two other places a mode can go inactive: the
+   "Выбирать лучшую" banner itself, and the Умный VPN toggle row (its
+   settings below already use .routing-block.inactive - this covers the
+   switch + title + hint above them, which used to stay full-brightness even
+   while disabled). */
+.auto-tile.inactive,
+.routing-tile-row.inactive {
+    opacity: 0.4;
+    pointer-events: none;
+    filter: grayscale(0.6);
+    transition: opacity 200ms ease, filter 200ms ease;
+}
+
+/* Explains why "Выбирать лучшую" and the config list just went inactive -
+   shown above them, in the accent color the rest of this UI reserves for
+   "something you should notice", not the neutral hint gray. */
+.smart-configs-warning {
+    font-size: 12.5px;
+    color: var(--accent);
+    line-height: 1.5;
+    margin-bottom: 14px;
+}

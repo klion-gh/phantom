@@ -50,6 +50,10 @@ export function GetLanguage() {
   return window['go']['main']['App']['GetLanguage']();
 }
 
+export function GetRoutingState() {
+  return window['go']['main']['App']['GetRoutingState']();
+}
+
 export function GetShowProxySettings() {
   return window['go']['main']['App']['GetShowProxySettings']();
 }
@@ -78,12 +82,40 @@ export function Ping(arg1) {
   return window['go']['main']['App']['Ping'](arg1);
 }
 
+export function PopularResources() {
+  return window['go']['main']['App']['PopularResources']();
+}
+
 export function ReadLog() {
   return window['go']['main']['App']['ReadLog']();
 }
 
+export function ReconnectActive() {
+  return window['go']['main']['App']['ReconnectActive']();
+}
+
+export function RoutingHealth() {
+  return window['go']['main']['App']['RoutingHealth']();
+}
+
 export function SetAppearance(arg1, arg2) {
   return window['go']['main']['App']['SetAppearance'](arg1, arg2);
+}
+
+export function SetAppsEnabled(arg1) {
+  return window['go']['main']['App']['SetAppsEnabled'](arg1);
+}
+
+export function SetAppsInclude(arg1) {
+  return window['go']['main']['App']['SetAppsInclude'](arg1);
+}
+
+export function SetAutoConfigs(arg1) {
+  return window['go']['main']['App']['SetAutoConfigs'](arg1);
+}
+
+export function SetAutoEnabled(arg1) {
+  return window['go']['main']['App']['SetAutoEnabled'](arg1);
 }
 
 export function SetConfigGeo(arg1, arg2, arg3, arg4) {
@@ -94,8 +126,24 @@ export function SetLanguage(arg1) {
   return window['go']['main']['App']['SetLanguage'](arg1);
 }
 
+export function SetRoutingMode(arg1) {
+  return window['go']['main']['App']['SetRoutingMode'](arg1);
+}
+
 export function SetShowProxySettings(arg1) {
   return window['go']['main']['App']['SetShowProxySettings'](arg1);
+}
+
+export function SetSmartConfigs(arg1) {
+  return window['go']['main']['App']['SetSmartConfigs'](arg1);
+}
+
+export function SetSmartEnabled(arg1) {
+  return window['go']['main']['App']['SetSmartEnabled'](arg1);
+}
+
+export function SetSmartSites(arg1) {
+  return window['go']['main']['App']['SetSmartSites'](arg1);
 }
 
 export function StartProxy(arg1, arg2, arg3) {
@@ -108,6 +156,10 @@ export function Status() {
 
 export function StopProxy(arg1) {
   return window['go']['main']['App']['StopProxy'](arg1);
+}
+
+export function UILog(arg1) {
+  return window['go']['main']['App']['UILog'](arg1);
 }
 
 export function UpdateConfig(arg1, arg2) {

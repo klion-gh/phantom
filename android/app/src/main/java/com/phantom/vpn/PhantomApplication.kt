@@ -12,6 +12,11 @@ class PhantomApplication : Application() {
         // Loaded before any composable reads a colour, so the first frame is
         // already in the user's chosen theme instead of flashing the default.
         Appearance.load(this)
+        // Same reasoning, plus the VpnService reads these when it builds a
+        // tunnel - which can happen from a notification action without any
+        // Activity ever having been created.
+        RoutingStore.load(this)
+        RoutingController.sync(this)
         FileLog.i("Application.onCreate")
     }
 }
