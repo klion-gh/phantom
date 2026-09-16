@@ -113,6 +113,13 @@
     --surface-high-alpha: 100%;
     --surface-glass: color-mix(in srgb, var(--surface) var(--surface-alpha), transparent);
     --surface-high-glass: color-mix(in srgb, var(--surface-high) var(--surface-high-alpha), transparent);
+    /* Backdrop-filter has no equivalent on Android (Compose can't sample
+       "whatever is rendered behind me"), so that client approximates the
+       effect by blurring each tile's own fill instead - see Theme.kt's
+       glassBlur. CSS actually has the real thing, so tiles here get a true
+       frosted-glass look: the animated canvas behind them blurs, not their
+       own paint. */
+    --glass-blur: blur(0px);
 }
 
 /* On <html>, not <body> - same element data-palette/data-background already
@@ -121,6 +128,32 @@
 html.glass-effect {
     --surface-alpha: 46%;
     --surface-high-alpha: 60%;
+    --glass-blur: blur(10px);
+}
+
+/* Every tile/input/nav-bar surface that turns translucent under the glass
+   effect also gets the real backdrop blur to go with it. Hover-only accent
+   backgrounds (icon-btn:hover and friends) are left alone - blurring a
+   fill that only exists for a fraction of a second on hover isn't worth the
+   compositing cost. */
+.config-card,
+.empty-state-circle,
+.resource-card,
+.lang-tile,
+.background-tile,
+.bottom-nav,
+.routing-tile,
+.popular-tile,
+.auto-tile,
+.update-banner,
+.proxy-toggle,
+textarea,
+.log-text,
+.text-input,
+.routing-config-row {
+    backdrop-filter: var(--glass-blur);
+    -webkit-backdrop-filter: var(--glass-blur);
+    transition: backdrop-filter 260ms ease;
 }
 
 * { box-sizing: border-box; }
@@ -325,6 +358,7 @@ html, body {
 }
 
 .config-card {
+    position: relative;
     display: flex;
     align-items: center;
     gap: 12px;
@@ -336,12 +370,28 @@ html, body {
     transition: border-color 0.25s ease;
 }
 
-/* Gradient outline for whichever tile currently has the active tunnel. */
+/* Gradient outline for whichever tile currently has the active tunnel - a
+   ::before overlay, not a second background-image layer clipped to
+   border-box: that layered-background trick needs the inner fill fully
+   opaque to hide the gradient except at the ring, and --surface-glass is
+   translucent under the glass effect, so the fill let the gradient bleed
+   through the whole tile instead of just its edge (visible as the wrong,
+   tinted colour). A mask-composite overlay keeps the fill and the ring on
+   independent layers regardless of the fill's own opacity. */
 .config-card.connected {
     border-color: transparent;
-    background:
-        linear-gradient(var(--surface-glass), var(--surface-glass)) padding-box,
-        var(--brand-gradient) border-box;
+}
+.config-card.connected::before {
+    content: '';
+    position: absolute;
+    inset: -1px;
+    border-radius: inherit;
+    padding: 1px;
+    background: var(--brand-gradient);
+    -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+    -webkit-mask-composite: xor;
+    mask-composite: exclude;
+    pointer-events: none;
 }
 
 .config-info { flex: 1; min-width: 0; }
@@ -395,6 +445,7 @@ html, body {
    gradient outline .config-card.connected uses when on (see toggleProxy in
    main.js) - deliberately unrelated to the power button's own state. */
 .proxy-toggle {
+    position: relative;
     flex-shrink: 0;
     align-self: center;
     background: var(--surface-high-glass);
@@ -412,9 +463,20 @@ html, body {
 .proxy-toggle.active {
     color: var(--text-primary);
     border: 1px solid transparent;
-    background:
-        linear-gradient(var(--surface-high-glass), var(--surface-high-glass)) padding-box,
-        var(--brand-gradient) border-box;
+}
+/* ::before overlay, not a layered background - see .config-card.connected's
+   doc for why that trick and a translucent glass fill don't mix. */
+.proxy-toggle.active::before {
+    content: '';
+    position: absolute;
+    inset: -1px;
+    border-radius: inherit;
+    padding: 1px;
+    background: var(--brand-gradient);
+    -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+    -webkit-mask-composite: xor;
+    mask-composite: exclude;
+    pointer-events: none;
 }
 
 .proxy-block {
@@ -1245,6 +1307,7 @@ textarea::placeholder { color: var(--text-muted); }
 }
 
 .popular-tile {
+    position: relative;
     display: flex;
     flex-direction: column;
     align-items: center;
@@ -1256,21 +1319,27 @@ textarea::placeholder { color: var(--text-muted); }
     background: var(--surface-glass);
     cursor: pointer;
     text-align: center;
-    /* A gradient outline needs a real gradient, which border-color can't be -
-       so the border is drawn as a background layer clipped to the padding box,
-       leaving the border box for the gradient to show through. */
-    border: 1px solid transparent;
-    background-clip: padding-box;
+    border: 1px solid var(--surface-outline);
     transition: border-color 200ms ease;
     font-family: inherit;
-    border-color: var(--surface-outline);
 }
+/* ::before overlay, not the layered-background trick the plain border-color
+   above can get away without - see .config-card.connected's doc for why that
+   trick and a translucent glass fill don't mix. */
 .popular-tile.active {
     border: 2px solid transparent;
-    background-image: linear-gradient(var(--surface-glass), var(--surface-glass)),
-                      linear-gradient(135deg, var(--primary), var(--accent));
-    background-origin: border-box;
-    background-clip: padding-box, border-box;
+}
+.popular-tile.active::before {
+    content: '';
+    position: absolute;
+    inset: -2px;
+    border-radius: inherit;
+    padding: 2px;
+    background: linear-gradient(135deg, var(--primary), var(--accent));
+    -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+    -webkit-mask-composite: xor;
+    mask-composite: exclude;
+    pointer-events: none;
 }
 .popular-tile-logo {
     width: 36px;
@@ -1335,6 +1404,7 @@ textarea::placeholder { color: var(--text-muted); }
    below, so it deliberately looks unlike them - centred, gradient-outlined,
    and wider-spaced. */
 .auto-tile {
+    position: relative;
     /* Shrink-wrapped to its own text and centred in the column, rather than
        stretching the full width like the config tiles: it is a mode switch
        sitting above that list, not another row in it. */
@@ -1346,13 +1416,25 @@ textarea::placeholder { color: var(--text-muted); }
     padding: 12px 20px;
     border-radius: 18px;
     text-align: center;
-    background:
-        linear-gradient(var(--surface-glass), var(--surface-glass)),
-        linear-gradient(135deg, var(--primary), var(--accent));
-    background-origin: border-box;
-    background-clip: padding-box, border-box;
+    background: var(--surface-glass);
     border: 1.5px solid transparent;
     flex-shrink: 0;
+}
+/* ::before overlay, not the layered-background trick - see
+   .config-card.connected's doc for why that trick and a translucent glass
+   fill don't mix (this tile always shows the gradient ring, unlike the
+   config/popular tiles' active-only variant, but the same fix applies). */
+.auto-tile::before {
+    content: '';
+    position: absolute;
+    inset: -1.5px;
+    border-radius: inherit;
+    padding: 1.5px;
+    background: linear-gradient(135deg, var(--primary), var(--accent));
+    -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+    -webkit-mask-composite: xor;
+    mask-composite: exclude;
+    pointer-events: none;
 }
 .auto-tile-title {
     font-size: 15.5px;

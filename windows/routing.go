@@ -8,11 +8,16 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	"phantom/internal/netstack"
 	"phantom/internal/pingcheck"
 	"phantom/internal/routing"
 )
+
+// How long a single candidate's probe is allowed to run before it's counted
+// as unreachable this round - see routing.WithProbeTimeout.
+const probeTimeout = 6 * time.Second
 
 // The Windows half of the routing feature. The decision logic itself lives in
 // internal/routing and is shared with Android; what's here is the platform
@@ -229,13 +234,13 @@ func syncSelector() {
 
 	if selector == nil {
 		selector = routing.NewSelector(
-			func(configYAML string) (int64, error) {
+			routing.WithProbeTimeout(func(configYAML string) (int64, error) {
 				result, err := pingcheck.Ping(configYAML)
 				if err != nil {
 					return 0, err
 				}
 				return result.LatencyMs, nil
-			},
+			}, probeTimeout),
 			func(c routing.Candidate) {
 				if onSelectorSwitch != nil {
 					onSelectorSwitch(c.ID)

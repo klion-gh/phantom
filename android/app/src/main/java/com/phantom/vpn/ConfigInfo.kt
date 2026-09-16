@@ -161,16 +161,12 @@ fun ConfigInfoCard(
     val isConnected = status == ConnectionStatus.CONNECTED
     val connectedGradient = Brush.linearGradient(colors = BrandGradient)
 
-    Card(
-        colors = CardDefaults.cardColors(containerColor = Surface),
+    GlassTile(
+        color = Surface,
         shape = cardShape,
+        borderBrush = if (isConnected) connectedGradient else Brush.linearGradient(listOf(SurfaceOutline.copy(alpha = 0.6f), SurfaceOutline.copy(alpha = 0.6f))),
         modifier = Modifier
             .fillMaxWidth()
-            .border(
-                width = 1.dp,
-                brush = if (isConnected) connectedGradient else Brush.linearGradient(listOf(SurfaceOutline.copy(alpha = 0.6f), SurfaceOutline.copy(alpha = 0.6f))),
-                shape = cardShape,
-            )
             .combinedClickable(onClick = {}, onLongClick = onLongPress),
     ) {
         Row(
@@ -270,22 +266,18 @@ private fun ProxyBlock(
     val shape = RoundedCornerShape(16.dp)
     val gradient = Brush.linearGradient(colors = BrandGradient)
     Column(horizontalAlignment = Alignment.CenterHorizontally) {
-        Box(
-            modifier = Modifier
-                .clip(shape)
-                .background(SurfaceHigh, shape)
-                .then(
-                    if (running) Modifier.border(1.dp, gradient, shape)
-                    else Modifier.border(1.dp, SurfaceOutline, shape)
-                )
-                .clickable(onClick = onToggleClick)
-                .padding(horizontal = 8.dp, vertical = 5.dp),
+        GlassTile(
+            modifier = Modifier.clickable(onClick = onToggleClick),
+            color = SurfaceHigh,
+            shape = shape,
+            borderBrush = if (running) gradient else Brush.linearGradient(listOf(SurfaceOutline, SurfaceOutline)),
         ) {
             Text(
                 text = "PROXY",
                 color = if (running) TextPrimary else TextSecondary,
                 fontSize = 9.sp,
                 fontWeight = FontWeight.Bold,
+                modifier = Modifier.padding(horizontal = 8.dp, vertical = 5.dp),
             )
         }
         Spacer(modifier = Modifier.height(4.dp))

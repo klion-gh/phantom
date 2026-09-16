@@ -4,10 +4,15 @@ package mobile
 
 import (
 	"encoding/json"
+	"time"
 
 	"phantom/internal/pingcheck"
 	"phantom/internal/routing"
 )
+
+// How long a single candidate's probe is allowed to run before it's counted
+// as unreachable this round - see routing.WithProbeTimeout.
+const probeTimeout = 6 * time.Second
 
 // PopularResourcesJSON returns the built-in catalogue of commonly-blocked
 // services for the picker, as
@@ -50,7 +55,7 @@ type AutoSelector struct {
 func NewAutoSelector(listener SwitchListener) *AutoSelector {
 	a := &AutoSelector{}
 	a.inner = routing.NewSelector(
-		func(configYAML string) (int64, error) {
+		routing.WithProbeTimeout(func(configYAML string) (int64, error) {
 			// A full Phantom handshake, not a TCP connect: a blocked server
 			// whose port still accepts connections would otherwise look
 			// perfectly healthy and keep being selected.
@@ -59,7 +64,7 @@ func NewAutoSelector(listener SwitchListener) *AutoSelector {
 				return 0, err
 			}
 			return result.LatencyMs, nil
-		},
+		}, probeTimeout),
 		func(c routing.Candidate) {
 			if listener != nil {
 				listener.OnSwitch(c.ID)

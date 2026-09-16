@@ -188,24 +188,25 @@ private fun SmartVpnHeaderTile(
 @Composable
 private fun PopularResourcesButton(onClick: () -> Unit) {
     val shape = RoundedCornerShape(18.dp)
-    Row(
-        verticalAlignment = Alignment.CenterVertically,
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(shape)
-            .background(Surface)
-            .border(1.dp, SurfaceOutline, shape)
-            .clickable(onClick = onClick)
-            .padding(horizontal = 16.dp, vertical = 16.dp),
+    GlassTile(
+        modifier = Modifier.fillMaxWidth().clickable(onClick = onClick),
+        color = Surface,
+        shape = shape,
+        borderColor = SurfaceOutline,
     ) {
-        Text(
-            I18n.t("popular_resources"),
-            color = TextPrimary,
-            fontSize = 15.sp,
-            fontWeight = FontWeight.SemiBold,
-            modifier = Modifier.weight(1f),
-        )
-        Text("›", color = TextSecondary, fontSize = 20.sp, fontWeight = FontWeight.Bold)
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 16.dp),
+        ) {
+            Text(
+                I18n.t("popular_resources"),
+                color = TextPrimary,
+                fontSize = 15.sp,
+                fontWeight = FontWeight.SemiBold,
+                modifier = Modifier.weight(1f),
+            )
+            Text("›", color = TextSecondary, fontSize = 20.sp, fontWeight = FontWeight.Bold)
+        }
     }
 }
 
@@ -421,46 +422,48 @@ private fun ConfigPickRow(
         ?: parseYamlField(config.yaml, "server")
         ?: "—"
 
-    Row(
-        verticalAlignment = Alignment.CenterVertically,
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(shape)
-            .background(SurfaceHigh)
-            .border(borderWidth, borderColor, shape)
-            .clickable(onClick = onClick)
-            .padding(horizontal = 14.dp, vertical = 12.dp),
+    GlassTile(
+        modifier = Modifier.fillMaxWidth().clickable(onClick = onClick),
+        color = SurfaceHigh,
+        shape = shape,
+        borderColor = borderColor,
+        borderWidth = borderWidth,
     ) {
-        Column(modifier = Modifier.weight(1f)) {
-            Text(
-                domain,
-                color = TextPrimary,
-                fontSize = 14.5.sp,
-                fontWeight = FontWeight.Medium,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-            if (selected && health != null) {
-                Spacer(Modifier.height(3.dp))
-                val (label, color) = when {
-                    !health.probed -> I18n.t("routing_checking") to TextMuted
-                    !health.alive -> I18n.t("routing_unreachable") to Danger
-                    health.active -> "${I18n.t("routing_active")} · ${health.latencyMs} ${I18n.t("ms")}" to Success
-                    else -> "${health.latencyMs} ${I18n.t("ms")}" to TextSecondary
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 12.dp),
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    domain,
+                    color = TextPrimary,
+                    fontSize = 14.5.sp,
+                    fontWeight = FontWeight.Medium,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                if (selected && health != null) {
+                    Spacer(Modifier.height(3.dp))
+                    val (label, color) = when {
+                        !health.probed -> I18n.t("routing_checking") to TextMuted
+                        !health.alive -> I18n.t("routing_unreachable") to Danger
+                        health.active -> "${I18n.t("routing_active")} · ${health.latencyMs} ${I18n.t("ms")}" to Success
+                        else -> "${health.latencyMs} ${I18n.t("ms")}" to TextSecondary
+                    }
+                    Text(label, color = color, fontSize = 12.sp)
                 }
-                Text(label, color = color, fontSize = 12.sp)
             }
-        }
-        // The active config is the one actually carrying traffic right now -
-        // worth distinguishing from "selected", which only means the selector
-        // is allowed to choose it.
-        if (selected && health?.active == true) {
-            Box(
-                modifier = Modifier
-                    .size(width = 26.dp, height = 4.dp)
-                    .clip(RoundedCornerShape(100.dp))
-                    .background(Brush.linearGradient(BrandGradient)),
-            )
+            // The active config is the one actually carrying traffic right now -
+            // worth distinguishing from "selected", which only means the selector
+            // is allowed to choose it.
+            if (selected && health?.active == true) {
+                Box(
+                    modifier = Modifier
+                        .size(width = 26.dp, height = 4.dp)
+                        .clip(RoundedCornerShape(100.dp))
+                        .background(Brush.linearGradient(BrandGradient)),
+                )
+            }
         }
     }
 }
@@ -469,13 +472,12 @@ private fun ConfigPickRow(
 @Composable
 private fun SectionTile(content: @Composable ColumnScope.() -> Unit) {
     val shape = RoundedCornerShape(18.dp)
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(shape)
-            .background(Surface)
-            .border(1.dp, SurfaceOutline.copy(alpha = 0.6f), shape)
-            .padding(16.dp),
-        content = content,
-    )
+    GlassTile(
+        modifier = Modifier.fillMaxWidth(),
+        color = Surface,
+        shape = shape,
+        borderColor = SurfaceOutline.copy(alpha = 0.6f),
+    ) {
+        Column(modifier = Modifier.fillMaxWidth().padding(16.dp), content = content)
+    }
 }

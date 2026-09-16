@@ -4,8 +4,10 @@ import android.content.Context
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
@@ -16,10 +18,14 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Shape
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 
 /**
@@ -95,7 +101,7 @@ enum class Palette(
 }
 
 /**
- * Eight animated-backdrop variants - see AnimatedBackground.kt. "ORBS" is the
+ * Ten animated-backdrop variants - see AnimatedBackground.kt. "ORBS" is the
  * original/default.
  */
 enum class BackgroundStyle(val labelKey: String, val descriptionKey: String) {
@@ -106,6 +112,8 @@ enum class BackgroundStyle(val labelKey: String, val descriptionKey: String) {
     METEORS("background_meteors_label", "background_meteors_desc"),
     WAVES("background_waves_label", "background_waves_desc"),
     EMBERS("background_embers_label", "background_embers_desc"),
+    MATRIX("background_matrix_label", "background_matrix_desc"),
+    GALAXY("background_galaxy_label", "background_galaxy_desc"),
     PLAIN("background_plain_label", "background_plain_desc"),
 }
 
@@ -192,6 +200,51 @@ val Surface: Color get() = Appearance.palette.surface.let {
 }
 val SurfaceHigh: Color get() = Appearance.palette.surfaceHigh.let {
     if (Appearance.glassEffect) it.copy(alpha = 0.72f) else it
+}
+
+// Chain immediately before .background(Surface)/.background(SurfaceHigh) on a
+// tile - a soft blur on that tile's own fill when the glass effect is on, a
+// no-op otherwise. Deliberately per-tile, not a blur on AnimatedBackground
+// itself: Compose has no simple "sample whatever is rendered behind me"
+// primitive, so this softens the tile's own translucent paint (and the crisp
+// edge a plain alpha cut leaves at its corners) rather than trying to fake
+// true backdrop sampling - the backdrop itself always stays sharp, only tiles
+// that opt into it look frosted. Content drawn after (in the same Box/Column,
+// once .background() returns) is a separate layer and stays untouched, so
+// text/icons never blur along with it.
+fun Modifier.glassBlur(radius: Dp = 10.dp): Modifier =
+    if (Appearance.glassEffect) this.blur(radius) else this
+
+/**
+ * A tile-shaped container built as three stacked layers instead of one
+ * Composable carrying background+border+content together, specifically so
+ * [glassBlur] can blur just the fill: blurring a Composable blurs everything
+ * drawn inside it, so background, border and content have to be genuinely
+ * separate layers for only the first one to ever soften.
+ *
+ * [content] sizes the tile (an ordinary child, not matchParentSize) - fill and
+ * border then conform to whatever size that ends up being.
+ */
+@Composable
+fun GlassTile(
+    modifier: Modifier = Modifier,
+    color: Color,
+    shape: Shape,
+    borderColor: Color? = null,
+    borderBrush: Brush? = null,
+    borderWidth: Dp = 1.dp,
+    contentAlignment: Alignment = Alignment.TopStart,
+    content: @Composable BoxScope.() -> Unit,
+) {
+    Box(modifier = modifier.clip(shape), contentAlignment = contentAlignment) {
+        Box(Modifier.matchParentSize().glassBlur().background(color))
+        content()
+        if (borderBrush != null) {
+            Box(Modifier.matchParentSize().border(borderWidth, borderBrush, shape))
+        } else if (borderColor != null) {
+            Box(Modifier.matchParentSize().border(borderWidth, borderColor, shape))
+        }
+    }
 }
 
 // Deliberately ignores glassEffect - see [Surface]'s doc.

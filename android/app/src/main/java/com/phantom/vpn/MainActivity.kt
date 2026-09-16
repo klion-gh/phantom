@@ -150,7 +150,9 @@ class MainActivity : ComponentActivity() {
                 Box(modifier = Modifier.fillMaxSize()) {
                     // Deliberately outside the systemBars padding below - the
                     // backdrop is meant to run edge-to-edge, under the status/nav
-                    // bars, not stop short of them.
+                    // bars, not stop short of them. Never blurred - "Эффект
+                    // прозрачности" is a per-tile effect (see Theme.kt's
+                    // Modifier.glassBlur), not a whole-screen one.
                     AnimatedBackground(modifier = Modifier.fillMaxSize())
                     PhantomApp(
                         onConnect = { config -> requestConnect(config) },
@@ -820,18 +822,17 @@ private fun BottomNavBar(
     currentPage: Int,
     onSelect: (Int) -> Unit,
 ) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(top = 8.dp)
-            .clip(RoundedCornerShape(18.dp))
-            .background(Surface)
-            .border(1.dp, SurfaceOutline, RoundedCornerShape(18.dp)),
-        horizontalArrangement = Arrangement.SpaceEvenly,
+    GlassTile(
+        modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+        color = Surface,
+        shape = RoundedCornerShape(18.dp),
+        borderColor = SurfaceOutline,
     ) {
-        NavBarItem(iconRes = R.drawable.ic_nav_lock, selected = currentPage == 0, onClick = { onSelect(0) })
-        NavBarItem(iconRes = R.drawable.ic_nav_routing, selected = currentPage == 1, onClick = { onSelect(1) })
-        NavBarItem(iconRes = R.drawable.ic_nav_globe, selected = currentPage == 2, onClick = { onSelect(2) })
+        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
+            NavBarItem(iconRes = R.drawable.ic_nav_lock, selected = currentPage == 0, onClick = { onSelect(0) })
+            NavBarItem(iconRes = R.drawable.ic_nav_routing, selected = currentPage == 1, onClick = { onSelect(1) })
+            NavBarItem(iconRes = R.drawable.ic_nav_globe, selected = currentPage == 2, onClick = { onSelect(2) })
+        }
     }
 }
 
@@ -881,32 +882,34 @@ private fun NavBarItem(
 @Composable
 private fun AutoConfigTile(enabled: Boolean, onToggle: (Boolean) -> Unit) {
     val shape = RoundedCornerShape(18.dp)
-    Row(
-        verticalAlignment = Alignment.CenterVertically,
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(shape)
-            .background(Surface)
-            .border(1.dp, SurfaceOutline.copy(alpha = 0.6f), shape)
-            .padding(horizontal = 16.dp, vertical = 14.dp),
+    GlassTile(
+        modifier = Modifier.fillMaxWidth(),
+        color = Surface,
+        shape = shape,
+        borderColor = SurfaceOutline.copy(alpha = 0.6f),
     ) {
-        Column(modifier = Modifier.weight(1f)) {
-            Text(
-                I18n.t("auto_config"),
-                color = TextPrimary,
-                fontSize = 15.5.sp,
-                fontWeight = FontWeight.SemiBold,
-            )
-            Spacer(Modifier.height(3.dp))
-            Text(
-                I18n.t("auto_config_hint"),
-                color = TextSecondary,
-                fontSize = 12.5.sp,
-                lineHeight = 17.sp,
-            )
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 14.dp),
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    I18n.t("auto_config"),
+                    color = TextPrimary,
+                    fontSize = 15.5.sp,
+                    fontWeight = FontWeight.SemiBold,
+                )
+                Spacer(Modifier.height(3.dp))
+                Text(
+                    I18n.t("auto_config_hint"),
+                    color = TextSecondary,
+                    fontSize = 12.5.sp,
+                    lineHeight = 17.sp,
+                )
+            }
+            Spacer(Modifier.width(12.dp))
+            GradientSwitch(checked = enabled, onCheckedChange = onToggle)
         }
-        Spacer(Modifier.width(12.dp))
-        GradientSwitch(checked = enabled, onCheckedChange = onToggle)
     }
 }
 
@@ -1071,12 +1074,11 @@ private fun EmptyState(modifier: Modifier = Modifier, title: String, hint: Strin
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center,
     ) {
-        Box(
-            modifier = Modifier
-                .size(96.dp)
-                .clip(CircleShape)
-                .background(Surface)
-                .border(1.dp, SurfaceOutline, CircleShape),
+        GlassTile(
+            modifier = Modifier.size(96.dp),
+            color = Surface,
+            shape = CircleShape,
+            borderColor = SurfaceOutline,
             contentAlignment = Alignment.Center,
         ) {
             Icon(Icons.Filled.Description, contentDescription = null, tint = TextMuted, modifier = Modifier.size(42.dp))
@@ -1573,21 +1575,20 @@ private fun LangTile(label: String, selected: Boolean, modifier: Modifier = Modi
     val borderWidth by animateDpAsState(if (selected) 2.dp else 1.dp, animationSpec = tween(200), label = "langTileBorderWidth")
     val borderColor by animateColorAsState(if (selected) Primary else SurfaceOutline, animationSpec = tween(200), label = "langTileBorderColor")
     val shape = RoundedCornerShape(18.dp)
-    Box(
+    GlassTile(
         contentAlignment = Alignment.Center,
-        modifier = modifier
-            .height(52.dp)
-            .clip(shape)
-            .background(Surface)
-            .border(borderWidth, borderColor, shape)
-            .clickable(onClick = onClick)
-            .padding(horizontal = 20.dp),
+        modifier = modifier.height(52.dp).clickable(onClick = onClick),
+        color = Surface,
+        shape = shape,
+        borderColor = borderColor,
+        borderWidth = borderWidth,
     ) {
         Text(
             label,
             color = if (selected) TextPrimary else TextSecondary,
             fontSize = 14.sp,
             fontWeight = FontWeight.SemiBold,
+            modifier = Modifier.padding(horizontal = 20.dp),
         )
     }
 }

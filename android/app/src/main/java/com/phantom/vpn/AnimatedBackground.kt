@@ -19,6 +19,11 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.drawText
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.rememberTextMeasurer
+import androidx.compose.ui.unit.sp
 import kotlin.math.cos
 import kotlin.math.min
 import kotlin.math.sin
@@ -55,6 +60,8 @@ private class Star(val x: Float, val y: Float, val baseRadius: Float, val phase:
 private class MeshNode(val baseX: Float, val baseY: Float, val ampX: Float, val ampY: Float, val fx: Int, val fy: Int, val phase: Float)
 private class Meteor(val speed: Int, val length: Float, val lane: Float, val offset: Float)
 private class Ember(val speed: Int, val sway: Float, val swayFreq: Int, val radius: Float, val lane: Float, val offset: Float, val accent: Boolean)
+private class MatrixColumn(val lane: Float, val speed: Int, val offset: Float, val glyphs: List<Boolean>)
+private class GalaxyStar(val armPhase: Float, val radiusFrac: Float, val speed: Int, val size: Float, val accent: Boolean)
 
 private fun makeStars(): List<Star> {
     val rng = seeded(42)
@@ -81,6 +88,29 @@ private fun makeEmbers(): List<Ember> {
         Ember(
             speed = 1 + (rng() * 2).toInt(), sway = rng() * 0.04f + 0.02f, swayFreq = 1 + (rng() * 3).toInt(),
             radius = rng() * 1.8f + 0.8f, lane = rng(), offset = rng(), accent = i % 3 == 0,
+        )
+    }
+}
+private fun makeMatrixColumns(): List<MatrixColumn> {
+    val rng = seeded(2027)
+    return List(52) {
+        MatrixColumn(
+            lane = rng(),
+            speed = 1 + (rng() * 3).toInt(),
+            offset = rng(),
+            glyphs = List(18) { rng() < 0.5f },
+        )
+    }
+}
+private fun makeGalaxyStars(): List<GalaxyStar> {
+    val rng = seeded(555)
+    return List(150) { i ->
+        GalaxyStar(
+            armPhase = rng() * TAU,
+            radiusFrac = rng(),
+            speed = 1 + (rng() * 2).toInt(),
+            size = rng() * 1.6f + 0.5f,
+            accent = i % 4 == 0,
         )
     }
 }
@@ -234,6 +264,76 @@ private fun DrawScope.drawEmbers(embers: List<Ember>, w: Float, h: Float, t: Flo
     }
 }
 
+// The classic falling-code rain: each lane is a trail of pre-measured "0"/"1"
+// glyphs (measured once, outside this loop - see BackgroundCanvas - re-measuring
+// per glyph per frame is what would actually be expensive, not the draw call
+// itself) scrolling downward and wrapping, brightest at the head and fading up
+// the trail. Uses the palette's own primary/accent rather than a hardcoded
+// green, same as every other variant here, so it stays "this app's Matrix
+// background" across all six palettes instead of a green rectangle that fights
+// whichever palette is active.
+private fun DrawScope.drawMatrix(
+    columns: List<MatrixColumn>,
+    w: Float,
+    h: Float,
+    t: Float,
+    zeroGlyph: androidx.compose.ui.text.TextLayoutResult,
+    oneGlyph: androidx.compose.ui.text.TextLayoutResult,
+    accent: Color,
+) {
+    val trailLen = columns.firstOrNull()?.glyphs?.size ?: 18
+    val glyphH = h * 0.03f
+    val trailPx = trailLen * glyphH
+    for (col in columns) {
+        val progress = (t * col.speed + col.offset).mod(1f)
+        val headY = progress * (h + trailPx) - trailPx
+        val x = col.lane * w
+        for (i in 0 until trailLen) {
+            val y = headY - i * glyphH
+            if (y < -glyphH || y > h) continue
+            val fade = (1f - i.toFloat() / trailLen).coerceIn(0f, 1f)
+            val alpha = fade * fade * 0.8f
+            if (alpha < 0.02f) continue
+            val glyph = if (col.glyphs[i]) oneGlyph else zeroGlyph
+            val color = if (i == 0) Color.White else accent
+            drawText(glyph, color = color, alpha = alpha, topLeft = Offset(x, y))
+        }
+    }
+}
+
+// A rotating spiral galaxy: a soft core glow plus several hundred stars laid
+// out along logarithmic-ish spiral arms, orbiting at an integer multiple of
+// the 60s cycle each (the same "whole number of periods" rule every other
+// variant follows) so the frame at the seam matches exactly.
+private fun DrawScope.drawGalaxy(stars: List<GalaxyStar>, w: Float, h: Float, t: Float, primary: Color, accent: Color) {
+    val cx = w * 0.5f
+    val cy = h * 0.44f
+    val maxR = min(w, h) * 0.62f
+    val armCount = 3
+    drawCircle(
+        brush = Brush.radialGradient(
+            colors = listOf(primary.copy(alpha = 0.22f), primary.copy(alpha = 0f)),
+            center = Offset(cx, cy), radius = maxR * 0.4f,
+        ),
+        radius = maxR * 0.4f, center = Offset(cx, cy),
+    )
+    for (s in stars) {
+        val arm = (s.armPhase / TAU * armCount).toInt() % armCount
+        val armOffset = arm * (TAU / armCount)
+        val angle = s.armPhase + s.radiusFrac * TAU * 1.6f + t * TAU * s.speed + armOffset
+        val r = s.radiusFrac * maxR
+        val x = cx + cos(angle) * r
+        val y = cy + sin(angle) * r * 0.62f
+        val twinkle = 0.5f + 0.5f * sin(t * TAU * 3 + s.armPhase * 5)
+        val alpha = ((0.15f + 0.55f * (1f - s.radiusFrac)) * twinkle).coerceIn(0f, 0.85f)
+        drawCircle(
+            color = (if (s.accent) accent else Color.White).copy(alpha = alpha),
+            radius = s.size,
+            center = Offset(x, y),
+        )
+    }
+}
+
 /** True when the system's "remove animations" accessibility setting is on -
  * Android has no prefers-reduced-motion media query, this is its equivalent. */
 @Composable
@@ -260,6 +360,19 @@ private fun BackgroundCanvas(style: BackgroundStyle, modifier: Modifier = Modifi
     val meshNodes = remember { makeMeshNodes() }
     val meteors = remember { makeMeteors() }
     val embers = remember { makeEmbers() }
+    val matrixColumns = remember { makeMatrixColumns() }
+    val galaxyStars = remember { makeGalaxyStars() }
+
+    // Measured once, not per glyph per frame - drawText(TextLayoutResult, ...)
+    // lets colour/alpha vary per call without re-measuring, so this pair
+    // covers every "0"/"1" the Matrix variant ever draws.
+    val textMeasurer = rememberTextMeasurer()
+    val zeroGlyph = remember(textMeasurer) {
+        textMeasurer.measure("0", style = TextStyle(fontFamily = FontFamily.Monospace, fontSize = 13.sp))
+    }
+    val oneGlyph = remember(textMeasurer) {
+        textMeasurer.measure("1", style = TextStyle(fontFamily = FontFamily.Monospace, fontSize = 13.sp))
+    }
 
     val transition = rememberInfiniteTransition(label = "backdrop")
     val t by transition.animateFloat(
@@ -279,6 +392,8 @@ private fun BackgroundCanvas(style: BackgroundStyle, modifier: Modifier = Modifi
             BackgroundStyle.METEORS -> drawMeteors(meteors, w, h, t, primary, accent)
             BackgroundStyle.WAVES -> drawWaves(w, h, t, primary, accent)
             BackgroundStyle.EMBERS -> drawEmbers(embers, w, h, t, primary, accent)
+            BackgroundStyle.MATRIX -> drawMatrix(matrixColumns, w, h, t, zeroGlyph, oneGlyph, accent)
+            BackgroundStyle.GALAXY -> drawGalaxy(galaxyStars, w, h, t, primary, accent)
             BackgroundStyle.PLAIN -> Unit
         }
     }

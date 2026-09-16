@@ -1,6 +1,7 @@
 package routing
 
 import (
+	"fmt"
 	"sort"
 	"sync"
 	"time"
@@ -59,6 +60,37 @@ type Health struct {
 // (internal/pingcheck), which is the only honest signal - a plain TCP connect
 // would call a blocked-but-listening port healthy.
 type ProbeFunc func(configYAML string) (latencyMs int64, err error)
+
+// WithProbeTimeout bounds probe to at most timeout, reporting a timeout as an
+// ordinary failed probe (unreachable) rather than blocking Probe() past it.
+//
+// Needed specifically because a real probe (internal/pingcheck.Ping) tries
+// every one of a config's failover server addresses *in order*, each with its
+// own several-second dial timeout - a config with two or three dead failover
+// entries could take the better part of a minute to report unreachable on its
+// own. Different candidates are already probed concurrently (see Probe), but
+// the whole round still waits for the slowest one, so turning on "Умный VPN"/
+// "Выбирать лучшую" with even one such config in the candidate set turned
+// into a long, silent stall with no connection and no feedback before this.
+func WithProbeTimeout(probe ProbeFunc, timeout time.Duration) ProbeFunc {
+	return func(configYAML string) (int64, error) {
+		type result struct {
+			latencyMs int64
+			err       error
+		}
+		done := make(chan result, 1)
+		go func() {
+			latencyMs, err := probe(configYAML)
+			done <- result{latencyMs, err}
+		}()
+		select {
+		case r := <-done:
+			return r.latencyMs, r.err
+		case <-time.After(timeout):
+			return 0, fmt.Errorf("probe timed out after %s", timeout)
+		}
+	}
+}
 
 type candidateState struct {
 	Candidate

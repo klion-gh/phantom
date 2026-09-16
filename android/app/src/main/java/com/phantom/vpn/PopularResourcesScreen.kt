@@ -127,54 +127,57 @@ private fun ResourceTile(resource: PopularResource, selected: Boolean, onClick: 
         logo = fetchLogo(resource.icon)
     }
 
-    Column(
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.Center,
-        modifier = Modifier
-            .aspectRatio(1f)
-            .clip(shape)
-            .background(Surface)
-            .border(borderWidth, borderBrush, shape)
-            .clickable(onClick = onClick)
-            .padding(10.dp),
+    GlassTile(
+        modifier = Modifier.aspectRatio(1f).clickable(onClick = onClick),
+        color = Surface,
+        shape = shape,
+        borderBrush = borderBrush,
+        borderWidth = borderWidth,
     ) {
-        val bitmap = logo
-        if (bitmap != null) {
-            Image(
-                bitmap = bitmap,
-                contentDescription = null,
-                modifier = Modifier.size(36.dp).clip(RoundedCornerShape(8.dp)),
-            )
-        } else {
-            // Placeholder while the logo loads (or if it never does) - the
-            // service's initial, so the tile is identifiable either way rather
-            // than being a blank square.
-            Box(
-                modifier = Modifier
-                    .size(36.dp)
-                    .clip(RoundedCornerShape(8.dp))
-                    .background(SurfaceHigh),
-                contentAlignment = Alignment.Center,
-            ) {
-                Text(
-                    resource.name.take(1).uppercase(),
-                    color = TextSecondary,
-                    fontSize = 16.sp,
-                    fontWeight = FontWeight.Bold,
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center,
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(10.dp),
+        ) {
+            val bitmap = logo
+            if (bitmap != null) {
+                Image(
+                    bitmap = bitmap,
+                    contentDescription = null,
+                    modifier = Modifier.size(36.dp).clip(RoundedCornerShape(8.dp)),
                 )
+            } else {
+                // Placeholder while the logo loads (or if it never does) - the
+                // service's initial, so the tile is identifiable either way rather
+                // than being a blank square.
+                GlassTile(
+                    modifier = Modifier.size(36.dp),
+                    color = SurfaceHigh,
+                    shape = RoundedCornerShape(8.dp),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text(
+                        resource.name.take(1).uppercase(),
+                        color = TextSecondary,
+                        fontSize = 16.sp,
+                        fontWeight = FontWeight.Bold,
+                    )
+                }
             }
+            Spacer(Modifier.height(8.dp))
+            Text(
+                resource.name,
+                color = if (selected) TextPrimary else TextSecondary,
+                fontSize = 12.sp,
+                fontWeight = FontWeight.Medium,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+                textAlign = TextAlign.Center,
+                lineHeight = 14.sp,
+            )
         }
-        Spacer(Modifier.height(8.dp))
-        Text(
-            resource.name,
-            color = if (selected) TextPrimary else TextSecondary,
-            fontSize = 12.sp,
-            fontWeight = FontWeight.Medium,
-            maxLines = 2,
-            overflow = TextOverflow.Ellipsis,
-            textAlign = TextAlign.Center,
-            lineHeight = 14.sp,
-        )
     }
 }
 
