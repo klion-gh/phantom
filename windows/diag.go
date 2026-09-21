@@ -25,7 +25,6 @@ const diagEnabled = true
 // stay comparable side by side.
 const (
 	diagCatApp   = "APP"   // process start, one-time environment facts
-	diagCatGlass = "GLASS" // Эффект прозрачности state (reported from the frontend)
 	diagCatBG    = "BG"    // animated backdrop style/canvas (reported from the frontend)
 	diagCatUI    = "UI"    // navigation, dialogs, settings changes (reported from the frontend)
 	diagCatVPN   = "VPN"   // tunnel lifecycle, connect/disconnect, network changes

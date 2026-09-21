@@ -3,18 +3,16 @@
 // holds the whole picture. Same `cat=X ev=Y k=v ...` shape as Android's
 // Diag.kt and windows/diag.go, so all three are greppable the same way:
 //
-//     findstr "cat=GLASS" phantom.log
+//     findstr "cat=BG" phantom.log
 //
-// This exists because everything the glass effect and the animated backdrop
-// actually do lives in the WebView, which has no console the user can open -
-// without routing it out, the most-reported half of the UI would be the only
-// part with no trace in the log at all.
+// This exists because everything the UI actually does lives in the WebView,
+// which has no console the user can open - without routing it out, half the
+// app would be the only part with no trace in the log at all.
 
 const ENABLED = true;
 
 export const Cat = {
   APP: 'APP',
-  GLASS: 'GLASS',
   BG: 'BG',
   UI: 'UI',
   VPN: 'VPN',
@@ -55,10 +53,9 @@ export function diagSampled(key, category, event, fieldsFn, everyMs = 2000) {
   diag(category, event, fieldsFn());
 }
 
-/** Dumped once at startup. The CSS capability probes are the point: "does this
- *  WebView2 actually support backdrop-filter / mask-composite" is exactly the
- *  question a "the glass effect looks wrong" report needs answered, and it's
- *  unanswerable after the fact without this. */
+/** Dumped once at startup. The CSS capability probes are the point: which
+ *  features a given WebView2 actually supports is exactly what a "it renders
+ *  wrong here" report needs, and it's unanswerable after the fact. */
 export function logEnvironment() {
   if (!ENABLED) return;
   const supports = (prop, value) => {
@@ -75,32 +72,7 @@ export function logEnvironment() {
     backdropFilter: supports('backdrop-filter', 'blur(10px)'),
     webkitBackdropFilter: supports('-webkit-backdrop-filter', 'blur(10px)'),
     maskComposite: supports('mask-composite', 'exclude'),
-    colorMix: supports('color', 'color-mix(in srgb, red 50%, transparent)'),
     reducedMotion: window.matchMedia('(prefers-reduced-motion: reduce)').matches,
   });
 }
 
-/** The computed values the glass effect actually resolves to at runtime -
- *  not what the stylesheet says, but what this WebView decided they are after
- *  var() resolution and color-mix(). A mismatch between these and the intended
- *  values is the single most useful thing to see when the effect looks off. */
-export function logGlassState(where) {
-  if (!ENABLED) return;
-  const root = document.documentElement;
-  const cs = getComputedStyle(root);
-  const sampleTile = document.querySelector('.config-card, .routing-tile, .bottom-nav');
-  const tileCs = sampleTile ? getComputedStyle(sampleTile) : null;
-  diag(Cat.GLASS, 'state', {
-    where,
-    htmlClass: root.className || '(none)',
-    glassOn: root.classList.contains('glass-effect'),
-    surfaceAlpha: cs.getPropertyValue('--surface-alpha').trim(),
-    glassBlurVar: cs.getPropertyValue('--glass-blur').trim(),
-    surfaceGlass: cs.getPropertyValue('--surface-glass').trim().replace(/\s+/g, ''),
-    sampleTile: sampleTile ? sampleTile.className.split(' ')[0] : 'none',
-    // The two that decide whether a tile actually frosts, as resolved on a
-    // real element rather than in theory.
-    tileBackdrop: tileCs ? (tileCs.backdropFilter || tileCs.webkitBackdropFilter || 'none') : 'n/a',
-    tileBackground: tileCs ? tileCs.backgroundColor.replace(/\s+/g, '') : 'n/a',
-  });
-}

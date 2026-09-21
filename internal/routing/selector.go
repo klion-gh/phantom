@@ -117,7 +117,12 @@ type Selector struct {
 
 	stop    chan struct{}
 	stopped bool
-	now     func() time.Time // injectable for tests
+	// Wakes Start's loop for an off-schedule round (see SetCandidates).
+	// Buffered depth 1 and sent to non-blockingly: several changes arriving
+	// while a round is already in flight should collapse into one follow-up
+	// round, not queue up one apiece.
+	kick chan struct{}
+	now  func() time.Time // injectable for tests
 }
 
 // NewSelector builds a selector over probe. onSwitch is called (off the
@@ -128,6 +133,7 @@ func NewSelector(probe ProbeFunc, onSwitch func(Candidate)) *Selector {
 		probe:    probe,
 		onSwitch: onSwitch,
 		stop:     make(chan struct{}),
+		kick:     make(chan struct{}, 1),
 		now:      time.Now,
 	}
 }
@@ -135,6 +141,14 @@ func NewSelector(probe ProbeFunc, onSwitch func(Candidate)) *Selector {
 // SetCandidates replaces the pool the selector chooses from, preserving what
 // it already knows about configs that are still in the list. If the current
 // selection is no longer among them, the next evaluation picks a replacement.
+//
+// A config that wasn't in the pool before (the user just ticked it, or edited
+// its yaml) is probed right away rather than waiting out the rest of the
+// probeInterval tick. Without that, ticking a config in the UI left it showing
+// "проверка" for up to 30 seconds while the identical server on the
+// Конфигурации screen - which each tile pings on its own 6-10s schedule -
+// showed a latency almost immediately, which reads as the routing screen being
+// broken rather than merely unhurried.
 func (s *Selector) SetCandidates(candidates []Candidate) {
 	s.mu.Lock()
 	previous := map[string]*candidateState{}
@@ -142,16 +156,34 @@ func (s *Selector) SetCandidates(candidates []Candidate) {
 		previous[st.ID] = st
 	}
 	states := make([]*candidateState, 0, len(candidates))
+	changed := false
 	for _, c := range candidates {
 		if old, ok := previous[c.ID]; ok {
-			old.Candidate = c // yaml may have been edited
+			if old.YAML != c.YAML {
+				changed = true // edited server address: what we know is now stale
+			}
+			old.Candidate = c
 			states = append(states, old)
 			continue
 		}
 		states = append(states, &candidateState{Candidate: c})
+		changed = true
 	}
 	s.states = states
 	s.mu.Unlock()
+
+	// Wakes the existing loop rather than starting a probe here. Running one
+	// concurrently with the scheduled round would let a single unreachable
+	// server book two failures for what is really one moment, and
+	// failsBeforeDrop counts rounds - so the config would be dropped on the
+	// first blip instead of the second. A no-op if Start was never called or
+	// the loop has already stopped.
+	if changed {
+		select {
+		case s.kick <- struct{}{}:
+		default: // a round is already pending; it will pick these up
+		}
+	}
 }
 
 // Current returns the currently selected config id, or "" if none has been
@@ -183,6 +215,9 @@ func (s *Selector) Start() {
 			select {
 			case <-s.stop:
 				return
+			case <-s.kick:
+				// A candidate was just added or edited - see SetCandidates.
+				s.Probe()
 			case <-ticker.C:
 				s.Probe()
 			}

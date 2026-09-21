@@ -208,3 +208,37 @@ func TestSelectorPreservesHealthAcrossCandidateEdits(t *testing.T) {
 		t.Fatalf("expected the newly added config to start unprobed")
 	}
 }
+
+// A config the user just ticked must be probed without waiting out the rest of
+// the probeInterval tick - the Конфигурации screen pings the same server every
+// 6-10s per tile, so a routing screen that sits on "проверка" for up to 30
+// seconds reads as broken rather than unhurried.
+func TestSelectorProbesNewCandidateWithoutWaitingForTick(t *testing.T) {
+	s, _, _ := newTestSelector(t, map[string]int64{"a": 50, "b": 60})
+	s.Start()
+	defer s.Stop()
+
+	s.SetCandidates(candidates("a"))
+	waitForProbed(t, s, "a")
+
+	// The point of the test: "b" arrives long before the next scheduled round.
+	s.SetCandidates(candidates("a", "b"))
+	waitForProbed(t, s, "b")
+}
+
+// waitForProbed blocks until id reports Probed, or fails the test well short
+// of probeInterval - passing only because the ticker eventually fired would
+// defeat the purpose.
+func waitForProbed(t *testing.T, s *Selector, id string) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		for _, h := range s.Snapshot() {
+			if h.ID == id && h.Probed {
+				return
+			}
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("config %q was not probed promptly after being added: %v", id, s.Snapshot())
+}

@@ -129,7 +129,6 @@ object Appearance {
     private const val PALETTE_KEY = "palette"
     private const val BACKGROUND_KEY = "background_style"
     private const val SHOW_PROXY_SETTINGS_KEY = "show_proxy_settings"
-    private const val GLASS_EFFECT_KEY = "glass_effect"
     private const val BETA_UPDATES_KEY = "beta_updates"
 
     var palette by mutableStateOf(Palette.MIDNIGHT)
@@ -139,11 +138,6 @@ object Appearance {
         private set
 
     var showProxySettings by mutableStateOf(true)
-        private set
-
-    // See [Surface]/[SurfaceHigh]: when on, every tile's fill turns
-    // translucent instead of solid, letting AnimatedBackground show through.
-    var glassEffect by mutableStateOf(false)
         private set
 
     // Whether the update check also offers releases GitHub has marked as
@@ -157,12 +151,11 @@ object Appearance {
         palette = runCatching { Palette.valueOf(p.getString(PALETTE_KEY, null) ?: "") }.getOrDefault(Palette.MIDNIGHT)
         background = runCatching { BackgroundStyle.valueOf(p.getString(BACKGROUND_KEY, null) ?: "") }.getOrDefault(BackgroundStyle.ORBS)
         showProxySettings = p.getBoolean(SHOW_PROXY_SETTINGS_KEY, true)
-        glassEffect = p.getBoolean(GLASS_EFFECT_KEY, false)
         betaUpdates = p.getBoolean(BETA_UPDATES_KEY, false)
         Diag.log(
             Diag.Cat.APP, "appearanceLoaded",
             "palette" to palette, "background" to background,
-            "showProxySettings" to showProxySettings, "glassEffect" to glassEffect,
+            "showProxySettings" to showProxySettings,
             "betaUpdates" to betaUpdates,
         )
     }
@@ -191,14 +184,6 @@ object Appearance {
             .apply()
     }
 
-    fun setGlassEffect(context: Context, value: Boolean) {
-        glassEffect = value
-        Diag.log(Diag.Cat.UI, "setGlassEffect", "value" to value)
-        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
-            .putBoolean(GLASS_EFFECT_KEY, value)
-            .apply()
-    }
-
     fun setBetaUpdates(context: Context, value: Boolean) {
         betaUpdates = value
         Diag.log(Diag.Cat.UI, "setBetaUpdates", "value" to value)
@@ -213,32 +198,20 @@ object Appearance {
 // palette repaints the app with no other plumbing.
 val Bg: Color get() = Appearance.palette.bg
 
-// Every tile's fill - translucent instead of solid when Appearance.glassEffect
-// is on, so AnimatedBackground bleeds through every card, input and the
-// bottom nav bar alike (they all read this same property already). Dialogs
-// use [DialogSurface] instead: those get their own animated backdrop-blur
-// treatment (see ConfigDialog/AddResourceDialog) where a legible, solid
-// surface on top of the blur reads far better than two competing
-// transparency effects stacked on each other.
-val Surface: Color get() = Appearance.palette.surface.let {
-    if (Appearance.glassEffect) it.copy(alpha = 0.62f) else it
-}
-val SurfaceHigh: Color get() = Appearance.palette.surfaceHigh.let {
-    if (Appearance.glassEffect) it.copy(alpha = 0.72f) else it
-}
+val Surface: Color get() = Appearance.palette.surface
+val SurfaceHigh: Color get() = Appearance.palette.surfaceHigh
 
 /**
- * A tile-shaped container built as three stacked layers instead of one
- * Composable carrying background+border+content together, specifically so
- * the fill (see [GlassFill]) can blur on its own: blurring a Composable
- * blurs everything drawn inside it, so background, border and content have
- * to be genuinely separate layers for only the first one to ever soften.
+ * The app's one tile shape - a rounded, filled, optionally outlined container,
+ * shared by config cards, routing blocks, the nav bar and the rest, so they
+ * can't drift apart on radius/fill/border treatment.
  *
- * [content] sizes the tile (an ordinary child, not matchParentSize) - fill and
- * border then conform to whatever size that ends up being.
+ * [borderBrush] takes precedence over [borderColor] when both are given: a
+ * gradient outline is the "this one is active" state, and a caller passing one
+ * means it explicitly wants that rather than the plain resting outline.
  */
 @Composable
-fun GlassTile(
+fun Tile(
     modifier: Modifier = Modifier,
     color: Color,
     shape: Shape,
@@ -248,19 +221,18 @@ fun GlassTile(
     contentAlignment: Alignment = Alignment.TopStart,
     content: @Composable BoxScope.() -> Unit,
 ) {
-    Box(modifier = modifier.clip(shape), contentAlignment = contentAlignment) {
-        GlassFill(color = color, modifier = Modifier.matchParentSize())
-        content()
-        if (borderBrush != null) {
-            Box(Modifier.matchParentSize().border(borderWidth, borderBrush, shape))
-        } else if (borderColor != null) {
-            Box(Modifier.matchParentSize().border(borderWidth, borderColor, shape))
-        }
+    val withBorder = when {
+        borderBrush != null -> Modifier.border(borderWidth, borderBrush, shape)
+        borderColor != null -> Modifier.border(borderWidth, borderColor, shape)
+        else -> Modifier
     }
+    Box(
+        modifier = modifier.clip(shape).background(color).then(withBorder),
+        contentAlignment = contentAlignment,
+        content = content,
+    )
 }
 
-// Deliberately ignores glassEffect - see [Surface]'s doc.
-val DialogSurface: Color get() = Appearance.palette.surfaceHigh
 val SurfaceOutline: Color get() = Appearance.palette.surfaceOutline
 val Primary: Color get() = Appearance.palette.primary
 val PrimaryDeep: Color get() = Appearance.palette.primaryDeep

@@ -127,7 +127,7 @@ private fun ResourceTile(resource: PopularResource, selected: Boolean, onClick: 
         logo = fetchLogo(resource.icon)
     }
 
-    GlassTile(
+    Tile(
         modifier = Modifier.aspectRatio(1f).clickable(onClick = onClick),
         color = Surface,
         shape = shape,
@@ -152,7 +152,7 @@ private fun ResourceTile(resource: PopularResource, selected: Boolean, onClick: 
                 // Placeholder while the logo loads (or if it never does) - the
                 // service's initial, so the tile is identifiable either way rather
                 // than being a blank square.
-                GlassTile(
+                Tile(
                     modifier = Modifier.size(36.dp),
                     color = SurfaceHigh,
                     shape = RoundedCornerShape(8.dp),

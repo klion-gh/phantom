@@ -159,11 +159,10 @@ private fun makeGalaxyStars(): List<GalaxyStar> {
     }
 }
 
-// Computed once for the process, not per-composition (remember { makeX() }
-// would still be one instance per Canvas, and GlassFill below draws a second,
-// translated copy of the exact same layout for every glass tile on screen -
-// module-level state is what makes it *the same* layout rather than an
-// independently-reseeded one).
+// Computed once for the process, not per-composition: the layouts are fixed
+// and identical for every Canvas that draws them (the real backdrop and the
+// settings screen's thumbnails alike), so there is nothing per-instance to
+// remember.
 private val sharedStars = makeStars()
 private val sharedMeshNodes = makeMeshNodes()
 private val sharedMeteors = makeMeteors()
@@ -171,50 +170,18 @@ private val sharedEmbers = makeEmbers()
 private val sharedMatrixColumns = makeMatrixColumns()
 private val sharedGalaxyStars = makeGalaxyStars()
 
-// The single shared animation clock + screen geometry the real backdrop and
-// every glass tile's blurred fill (see GlassFill) both read, so a tile's
-// "window into the backdrop" is never a frame behind or out of phase with the
-// real thing moving under it - two independent rememberInfiniteTransitions
-// would each start from whenever they were first composed, drifting apart by
-// however long that was.
-object BackdropClock {
-    var t by mutableFloatStateOf(0f)
-        private set
-    var screenWidth by mutableFloatStateOf(0f)
-        private set
-    var screenHeight by mutableFloatStateOf(0f)
-        private set
-    var zeroGlyph: TextLayoutResult? = null
-        private set
-    var oneGlyph: TextLayoutResult? = null
-        private set
-
-    fun reportSize(w: Float, h: Float) {
-        screenWidth = w
-        screenHeight = h
-    }
-
-    @Composable
-    fun Ticker() {
-        val transition = rememberInfiniteTransition(label = "backdropClock")
-        val value by transition.animateFloat(
-            initialValue = 0f, targetValue = 1f,
-            animationSpec = infiniteRepeatable(animation = tween(60_000, easing = LinearEasing), repeatMode = RepeatMode.Restart),
-            label = "t",
-        )
-        t = value
-        val textMeasurer = rememberTextMeasurer()
-        if (zeroGlyph == null) {
-            zeroGlyph = textMeasurer.measure("0", style = TextStyle(fontFamily = FontFamily.Monospace, fontSize = 13.sp))
-            oneGlyph = textMeasurer.measure("1", style = TextStyle(fontFamily = FontFamily.Monospace, fontSize = 13.sp))
-        }
-    }
-}
-
-// The style dispatch, shared between the real backdrop and GlassFill's
-// translated copy - see the class doc on both for why they have to draw
-// pixel-identical content.
-private fun DrawScope.drawBackdropContent(style: BackgroundStyle, w: Float, h: Float, t: Float, primary: Color, accent: Color) {
+// The style dispatch, shared by the real backdrop and the settings screen's
+// per-variant thumbnails.
+private fun DrawScope.drawBackdropContent(
+    style: BackgroundStyle,
+    w: Float,
+    h: Float,
+    t: Float,
+    primary: Color,
+    accent: Color,
+    zeroGlyph: TextLayoutResult?,
+    oneGlyph: TextLayoutResult?,
+) {
     when (style) {
         BackgroundStyle.ORBS -> drawOrbs(w, h, t, primary, accent)
         BackgroundStyle.AURORA -> drawAurora(w, h, t, primary, accent)
@@ -223,92 +190,12 @@ private fun DrawScope.drawBackdropContent(style: BackgroundStyle, w: Float, h: F
         BackgroundStyle.METEORS -> drawMeteors(sharedMeteors, w, h, t, primary, accent)
         BackgroundStyle.WAVES -> drawWaves(w, h, t, primary, accent)
         BackgroundStyle.EMBERS -> drawEmbers(sharedEmbers, w, h, t, primary, accent)
-        BackgroundStyle.MATRIX -> {
-            val zero = BackdropClock.zeroGlyph
-            val one = BackdropClock.oneGlyph
-            if (zero != null && one != null) drawMatrix(sharedMatrixColumns, w, h, t, zero, one, accent)
-        }
+        BackgroundStyle.MATRIX ->
+            if (zeroGlyph != null && oneGlyph != null) {
+                drawMatrix(sharedMatrixColumns, w, h, t, zeroGlyph, oneGlyph, accent)
+            }
         BackgroundStyle.GALAXY -> drawGalaxy(sharedGalaxyStars, w, h, t, primary, accent)
         BackgroundStyle.PLAIN -> Unit
-    }
-}
-
-/**
- * A tile's blurred backdrop fill - the Android half of making "Эффект
- * прозрачности" actually read as glass. Blurring the tile's own flat [color]
- * (a uniform fill has almost nothing in it for a blur to visibly soften) was
- * the first approach here and produced no visible effect. Redrawing a
- * translated copy of the real backdrop straight inside a blurred `Canvas`
- * (DrawScope.translate + draw calls, blur() chained onto the Canvas itself)
- * was the second, and *also* produced nothing - blur() reliably softens a
- * plain layout of composables (see the popup backdrop blur elsewhere in this
- * app) but not a bare Canvas's own programmatic draw calls, at least not in a
- * way that kept re-rendering as the animation ticked.
- *
- * This is the third attempt, structured to match the one that's actually
- * proven to work: `.blur()` sits on a plain [Box] wrapping ordinary
- * Compose children - a screen-sized [Canvas] shifted into place with a
- * regular layout [Modifier.offset] (not a DrawScope-level translate) plus a
- * tint [Box] on top - rather than being chained directly onto a Canvas whose
- * own content is what needs to animate. Since every background variant is a
- * pure, deterministic function of (style, t, screen size), redrawing that
- * same function at the shifted position produces a pixel-accurate "window"
- * onto whatever's really behind this tile, which blur() then has real detail
- * to soften instead of a flat rectangle.
- */
-@Composable
-fun GlassFill(color: Color, modifier: Modifier = Modifier, blurRadius: Dp = 9.dp) {
-    if (!Appearance.glassEffect) {
-        Box(modifier.background(color))
-        return
-    }
-    var positionInRoot by remember { mutableStateOf(Offset.Zero) }
-    val style = Appearance.background
-    val primary = Primary
-    val accent = Accent
-    val t = BackdropClock.t
-    val screenW = BackdropClock.screenWidth
-    val screenH = BackdropClock.screenHeight
-
-    // blur() applied to this outer Box, exactly like the popup backdrop blur
-    // elsewhere in this app (Column(modifier.blur(x)) - a *proven* working
-    // combination) - and the child is an ordinary tile-sized Canvas
-    // (matchParentSize, not the tile's own huge screen-sized double with a
-    // large layout offset, which is what the previous attempt tried and which
-    // still didn't blur - large offsets might be getting culled or otherwise
-    // mishandled somewhere before reaching the blur layer). The coordinate
-    // shift happens inside the draw scope via translate() instead, on a
-    // Canvas no bigger than the tile itself.
-    Box(modifier = modifier.onGloballyPositioned { positionInRoot = it.positionInRoot() }.blur(blurRadius)) {
-        Canvas(modifier = Modifier.matchParentSize()) {
-            // Sampled, not per-frame: this runs on every redraw of every glass
-            // tile on screen. Keyed by position so each distinct tile still
-            // gets its own line rather than one tile starving out the rest.
-            Diag.sampled("glassfill@${positionInRoot.y.toInt()}", Diag.Cat.GLASS, "fill") {
-                arrayOf(
-                    "tileW" to size.width,
-                    "tileH" to size.height,
-                    "posX" to positionInRoot.x,
-                    "posY" to positionInRoot.y,
-                    "screenW" to screenW,
-                    "screenH" to screenH,
-                    "blurDp" to blurRadius.value,
-                    "style" to style,
-                    "t" to t,
-                    // The whole effect silently degrades to a plain tint if
-                    // the backdrop never reported its size, so this is the
-                    // first thing worth checking in a "no blur" report.
-                    "drawingBackdrop" to (screenW > 0f && screenH > 0f),
-                    "tintAlpha" to color.alpha,
-                )
-            }
-            if (screenW > 0f && screenH > 0f) {
-                translate(left = -positionInRoot.x, top = -positionInRoot.y) {
-                    drawBackdropContent(style, screenW, screenH, t, primary, accent)
-                }
-            }
-            drawRect(color)
-        }
     }
 }
 
@@ -583,46 +470,59 @@ private fun reducedMotionEnabled(): Boolean {
     }
 }
 
-/** The app's real backdrop - whatever [Appearance.background] currently is.
- * Ticks [BackdropClock] and reports the canvas size into it every frame, so
- * every glass tile's [GlassFill] can redraw a pixel-accurate, perfectly
- * in-phase copy of whatever's actually showing here right now. */
+/** The app's real backdrop - whatever [Appearance.background] currently is. */
 @Composable
 fun AnimatedBackground(modifier: Modifier = Modifier) {
-    BackdropClock.Ticker()
     val primary = Primary
     val accent = Accent
     val backdrop = Backdrop
     val reducedMotion = reducedMotionEnabled()
     val style = if (reducedMotion) BackgroundStyle.PLAIN else Appearance.background
+    val (zeroGlyph, oneGlyph) = rememberMatrixGlyphs()
+
+    val transition = rememberInfiniteTransition(label = "backdrop")
+    val t by transition.animateFloat(
+        initialValue = 0f, targetValue = 1f,
+        animationSpec = infiniteRepeatable(animation = tween(60_000, easing = LinearEasing), repeatMode = RepeatMode.Restart),
+        label = "t",
+    )
 
     // Not sampled - this only fires when the setting actually changes, and
     // "which style was active when it looked wrong" is the first thing any
     // rendering report needs. reducedMotion silently forces PLAIN, which has
     // confused this before, so it's logged explicitly rather than inferred.
-    LaunchedEffect(style, reducedMotion, Appearance.glassEffect) {
+    LaunchedEffect(style, reducedMotion) {
         Diag.log(
             Diag.Cat.BG, "style",
             "style" to style,
             "requested" to Appearance.background,
             "reducedMotion" to reducedMotion,
-            "glassEffect" to Appearance.glassEffect,
         )
     }
 
     Canvas(modifier = modifier.background(Brush.linearGradient(backdrop))) {
-        BackdropClock.reportSize(size.width, size.height)
         Diag.sampled("backdrop", Diag.Cat.BG, "draw", everyMs = 5000) {
-            arrayOf("w" to size.width, "h" to size.height, "t" to BackdropClock.t, "style" to style)
+            arrayOf("w" to size.width, "h" to size.height, "t" to t, "style" to style)
         }
-        drawBackdropContent(style, size.width, size.height, BackdropClock.t, primary, accent)
+        drawBackdropContent(style, size.width, size.height, t, primary, accent, zeroGlyph, oneGlyph)
+    }
+}
+
+/** The "0"/"1" the Matrix variant draws, measured once rather than per glyph
+ * per frame - drawText(TextLayoutResult, ...) lets colour/alpha vary per call
+ * without re-measuring, so this pair covers every glyph it ever draws. */
+@Composable
+private fun rememberMatrixGlyphs(): Pair<TextLayoutResult, TextLayoutResult> {
+    val textMeasurer = rememberTextMeasurer()
+    return remember(textMeasurer) {
+        val style = TextStyle(fontFamily = FontFamily.Monospace, fontSize = 13.sp)
+        textMeasurer.measure("0", style) to textMeasurer.measure("1", style)
     }
 }
 
 /** A small, independent live preview of one specific variant - used by the
  * background list (SettingsScreen), not tied to whichever background is
- * actually active, or to [BackdropClock] - a thumbnail never needs to line up
- * with a glass tile's fill the way the real backdrop does. */
+ * actually active. */
 @Composable
 fun BackgroundThumbnail(style: BackgroundStyle, modifier: Modifier = Modifier) {
     val primary = Primary
@@ -630,6 +530,7 @@ fun BackgroundThumbnail(style: BackgroundStyle, modifier: Modifier = Modifier) {
     val backdrop = Backdrop
     val reducedMotion = reducedMotionEnabled()
     val effectiveStyle = if (reducedMotion) BackgroundStyle.PLAIN else style
+    val (zeroGlyph, oneGlyph) = rememberMatrixGlyphs()
 
     val transition = rememberInfiniteTransition(label = "backdropThumb")
     val t by transition.animateFloat(
@@ -639,6 +540,6 @@ fun BackgroundThumbnail(style: BackgroundStyle, modifier: Modifier = Modifier) {
     )
 
     Canvas(modifier = modifier.background(Brush.linearGradient(backdrop))) {
-        drawBackdropContent(effectiveStyle, size.width, size.height, t, primary, accent)
+        drawBackdropContent(effectiveStyle, size.width, size.height, t, primary, accent, zeroGlyph, oneGlyph)
     }
 }

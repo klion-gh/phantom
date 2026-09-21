@@ -8,12 +8,12 @@ import './style.css';
 // install ever shows, so the app's own footprint grows by the whole set
 // (~2.4MB) once, not per flag shown.
 import 'flag-icons/css/flag-icons.min.css';
-import { Connect, Disconnect, Status, ReadLog, ListConfigs, AddConfig, UpdateConfig, DeleteConfig, SetConfigGeo, ClearConfigCountry, Ping, ListResources, AddResource, DeleteResource, ListExcludedApps, PickExcludedAppExe, AddExcludedApp, DeleteExcludedApp, ApplyUpdate, StartProxy, StopProxy, GetLanguage, SetLanguage, Version, LookupCountry, GetAppearance, SetAppearance, GetShowProxySettings, SetShowProxySettings, GetGlassEffect, SetGlassEffect, GetBetaUpdates, SetBetaUpdates, GetRoutingState, SetRoutingMode, SetSmartEnabled, SetSmartSites, SetSmartConfigs, SetAutoEnabled, SetAutoConfigs, SetAppsEnabled, SetAppsInclude, ReconnectActive, RoutingHealth, PopularResources } from '../wailsjs/go/main/App';
+import { Connect, Disconnect, Status, ReadLog, ListConfigs, AddConfig, UpdateConfig, DeleteConfig, SetConfigGeo, ClearConfigCountry, Ping, ListResources, AddResource, DeleteResource, ListExcludedApps, PickExcludedAppExe, AddExcludedApp, DeleteExcludedApp, ApplyUpdate, StartProxy, StopProxy, GetLanguage, SetLanguage, Version, LookupCountry, GetAppearance, SetAppearance, GetShowProxySettings, SetShowProxySettings, GetBetaUpdates, SetBetaUpdates, GetRoutingState, SetRoutingMode, SetSmartEnabled, SetSmartSites, SetSmartConfigs, SetAutoEnabled, SetAutoConfigs, SetAppsEnabled, SetAppsInclude, ReconnectActive, RoutingHealth, PopularResources } from '../wailsjs/go/main/App';
 import { t, getLang, setLang, applyStaticTranslations } from './i18n.js';
 import { BACKGROUNDS, initBackground, initMiniBackground } from './background.js';
 import { PALETTES } from './palettes.js';
 import { initScrollbars, relayoutScrollbars } from './scrollbar.js';
-import { Cat, diag, diagSampled, logEnvironment, logGlassState } from './diag.js';
+import { Cat, diag, diagSampled, logEnvironment } from './diag.js';
 
 // The WebView has no console the user can open, so an uncaught frontend error
 // would otherwise be completely invisible - it goes to the app log instead,
@@ -715,16 +715,6 @@ document.getElementById('show-proxy-settings-toggle').addEventListener('click', 
   renderConfigList();
 });
 
-document.getElementById('glass-effect-toggle').addEventListener('click', async () => {
-  glassEffect = !glassEffect;
-  document.getElementById('glass-effect-toggle').classList.toggle('active', glassEffect);
-  document.documentElement.classList.toggle('glass-effect', glassEffect);
-  await SetGlassEffect(glassEffect);
-  // After the class flip, so what's logged is what the WebView actually
-  // resolved the variables to - not what they were a moment before.
-  logGlassState('toggle');
-});
-
 document.getElementById('beta-updates-toggle').addEventListener('click', async () => {
   betaUpdates = !betaUpdates;
   document.getElementById('beta-updates-toggle').classList.toggle('active', betaUpdates);
@@ -749,10 +739,6 @@ let appearance = { palette: 'midnight', background: 'orbs' };
 // Whether the per-config proxy button/port field are shown - toggled from
 // Settings, above the language switcher. On by default (see settings.go).
 let showProxySettings = true;
-
-// Whether tiles/inputs/the nav bar render translucent (see style.css's
-// body.glass-effect) - off by default (see settings.go).
-let glassEffect = false;
 
 // Whether the updater also offers GitHub prereleases - off by default (see
 // settings.go and updater.go's two-endpoint split).
@@ -990,13 +976,6 @@ setInterval(refreshStatus, 4000);
   }
   document.getElementById('show-proxy-settings-toggle').classList.toggle('active', showProxySettings);
   try {
-    glassEffect = await GetGlassEffect();
-  } catch (e) {
-    // default (off) stays if the Go call fails
-  }
-  document.getElementById('glass-effect-toggle').classList.toggle('active', glassEffect);
-  document.documentElement.classList.toggle('glass-effect', glassEffect);
-  try {
     betaUpdates = await GetBetaUpdates();
   } catch (e) {
     // default (stable channel only) stays if the Go call fails
@@ -1007,17 +986,14 @@ setInterval(refreshStatus, 4000);
   document.getElementById('btn-lang-ru').classList.toggle('active', getLang() === 'ru');
   document.getElementById('btn-lang-en').classList.toggle('active', getLang() === 'en');
 
-  // Environment + CSS capability probes first (does this WebView2 even do
-  // backdrop-filter / mask-composite), then what the glass variables actually
-  // resolved to on a real tile - the two halves of any "it looks wrong" report.
+  // Environment + CSS capability probes - the baseline any "it renders wrong
+  // here" report has to be read against.
   logEnvironment();
   diag(Cat.BG, 'startup', {
     palette: appearance.palette,
     background: appearance.background,
-    glassEffect,
     showProxySettings,
   });
-  requestAnimationFrame(() => logGlassState('startup'));
 
   await reloadConfigs();
   await refreshStatus();
@@ -1071,15 +1047,7 @@ function showSection(name) {
   for (const item of document.querySelectorAll('.nav-item')) {
     item.classList.toggle('active', item.dataset.section === name);
   }
-  // Section switching is where the glass effect was reported arriving late -
-  // this pins down when the switch happened, and the delayed follow-up below
-  // captures what the newly-shown tiles actually resolved to once a frame has
-  // passed (a tile coming back from display:none has no resolved
-  // backdrop-filter to read at this instant).
-  diag(Cat.UI, 'showSection', { name, glassOn: document.documentElement.classList.contains('glass-effect') });
-  if (glassEffect) {
-    requestAnimationFrame(() => logGlassState('after-section-' + name));
-  }
+  diag(Cat.UI, 'showSection', { name });
 }
 
 for (const item of document.querySelectorAll('.nav-item')) {

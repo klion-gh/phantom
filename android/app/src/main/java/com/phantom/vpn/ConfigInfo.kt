@@ -161,7 +161,7 @@ fun ConfigInfoCard(
     val isConnected = status == ConnectionStatus.CONNECTED
     val connectedGradient = Brush.linearGradient(colors = BrandGradient)
 
-    GlassTile(
+    Tile(
         color = Surface,
         shape = cardShape,
         borderBrush = if (isConnected) connectedGradient else Brush.linearGradient(listOf(SurfaceOutline.copy(alpha = 0.6f), SurfaceOutline.copy(alpha = 0.6f))),
@@ -266,7 +266,7 @@ private fun ProxyBlock(
     val shape = RoundedCornerShape(16.dp)
     val gradient = Brush.linearGradient(colors = BrandGradient)
     Column(horizontalAlignment = Alignment.CenterHorizontally) {
-        GlassTile(
+        Tile(
             modifier = Modifier.clickable(onClick = onToggleClick),
             color = SurfaceHigh,
             shape = shape,

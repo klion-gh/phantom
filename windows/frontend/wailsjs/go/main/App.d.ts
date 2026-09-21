@@ -25,8 +25,6 @@ export function GetAppearance():Promise<string>;
 
 export function GetBetaUpdates():Promise<boolean>;
 
-export function GetGlassEffect():Promise<boolean>;
-
 export function GetLanguage():Promise<string>;
 
 export function GetRoutingState():Promise<string>;
@@ -66,8 +64,6 @@ export function SetAutoEnabled(arg1:boolean):Promise<void>;
 export function SetBetaUpdates(arg1:boolean):Promise<void>;
 
 export function SetConfigGeo(arg1:string,arg2:string,arg3:string,arg4:string):Promise<string>;
-
-export function SetGlassEffect(arg1:boolean):Promise<void>;
 
 export function SetLanguage(arg1:string):Promise<void>;
 

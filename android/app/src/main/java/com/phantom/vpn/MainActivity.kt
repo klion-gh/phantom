@@ -150,9 +150,7 @@ class MainActivity : ComponentActivity() {
                 Box(modifier = Modifier.fillMaxSize()) {
                     // Deliberately outside the systemBars padding below - the
                     // backdrop is meant to run edge-to-edge, under the status/nav
-                    // bars, not stop short of them. Drawn sharp here; every glass
-                    // tile redraws its own translated, blurred copy of this same
-                    // content instead (see AnimatedBackground.kt's GlassFill).
+                    // bars, not stop short of them.
                     AnimatedBackground(modifier = Modifier.fillMaxSize())
                     PhantomApp(
                         onConnect = { config -> requestConnect(config) },
@@ -834,7 +832,7 @@ private fun BottomNavBar(
     currentPage: Int,
     onSelect: (Int) -> Unit,
 ) {
-    GlassTile(
+    Tile(
         modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
         color = Surface,
         shape = RoundedCornerShape(18.dp),
@@ -894,7 +892,7 @@ private fun NavBarItem(
 @Composable
 private fun AutoConfigTile(enabled: Boolean, onToggle: (Boolean) -> Unit) {
     val shape = RoundedCornerShape(18.dp)
-    GlassTile(
+    Tile(
         modifier = Modifier.fillMaxWidth(),
         color = Surface,
         shape = shape,
@@ -1086,7 +1084,7 @@ private fun EmptyState(modifier: Modifier = Modifier, title: String, hint: Strin
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center,
     ) {
-        GlassTile(
+        Tile(
             modifier = Modifier.size(96.dp),
             color = Surface,
             shape = CircleShape,
@@ -1208,7 +1206,7 @@ private fun AddResourceDialog(
         dismissButton = {
             TextButton(onClick = onDismiss) { Text(I18n.t("cancel")) }
         },
-        containerColor = DialogSurface,
+        containerColor = SurfaceHigh,
         titleContentColor = TextPrimary,
         textContentColor = TextSecondary,
     )
@@ -1240,7 +1238,7 @@ private fun ConfigDialog(
                 // is nothing that grows to fill a taller box, only empty space
                 // below the save button if one is imposed anyway.
                 .clip(shape)
-                .background(DialogSurface)
+                .background(SurfaceHigh)
                 .border(1.dp, SurfaceOutline.copy(alpha = 0.6f), shape)
                 .padding(20.dp)
                 .verticalScroll(rememberScrollState()),
@@ -1330,7 +1328,7 @@ private fun ConfigDialog(
             dismissButton = {
                 TextButton(onClick = { showDeleteConfirm = false }) { Text(I18n.t("cancel")) }
             },
-            containerColor = DialogSurface,
+            containerColor = SurfaceHigh,
             titleContentColor = TextPrimary,
             textContentColor = TextSecondary,
         )
@@ -1381,25 +1379,6 @@ private fun SettingsScreen(
                 GradientSwitch(
                     checked = Appearance.showProxySettings,
                     onCheckedChange = { setShowProxySettings(context, it) },
-                )
-            }
-            Spacer(Modifier.height(20.dp))
-
-            // Turns every tile's solid fill translucent (see Theme.kt's Surface/
-            // SurfaceHigh) so AnimatedBackground shows through everywhere at
-            // once - cards, inputs, the bottom nav bar - with no per-screen
-            // plumbing needed, since they all already read those same colours.
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    I18n.t("glass_effect"),
-                    color = TextPrimary,
-                    fontSize = 15.sp,
-                    fontWeight = FontWeight.Medium,
-                    modifier = Modifier.weight(1f),
-                )
-                GradientSwitch(
-                    checked = Appearance.glassEffect,
-                    onCheckedChange = { Appearance.setGlassEffect(context, it) },
                 )
             }
             Spacer(Modifier.height(20.dp))
@@ -1613,7 +1592,7 @@ private fun LangTile(label: String, selected: Boolean, modifier: Modifier = Modi
     val borderWidth by animateDpAsState(if (selected) 2.dp else 1.dp, animationSpec = tween(200), label = "langTileBorderWidth")
     val borderColor by animateColorAsState(if (selected) Primary else SurfaceOutline, animationSpec = tween(200), label = "langTileBorderColor")
     val shape = RoundedCornerShape(18.dp)
-    GlassTile(
+    Tile(
         contentAlignment = Alignment.Center,
         modifier = modifier.height(52.dp).clickable(onClick = onClick),
         color = Surface,

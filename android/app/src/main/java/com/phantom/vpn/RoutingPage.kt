@@ -188,7 +188,7 @@ private fun SmartVpnHeaderTile(
 @Composable
 private fun PopularResourcesButton(onClick: () -> Unit) {
     val shape = RoundedCornerShape(18.dp)
-    GlassTile(
+    Tile(
         modifier = Modifier.fillMaxWidth().clickable(onClick = onClick),
         color = Surface,
         shape = shape,
@@ -422,7 +422,7 @@ private fun ConfigPickRow(
         ?: parseYamlField(config.yaml, "server")
         ?: "—"
 
-    GlassTile(
+    Tile(
         modifier = Modifier.fillMaxWidth().clickable(onClick = onClick),
         color = SurfaceHigh,
         shape = shape,
@@ -472,7 +472,7 @@ private fun ConfigPickRow(
 @Composable
 private fun SectionTile(content: @Composable ColumnScope.() -> Unit) {
     val shape = RoundedCornerShape(18.dp)
-    GlassTile(
+    Tile(
         modifier = Modifier.fillMaxWidth(),
         color = Surface,
         shape = shape,

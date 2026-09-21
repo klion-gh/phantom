@@ -686,17 +686,6 @@ func (a *App) SetShowProxySettings(show bool) {
 	saveShowProxySettings(show)
 }
 
-// GetGlassEffect returns whether tiles/the nav bar render translucent - read
-// once at startup, same as GetAppearance.
-func (a *App) GetGlassEffect() bool {
-	return loadGlassEffect()
-}
-
-// SetGlassEffect persists the transparency-effect choice.
-func (a *App) SetGlassEffect(enabled bool) {
-	saveGlassEffect(enabled)
-}
-
 // GetBetaUpdates returns whether the updater also offers releases GitHub has
 // marked as prereleases - read once at startup, same as GetAppearance.
 func (a *App) GetBetaUpdates() bool {
