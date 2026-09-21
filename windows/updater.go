@@ -20,11 +20,29 @@ import (
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
-const githubReleasesAPI = "https://api.github.com/repos/klion-gh/phantom/releases/latest"
+// Two endpoints, one per update channel - the split is GitHub's own, not
+// something this app invents on top of it:
+//
+//   - /releases/latest deliberately skips anything marked as a prerelease (and
+//     any draft), so it is exactly the stable channel with no filtering of our
+//     own needed.
+//   - /releases lists everything, newest first, with each entry carrying its
+//     own prerelease/draft flags - which is what the beta channel reads, taking
+//     the newest non-draft whether it's marked prerelease or not (a beta user
+//     should still get a stable release that supersedes the last beta).
+//
+// So publishing a beta is just ticking "Set as a pre-release" on the GitHub
+// release - no special asset names, no parallel tagging scheme to keep in sync.
+const (
+	githubLatestReleaseAPI = "https://api.github.com/repos/klion-gh/phantom/releases/latest"
+	githubReleaseListAPI   = "https://api.github.com/repos/klion-gh/phantom/releases?per_page=20"
+)
 
 type githubRelease struct {
-	TagName string `json:"tag_name"`
-	Assets  []struct {
+	TagName    string `json:"tag_name"`
+	Prerelease bool   `json:"prerelease"`
+	Draft      bool   `json:"draft"`
+	Assets     []struct {
 		Name               string `json:"name"`
 		BrowserDownloadURL string `json:"browser_download_url"`
 	} `json:"assets"`
@@ -95,12 +113,19 @@ func applyPendingUpdate(ctx context.Context) string {
 	return "" // unreachable - selfUpdate exits the process on success
 }
 
-// checkForUpdate asks GitHub for the latest release and returns its tag, the
-// phantom.exe asset's download URL and the SHA256SUMS asset's URL, or ok=false if
-// already current or the check couldn't be completed for any reason.
+// checkForUpdate asks GitHub for the newest release on the user's chosen
+// channel (see loadBetaUpdates and the endpoint comment above) and returns its
+// tag, the phantom.exe asset's download URL and the SHA256SUMS asset's URL, or
+// ok=false if already current or the check couldn't be completed for any reason.
 func checkForUpdate() (tag string, downloadURL string, sumsURL string, ok bool) {
+	beta := loadBetaUpdates()
+	endpoint := githubLatestReleaseAPI
+	if beta {
+		endpoint = githubReleaseListAPI
+	}
+
 	client := &http.Client{Timeout: 8 * time.Second}
-	req, err := http.NewRequest(http.MethodGet, githubReleasesAPI, nil)
+	req, err := http.NewRequest(http.MethodGet, endpoint, nil)
 	if err != nil {
 		return "", "", "", false
 	}
@@ -118,14 +143,45 @@ func checkForUpdate() (tag string, downloadURL string, sumsURL string, ok bool) 
 	}
 
 	var release githubRelease
-	if err := json.NewDecoder(resp.Body).Decode(&release); err != nil {
-		log.Printf("update check: decode error: %v", err)
-		return "", "", "", false
+	if beta {
+		// The list endpoint returns an array, newest first. Drafts are skipped
+		// (a draft's assets are still being attached - see the release workflow,
+		// which publishes one deliberately); prereleases are exactly what this
+		// channel is here for, so they're taken as-is.
+		var releases []githubRelease
+		if err := json.NewDecoder(resp.Body).Decode(&releases); err != nil {
+			log.Printf("update check: decode error: %v", err)
+			return "", "", "", false
+		}
+		found := false
+		for _, r := range releases {
+			if r.Draft {
+				continue
+			}
+			release = r
+			found = true
+			break
+		}
+		if !found {
+			log.Printf("update check: no published releases found")
+			return "", "", "", false
+		}
+	} else {
+		if err := json.NewDecoder(resp.Body).Decode(&release); err != nil {
+			log.Printf("update check: decode error: %v", err)
+			return "", "", "", false
+		}
 	}
 
 	if !isNewerVersion(release.TagName, AppVersion) {
 		return "", "", "", false
 	}
+	diag(diagCatApp, "updateFound",
+		"tag", release.TagName,
+		"prerelease", release.Prerelease,
+		"channel", map[bool]string{true: "beta", false: "stable"}[beta],
+		"current", AppVersion,
+	)
 
 	var exeURL string
 	for _, asset := range release.Assets {
@@ -223,6 +279,17 @@ func isNewerVersion(latest, current string) bool {
 
 func parseVersion(v string) [3]int {
 	v = strings.TrimPrefix(strings.TrimSpace(v), "v")
+	// Drop any prerelease/build suffix ("1.18.0-beta.2" -> "1.18.0") so a beta
+	// tag compares on its numeric version alone. Consequence worth knowing:
+	// a beta must carry a numerically higher version than the stable it
+	// supersedes (1.18.0-beta.1 over a 1.17.0 stable), because
+	// "1.18.0-beta.1" and "1.18.0" compare equal here - which is the right
+	// call for "the stable of the same version is not an update for someone
+	// already on its beta", but means betas can't be tagged off the current
+	// stable's own number.
+	if cut := strings.IndexAny(v, "-+"); cut >= 0 {
+		v = v[:cut]
+	}
 	parts := strings.SplitN(v, ".", 3)
 	var out [3]int
 	for i := 0; i < len(parts) && i < 3; i++ {

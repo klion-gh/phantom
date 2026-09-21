@@ -23,6 +23,8 @@ export function Disconnect():Promise<void>;
 
 export function GetAppearance():Promise<string>;
 
+export function GetBetaUpdates():Promise<boolean>;
+
 export function GetGlassEffect():Promise<boolean>;
 
 export function GetLanguage():Promise<string>;
@@ -61,6 +63,8 @@ export function SetAutoConfigs(arg1:string):Promise<void>;
 
 export function SetAutoEnabled(arg1:boolean):Promise<void>;
 
+export function SetBetaUpdates(arg1:boolean):Promise<void>;
+
 export function SetConfigGeo(arg1:string,arg2:string,arg3:string,arg4:string):Promise<string>;
 
 export function SetGlassEffect(arg1:boolean):Promise<void>;
@@ -82,6 +86,8 @@ export function StartProxy(arg1:string,arg2:string,arg3:number):Promise<string>;
 export function Status():Promise<string>;
 
 export function StopProxy(arg1:string):Promise<string>;
+
+export function UIDiag(arg1:string,arg2:string,arg3:string):Promise<void>;
 
 export function UILog(arg1:string):Promise<void>;
 

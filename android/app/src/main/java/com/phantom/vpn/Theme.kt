@@ -20,7 +20,6 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -131,6 +130,7 @@ object Appearance {
     private const val BACKGROUND_KEY = "background_style"
     private const val SHOW_PROXY_SETTINGS_KEY = "show_proxy_settings"
     private const val GLASS_EFFECT_KEY = "glass_effect"
+    private const val BETA_UPDATES_KEY = "beta_updates"
 
     var palette by mutableStateOf(Palette.MIDNIGHT)
         private set
@@ -146,16 +146,30 @@ object Appearance {
     var glassEffect by mutableStateOf(false)
         private set
 
+    // Whether the update check also offers releases GitHub has marked as
+    // prereleases - off by default, so the stable channel stays the default
+    // experience. See UpdateChecker.kt's checkForUpdate for the two endpoints.
+    var betaUpdates by mutableStateOf(false)
+        private set
+
     fun load(context: Context) {
         val p = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
         palette = runCatching { Palette.valueOf(p.getString(PALETTE_KEY, null) ?: "") }.getOrDefault(Palette.MIDNIGHT)
         background = runCatching { BackgroundStyle.valueOf(p.getString(BACKGROUND_KEY, null) ?: "") }.getOrDefault(BackgroundStyle.ORBS)
         showProxySettings = p.getBoolean(SHOW_PROXY_SETTINGS_KEY, true)
         glassEffect = p.getBoolean(GLASS_EFFECT_KEY, false)
+        betaUpdates = p.getBoolean(BETA_UPDATES_KEY, false)
+        Diag.log(
+            Diag.Cat.APP, "appearanceLoaded",
+            "palette" to palette, "background" to background,
+            "showProxySettings" to showProxySettings, "glassEffect" to glassEffect,
+            "betaUpdates" to betaUpdates,
+        )
     }
 
     fun setPalette(context: Context, value: Palette) {
         palette = value
+        Diag.log(Diag.Cat.UI, "setPalette", "value" to value)
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
             .putString(PALETTE_KEY, value.name)
             .apply()
@@ -163,6 +177,7 @@ object Appearance {
 
     fun setBackground(context: Context, value: BackgroundStyle) {
         background = value
+        Diag.log(Diag.Cat.UI, "setBackground", "value" to value)
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
             .putString(BACKGROUND_KEY, value.name)
             .apply()
@@ -170,6 +185,7 @@ object Appearance {
 
     fun setShowProxySettings(context: Context, value: Boolean) {
         showProxySettings = value
+        Diag.log(Diag.Cat.UI, "setShowProxySettings", "value" to value)
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
             .putBoolean(SHOW_PROXY_SETTINGS_KEY, value)
             .apply()
@@ -177,8 +193,17 @@ object Appearance {
 
     fun setGlassEffect(context: Context, value: Boolean) {
         glassEffect = value
+        Diag.log(Diag.Cat.UI, "setGlassEffect", "value" to value)
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
             .putBoolean(GLASS_EFFECT_KEY, value)
+            .apply()
+    }
+
+    fun setBetaUpdates(context: Context, value: Boolean) {
+        betaUpdates = value
+        Diag.log(Diag.Cat.UI, "setBetaUpdates", "value" to value)
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
+            .putBoolean(BETA_UPDATES_KEY, value)
             .apply()
     }
 }
@@ -202,25 +227,12 @@ val SurfaceHigh: Color get() = Appearance.palette.surfaceHigh.let {
     if (Appearance.glassEffect) it.copy(alpha = 0.72f) else it
 }
 
-// Chain immediately before .background(Surface)/.background(SurfaceHigh) on a
-// tile - a soft blur on that tile's own fill when the glass effect is on, a
-// no-op otherwise. Deliberately per-tile, not a blur on AnimatedBackground
-// itself: Compose has no simple "sample whatever is rendered behind me"
-// primitive, so this softens the tile's own translucent paint (and the crisp
-// edge a plain alpha cut leaves at its corners) rather than trying to fake
-// true backdrop sampling - the backdrop itself always stays sharp, only tiles
-// that opt into it look frosted. Content drawn after (in the same Box/Column,
-// once .background() returns) is a separate layer and stays untouched, so
-// text/icons never blur along with it.
-fun Modifier.glassBlur(radius: Dp = 10.dp): Modifier =
-    if (Appearance.glassEffect) this.blur(radius) else this
-
 /**
  * A tile-shaped container built as three stacked layers instead of one
  * Composable carrying background+border+content together, specifically so
- * [glassBlur] can blur just the fill: blurring a Composable blurs everything
- * drawn inside it, so background, border and content have to be genuinely
- * separate layers for only the first one to ever soften.
+ * the fill (see [GlassFill]) can blur on its own: blurring a Composable
+ * blurs everything drawn inside it, so background, border and content have
+ * to be genuinely separate layers for only the first one to ever soften.
  *
  * [content] sizes the tile (an ordinary child, not matchParentSize) - fill and
  * border then conform to whatever size that ends up being.
@@ -237,7 +249,7 @@ fun GlassTile(
     content: @Composable BoxScope.() -> Unit,
 ) {
     Box(modifier = modifier.clip(shape), contentAlignment = contentAlignment) {
-        Box(Modifier.matchParentSize().glassBlur().background(color))
+        GlassFill(color = color, modifier = Modifier.matchParentSize())
         content()
         if (borderBrush != null) {
             Box(Modifier.matchParentSize().border(borderWidth, borderBrush, shape))

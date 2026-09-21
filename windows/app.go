@@ -157,13 +157,26 @@ func (a *App) Connect(configID string, configYAML string) string {
 	a.mu.Unlock()
 
 	log.Println("connect: establishing tunnel")
+	connectStart := time.Now()
+	diag(diagCatVPN, "connectStart",
+		"configID", configID,
+		"smartEnabled", loadSmartEnabled(),
+		"autoEnabled", loadAutoEnabled(),
+		"routingMode", loadRoutingMode(),
+	)
 	tun, err := StartWindows(configYAML, func() {
 		log.Println("underlying network changed, reconnecting")
+		diag(diagCatVPN, "networkChanged", "configID", configID)
 		runtime.EventsEmit(a.ctx, "tunnel:reconnecting")
 		a.attemptReconnect(configID, configYAML, 1)
 	})
 	if err != nil {
 		log.Printf("connect failed: %v", err)
+		diag(diagCatVPN, "connectFail",
+			"configID", configID,
+			"ms", time.Since(connectStart).Milliseconds(),
+			"error", err.Error(),
+		)
 		return err.Error()
 	}
 
@@ -173,6 +186,13 @@ func (a *App) Connect(configID string, configYAML string) string {
 	a.mu.Unlock()
 	saveLastActiveID(configID)
 	log.Println("connected")
+	// Wall-clock cost of the whole connect path, the number to look at for
+	// any "connecting feels slow" report - this is what made the DNS stall
+	// measurable rather than a guess.
+	diag(diagCatVPN, "connectOk",
+		"configID", configID,
+		"ms", time.Since(connectStart).Milliseconds(),
+	)
 	return ""
 }
 
@@ -638,6 +658,23 @@ func (a *App) PopularResources() string { return routing.PopularResourcesJSON() 
 // to both them and anyone reading a bug report.
 func (a *App) UILog(msg string) { log.Printf("[ui] %s", msg) }
 
+// UIDiag is UILog's structured sibling: the frontend hands over an already
+// formatted `k=v ...` field string (see diag.js), and it lands in phantom.log
+// in the same `cat=X ev=Y ...` shape the Go side emits. That matters because
+// everything the glass effect and the backdrop actually do lives in the
+// WebView - without this, the most-reported half of the UI would be the only
+// part with no trace in the log at all.
+func (a *App) UIDiag(category, event, fields string) {
+	if !diagEnabled {
+		return
+	}
+	if fields == "" {
+		log.Printf("cat=%s ev=%s", category, event)
+		return
+	}
+	log.Printf("cat=%s ev=%s %s", category, event, fields)
+}
+
 // GetShowProxySettings returns whether the per-config proxy button and port
 // field should be shown - read once at startup, same as GetAppearance.
 func (a *App) GetShowProxySettings() bool {
@@ -658,6 +695,23 @@ func (a *App) GetGlassEffect() bool {
 // SetGlassEffect persists the transparency-effect choice.
 func (a *App) SetGlassEffect(enabled bool) {
 	saveGlassEffect(enabled)
+}
+
+// GetBetaUpdates returns whether the updater also offers releases GitHub has
+// marked as prereleases - read once at startup, same as GetAppearance.
+func (a *App) GetBetaUpdates() bool {
+	return loadBetaUpdates()
+}
+
+// SetBetaUpdates persists the update-channel choice and immediately re-checks
+// on the new channel, in its own goroutine so the toggle doesn't block on a
+// network round-trip. Without the re-check, switching the toggle on would
+// appear to do nothing until the next app start - which for a setting whose
+// entire purpose is "show me the newer thing" is the wrong behaviour.
+func (a *App) SetBetaUpdates(enabled bool) {
+	saveBetaUpdates(enabled)
+	diag(diagCatApp, "setBetaUpdates", "enabled", enabled)
+	go checkAndSelfUpdate(a.ctx)
 }
 
 // ApplyUpdate downloads and installs whatever release checkAndSelfUpdate

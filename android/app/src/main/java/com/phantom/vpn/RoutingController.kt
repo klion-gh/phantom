@@ -67,6 +67,13 @@ object RoutingController {
         val appContext = context.applicationContext
 
         val configs = candidates(appContext)
+        Diag.log(
+            Diag.Cat.ROUTE, "sync",
+            "candidates" to configs.size,
+            "autoEnabled" to RoutingStore.autoEnabled,
+            "smartEnabled" to RoutingStore.smartEnabled,
+            "selectorWasRunning" to (selector != null),
+        )
         if (configs.isEmpty()) {
             selector?.stop()
             selector = null
@@ -154,7 +161,7 @@ object RoutingController {
     fun health(): Map<String, ConfigHealth> {
         val active = selector ?: return emptyMap()
         val current = active.current()
-        return runCatching {
+        val result = runCatching {
             val arr = JSONArray(active.healthJSON())
             (0 until arr.length()).associate { i ->
                 val obj = arr.getJSONObject(i)
@@ -167,6 +174,21 @@ object RoutingController {
                 )
             }
         }.getOrDefault(emptyMap())
+        // Polled by the UI, hence sampled - but this is the view that answers
+        // "why is auto-select taking so long to decide": probed=false across
+        // the board means probes are still in flight, not that they failed.
+        Diag.sampled("health", Diag.Cat.ROUTE, "health", everyMs = 4000) {
+            arrayOf(
+                "current" to current,
+                "configs" to result.size,
+                "probed" to result.values.count { it.probed },
+                "alive" to result.values.count { it.alive },
+                "detail" to result.entries.joinToString(",") {
+                    "${it.key.take(8)}:${if (it.value.probed) "p" else "-"}${if (it.value.alive) "a" else "-"}${it.value.latencyMs}"
+                },
+            )
+        }
+        return result
     }
 
     /**

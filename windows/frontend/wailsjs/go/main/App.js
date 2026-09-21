@@ -46,6 +46,10 @@ export function GetAppearance() {
   return window['go']['main']['App']['GetAppearance']();
 }
 
+export function GetBetaUpdates() {
+  return window['go']['main']['App']['GetBetaUpdates']();
+}
+
 export function GetGlassEffect() {
   return window['go']['main']['App']['GetGlassEffect']();
 }
@@ -122,6 +126,10 @@ export function SetAutoEnabled(arg1) {
   return window['go']['main']['App']['SetAutoEnabled'](arg1);
 }
 
+export function SetBetaUpdates(arg1) {
+  return window['go']['main']['App']['SetBetaUpdates'](arg1);
+}
+
 export function SetConfigGeo(arg1, arg2, arg3, arg4) {
   return window['go']['main']['App']['SetConfigGeo'](arg1, arg2, arg3, arg4);
 }
@@ -164,6 +172,10 @@ export function Status() {
 
 export function StopProxy(arg1) {
   return window['go']['main']['App']['StopProxy'](arg1);
+}
+
+export function UIDiag(arg1, arg2, arg3) {
+  return window['go']['main']['App']['UIDiag'](arg1, arg2, arg3);
 }
 
 export function UILog(arg1) {

@@ -150,9 +150,9 @@ class MainActivity : ComponentActivity() {
                 Box(modifier = Modifier.fillMaxSize()) {
                     // Deliberately outside the systemBars padding below - the
                     // backdrop is meant to run edge-to-edge, under the status/nav
-                    // bars, not stop short of them. Never blurred - "Эффект
-                    // прозрачности" is a per-tile effect (see Theme.kt's
-                    // Modifier.glassBlur), not a whole-screen one.
+                    // bars, not stop short of them. Drawn sharp here; every glass
+                    // tile redraws its own translated, blurred copy of this same
+                    // content instead (see AnimatedBackground.kt's GlassFill).
                     AnimatedBackground(modifier = Modifier.fillMaxSize())
                     PhantomApp(
                         onConnect = { config -> requestConnect(config) },
@@ -259,8 +259,11 @@ private fun PhantomApp(
     // downloadAndInstallUpdate, which never call onProgress) - see MainScreen's
     // progress bar under the logo.
     var updateProgress by remember { mutableStateOf<Int?>(null) }
-    LaunchedEffect(Unit) {
-        updateInfo = checkForUpdate(BuildConfig.VERSION_NAME)
+    // Keyed on the channel, not Unit: flipping "Скачивать beta-версии" re-runs
+    // the check immediately on the new channel, so turning it on surfaces an
+    // available beta right away rather than at the next app start.
+    LaunchedEffect(Appearance.betaUpdates) {
+        updateInfo = checkForUpdate(BuildConfig.VERSION_NAME, allowBeta = Appearance.betaUpdates)
     }
 
     // Independent per-config SOCKS5 proxy toggle state - see ProxyManager. Entirely
@@ -468,6 +471,7 @@ private fun PhantomApp(
                 resources = resources,
                 appInForeground = appInForeground,
                 hasUpdate = updateInfo != null,
+                updateIsBeta = updateInfo?.prerelease == true,
                 updateProgress = updateProgress,
                 isUpdating = isUpdating,
                 onUpdateClick = { applyUpdate() },
@@ -634,6 +638,7 @@ private fun MainScreen(
     resources: List<PingResource>,
     appInForeground: Boolean,
     hasUpdate: Boolean,
+    updateIsBeta: Boolean,
     isUpdating: Boolean,
     updateProgress: Int?,
     onUpdateClick: () -> Unit,
@@ -705,7 +710,14 @@ private fun MainScreen(
                     Text(
                         "⬇",
                         fontSize = 20.sp,
-                        color = if (isUpdating) TextSecondary else Success,
+                        // Accent rather than Success when what's on offer is a
+                        // prerelease: a test build shouldn't present itself in
+                        // the same "all good, take this" green as a stable one.
+                        color = when {
+                            isUpdating -> TextSecondary
+                            updateIsBeta -> Accent
+                            else -> Success
+                        },
                     )
                 }
             }
@@ -1390,6 +1402,32 @@ private fun SettingsScreen(
                     onCheckedChange = { Appearance.setGlassEffect(context, it) },
                 )
             }
+            Spacer(Modifier.height(20.dp))
+
+            // Opts into GitHub prereleases - see UpdateChecker.kt's two
+            // endpoints. Flipping this re-runs the update check immediately on
+            // the new channel (PhantomApp's LaunchedEffect is keyed on it), so
+            // an available beta appears without waiting for a restart.
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    I18n.t("beta_updates"),
+                    color = TextPrimary,
+                    fontSize = 15.sp,
+                    fontWeight = FontWeight.Medium,
+                    modifier = Modifier.weight(1f),
+                )
+                GradientSwitch(
+                    checked = Appearance.betaUpdates,
+                    onCheckedChange = { Appearance.setBetaUpdates(context, it) },
+                )
+            }
+            Spacer(Modifier.height(6.dp))
+            Text(
+                I18n.t("beta_updates_hint"),
+                color = TextSecondary,
+                fontSize = 12.5.sp,
+                lineHeight = 17.sp,
+            )
             Spacer(Modifier.height(28.dp))
 
             // Language selector - reading I18n.lang here recomposes the whole

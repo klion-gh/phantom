@@ -16,6 +16,7 @@ const (
 	backgroundFileName        = "background"
 	showProxySettingsFileName = "show_proxy_settings"
 	glassEffectFileName       = "glass_effect"
+	betaUpdatesFileName       = "beta_updates"
 )
 
 // loadSetting returns the persisted value of name, falling back to def when the
@@ -73,7 +74,7 @@ func saveLanguage(lang string) { saveSetting(languageFileName, lang, "ru", "ru",
 // stay the defaults.
 var (
 	palettes    = []string{"midnight", "emerald", "sunset", "ocean", "graphite", "sakura"}
-	backgrounds = []string{"orbs", "aurora", "stars", "mesh", "meteors", "waves", "embers", "plain"}
+	backgrounds = []string{"orbs", "aurora", "stars", "mesh", "meteors", "matrix", "embers", "plain"}
 )
 
 func loadPalette() string { return loadSetting(paletteFileName, "midnight", palettes...) }
@@ -114,4 +115,20 @@ func saveGlassEffect(enabled bool) {
 		value = "1"
 	}
 	saveSetting(glassEffectFileName, value, "0", "1", "0")
+}
+
+// Whether the updater also considers releases GitHub has marked as
+// prereleases - off by default, so the stable channel stays the default
+// experience and nobody opts into test builds by accident. See
+// updater.go's checkForUpdate for how the two channels actually differ.
+func loadBetaUpdates() bool {
+	return loadSetting(betaUpdatesFileName, "0", "1", "0") == "1"
+}
+
+func saveBetaUpdates(enabled bool) {
+	value := "0"
+	if enabled {
+		value = "1"
+	}
+	saveSetting(betaUpdatesFileName, value, "0", "1", "0")
 }

@@ -20,15 +20,18 @@ func main() {
 		return
 	}
 
-	// Refuse to start a second GUI instance - bring the existing one to the
-	// front (it may be hidden in the tray) and exit instead.
-	if !acquireSingleInstanceLock() {
-		return
-	}
+	// Skipped entirely during binding generation - see isBindingsBuild.
+	if !isBindingsBuild {
+		// Refuse to start a second GUI instance - bring the existing one to the
+		// front (it may be hidden in the tray) and exit instead.
+		if !acquireSingleInstanceLock() {
+			return
+		}
 
-	if err := ensureWintunDLL(); err != nil {
-		println("Failed to prepare wintun.dll:", err.Error())
-		return
+		if err := ensureWintunDLL(); err != nil {
+			println("Failed to prepare wintun.dll:", err.Error())
+			return
+		}
 	}
 
 	// Create an instance of the app structure

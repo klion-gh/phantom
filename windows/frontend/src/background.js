@@ -22,7 +22,7 @@ export const BACKGROUNDS = [
   { id: 'stars', name: 'background_stars_label', desc: 'background_stars_desc' },
   { id: 'mesh', name: 'background_mesh_label', desc: 'background_mesh_desc' },
   { id: 'meteors', name: 'background_meteors_label', desc: 'background_meteors_desc' },
-  { id: 'waves', name: 'background_waves_label', desc: 'background_waves_desc' },
+  { id: 'matrix', name: 'background_matrix_label', desc: 'background_matrix_desc' },
   { id: 'embers', name: 'background_embers_label', desc: 'background_embers_desc' },
   { id: 'plain', name: 'background_plain_label', desc: 'background_plain_desc' },
 ];
@@ -56,15 +56,27 @@ function rgba(hex, alpha) {
 // don't reshuffle across palette/background switches or resizes (everything
 // is stored in [0,1] canvas-relative units, scaled to pixels at draw time).
 
+// Long-exposure star-trail photo: every star circles the same fixed pole
+// point at a constant angular speed (an integer number of full turns per 60s
+// cycle, same seamless-loop rule as everything else here), tracing a fading
+// arc behind it rather than sitting still. birthT/lifeLen give each star its
+// own window within the cycle to fade in, hold, and fade out - not literal
+// randomness (which would break the loop), but with 64 stars on staggered
+// windows the repeat isn't perceptible.
 function makeStars() {
   const rng = seeded(42);
   const stars = [];
-  for (let i = 0; i < 90; i++) {
+  for (let i = 0; i < 64; i++) {
     stars.push({
-      x: rng(), y: rng(),
-      baseRadius: rng() * 1.4 + 0.4,
-      phase: rng() * TAU,
-      accent: i % 5 === 0,
+      angle0: rng() * TAU,
+      radiusFrac: 0.15 + rng() * 0.85,
+      speed: 1 + Math.floor(rng() * 3), // integer turns per cycle
+      direction: rng() < 0.5 ? 1 : -1,
+      trailArc: 0.3 + rng() * 0.35, // radians of visible trail behind the head
+      birthT: rng(),
+      lifeLen: 0.25 + rng() * 0.5,
+      baseRadius: rng() * 1.3 + 0.5,
+      accent: i % 6 === 0,
     });
   }
   return stars;
@@ -117,9 +129,31 @@ function makeEmbers() {
   return embers;
 }
 
+// The classic falling-code rain - same design as the Android client's
+// "Матрица" (AnimatedBackground.kt's drawMatrix): dense columns of "0"/"1"
+// scrolling down and wrapping, brightest at the head and fading up the
+// trail, in the active palette's own accent colour rather than a hardcoded
+// green so it stays "this app's Matrix" across every palette.
+function makeMatrixColumns() {
+  const rng = seeded(2027);
+  const columns = [];
+  for (let i = 0; i < 52; i++) {
+    const glyphs = [];
+    for (let j = 0; j < 18; j++) glyphs.push(rng() < 0.5);
+    columns.push({
+      lane: rng(),
+      speed: 1 + Math.floor(rng() * 3),
+      offset: rng(),
+      glyphs,
+    });
+  }
+  return columns;
+}
+
 const stars = makeStars();
 const meshNodes = makeMeshNodes();
 const meteors = makeMeteors();
+const matrixColumns = makeMatrixColumns();
 const embers = makeEmbers();
 
 function drawOrbs(ctx, w, h, t, primary, accent) {
@@ -171,16 +205,44 @@ function drawAurora(ctx, w, h, t, primary, accent) {
   ctx.restore();
 }
 
-function drawStars(ctx, w, h, t) {
+function drawStars(ctx, w, h, t, accent) {
+  const S = Math.max(w, h);
+  // Off the top edge, like most real polar star-trail photos - only the
+  // lower arcs of each circle sweep through the visible frame instead of
+  // full rings centred on screen.
+  const poleX = w * 0.5;
+  const poleY = h * -0.15;
+  const segments = 18;
   for (const s of stars) {
-    const twinkle = 0.45 + 0.55 * (0.5 + 0.5 * Math.sin(t * TAU * 2 + s.phase));
-    const alpha = 0.55 * twinkle;
-    const radius = s.baseRadius * twinkle;
-    ctx.fillStyle = s.accent
-      ? rgba(getComputedColor('--accent'), alpha)
-      : `rgba(255, 255, 255, ${alpha})`;
+    let lifeT = t - s.birthT;
+    if (lifeT < 0) lifeT += 1;
+    if (lifeT > s.lifeLen) continue;
+    const lifeFrac = lifeT / s.lifeLen;
+    const fadeIn = Math.min(1, lifeFrac / 0.2);
+    const fadeOut = Math.min(1, (1 - lifeFrac) / 0.2);
+    const lifeAlpha = Math.min(fadeIn, fadeOut);
+    if (lifeAlpha <= 0.01) continue;
+
+    const radius = s.radiusFrac * S;
+    const angle = s.angle0 + s.direction * s.speed * t * TAU;
+    const color = s.accent ? accent : null;
+
+    ctx.lineWidth = s.baseRadius * 0.9;
+    for (let i = 0; i < segments; i++) {
+      const a0 = angle - s.direction * (i / segments) * s.trailArc;
+      const a1 = angle - s.direction * ((i + 1) / segments) * s.trailArc;
+      const segAlpha = lifeAlpha * 0.5 * (1 - i / segments);
+      if (segAlpha <= 0.01) continue;
+      ctx.strokeStyle = color ? rgba(color, segAlpha) : `rgba(255, 255, 255, ${segAlpha})`;
+      ctx.beginPath();
+      ctx.arc(poleX, poleY, radius, Math.min(a0, a1), Math.max(a0, a1));
+      ctx.stroke();
+    }
+
+    const headAlpha = lifeAlpha * 0.9;
+    ctx.fillStyle = color ? rgba(color, headAlpha) : `rgba(255, 255, 255, ${headAlpha})`;
     ctx.beginPath();
-    ctx.arc(s.x * w, s.y * h, radius, 0, TAU);
+    ctx.arc(poleX + Math.cos(angle) * radius, poleY + Math.sin(angle) * radius, s.baseRadius, 0, TAU);
     ctx.fill();
   }
 }
@@ -242,26 +304,29 @@ function drawMeteors(ctx, w, h, t, primary, accent) {
   }
 }
 
-function drawWaves(ctx, w, h, t, primary, accent) {
-  for (let i = 0; i < 4; i++) {
-    const baseY = h * (0.55 + i * 0.11);
-    const amp = h * (0.05 - i * 0.008);
-    const speed = i + 1;
-    const color = i % 2 === 0 ? primary : accent;
-    ctx.beginPath();
-    for (let x = 0; x <= w; x += w / 40) {
-      const u = x / w;
-      const y = baseY + Math.sin(u * TAU * (i + 2) + t * TAU * speed) * amp;
-      if (x === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+function drawMatrix(ctx, w, h, t, accent) {
+  const trailLen = matrixColumns.length ? matrixColumns[0].glyphs.length : 18;
+  const glyphH = h * 0.03;
+  const trailPx = trailLen * glyphH;
+  ctx.font = `${Math.max(10, glyphH * 0.62)}px "Consolas", "Cascadia Code", monospace`;
+  ctx.textBaseline = 'top';
+  for (const col of matrixColumns) {
+    const progress = (t * col.speed + col.offset) % 1;
+    // Head travels from trailPx above the screen to trailPx *past* the bottom
+    // edge, not just to the edge itself - so the tail (a full trailPx behind
+    // the head) has completely scrolled off before the column wraps, instead
+    // of vanishing mid-scroll the moment the head alone touches bottom.
+    const headY = progress * (h + 2 * trailPx) - trailPx;
+    const x = col.lane * w;
+    for (let i = 0; i < trailLen; i++) {
+      const y = headY - i * glyphH;
+      if (y < -glyphH || y > h) continue;
+      const fade = Math.max(0, Math.min(1, 1 - i / trailLen));
+      const alpha = fade * fade * 0.8;
+      if (alpha < 0.02) continue;
+      ctx.fillStyle = i === 0 ? `rgba(255, 255, 255, ${alpha})` : rgba(accent, alpha);
+      ctx.fillText(col.glyphs[i] ? '1' : '0', x, y);
     }
-    ctx.lineTo(w, h);
-    ctx.lineTo(0, h);
-    ctx.closePath();
-    const grad = ctx.createLinearGradient(0, baseY - amp, 0, h);
-    grad.addColorStop(0, rgba(color, 0.1));
-    grad.addColorStop(1, rgba(color, 0));
-    ctx.fillStyle = grad;
-    ctx.fill();
   }
 }
 
@@ -280,9 +345,6 @@ function drawEmbers(ctx, w, h, t, primary, accent) {
 
 let cachedPrimary = '#8B7CF6';
 let cachedAccent = '#5B8DEF';
-function getComputedColor(varName) {
-  return varName === '--primary' ? cachedPrimary : cachedAccent;
-}
 
 export function refreshPaletteColors() {
   const style = getComputedStyle(document.documentElement);
@@ -297,10 +359,10 @@ function draw(ctx, w, h, t, kind) {
   switch (kind) {
     case 'orbs': return drawOrbs(ctx, w, h, t, primary, accent);
     case 'aurora': return drawAurora(ctx, w, h, t, primary, accent);
-    case 'stars': return drawStars(ctx, w, h, t);
+    case 'stars': return drawStars(ctx, w, h, t, accent);
     case 'mesh': return drawMesh(ctx, w, h, t, primary, accent);
     case 'meteors': return drawMeteors(ctx, w, h, t, primary, accent);
-    case 'waves': return drawWaves(ctx, w, h, t, primary, accent);
+    case 'matrix': return drawMatrix(ctx, w, h, t, accent);
     case 'embers': return drawEmbers(ctx, w, h, t, primary, accent);
     default: return;
   }

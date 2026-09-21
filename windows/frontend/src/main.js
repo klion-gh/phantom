@@ -8,11 +8,12 @@ import './style.css';
 // install ever shows, so the app's own footprint grows by the whole set
 // (~2.4MB) once, not per flag shown.
 import 'flag-icons/css/flag-icons.min.css';
-import { Connect, Disconnect, Status, ReadLog, ListConfigs, AddConfig, UpdateConfig, DeleteConfig, SetConfigGeo, ClearConfigCountry, Ping, ListResources, AddResource, DeleteResource, ListExcludedApps, PickExcludedAppExe, AddExcludedApp, DeleteExcludedApp, ApplyUpdate, StartProxy, StopProxy, GetLanguage, SetLanguage, Version, LookupCountry, GetAppearance, SetAppearance, GetShowProxySettings, SetShowProxySettings, GetGlassEffect, SetGlassEffect, GetRoutingState, SetRoutingMode, SetSmartEnabled, SetSmartSites, SetSmartConfigs, SetAutoEnabled, SetAutoConfigs, SetAppsEnabled, SetAppsInclude, ReconnectActive, RoutingHealth, PopularResources } from '../wailsjs/go/main/App';
+import { Connect, Disconnect, Status, ReadLog, ListConfigs, AddConfig, UpdateConfig, DeleteConfig, SetConfigGeo, ClearConfigCountry, Ping, ListResources, AddResource, DeleteResource, ListExcludedApps, PickExcludedAppExe, AddExcludedApp, DeleteExcludedApp, ApplyUpdate, StartProxy, StopProxy, GetLanguage, SetLanguage, Version, LookupCountry, GetAppearance, SetAppearance, GetShowProxySettings, SetShowProxySettings, GetGlassEffect, SetGlassEffect, GetBetaUpdates, SetBetaUpdates, GetRoutingState, SetRoutingMode, SetSmartEnabled, SetSmartSites, SetSmartConfigs, SetAutoEnabled, SetAutoConfigs, SetAppsEnabled, SetAppsInclude, ReconnectActive, RoutingHealth, PopularResources } from '../wailsjs/go/main/App';
 import { t, getLang, setLang, applyStaticTranslations } from './i18n.js';
 import { BACKGROUNDS, initBackground, initMiniBackground } from './background.js';
 import { PALETTES } from './palettes.js';
 import { initScrollbars, relayoutScrollbars } from './scrollbar.js';
+import { Cat, diag, diagSampled, logEnvironment, logGlassState } from './diag.js';
 
 // The WebView has no console the user can open, so an uncaught frontend error
 // would otherwise be completely invisible - it goes to the app log instead,
@@ -605,6 +606,14 @@ async function refreshStatus() {
   } catch (e) {
     console.error(e);
   }
+  // Sampled: this is the 4s poll, so it would otherwise be most of the log.
+  diagSampled('status', Cat.VPN, 'status', () => ({
+    connected: currentStatus.connected,
+    alive: currentStatus.alive,
+    activeConfigId: currentStatus.activeConfigId || 'none',
+    smartEnabled: routingState.smartEnabled,
+    autoEnabled: routingState.autoEnabled,
+  }), 8000);
   refreshTileStatuses();
   renderSitesApplyRow();
   refreshModeAvailability();
@@ -711,6 +720,19 @@ document.getElementById('glass-effect-toggle').addEventListener('click', async (
   document.getElementById('glass-effect-toggle').classList.toggle('active', glassEffect);
   document.documentElement.classList.toggle('glass-effect', glassEffect);
   await SetGlassEffect(glassEffect);
+  // After the class flip, so what's logged is what the WebView actually
+  // resolved the variables to - not what they were a moment before.
+  logGlassState('toggle');
+});
+
+document.getElementById('beta-updates-toggle').addEventListener('click', async () => {
+  betaUpdates = !betaUpdates;
+  document.getElementById('beta-updates-toggle').classList.toggle('active', betaUpdates);
+  diag(Cat.UI, 'setBetaUpdates', { enabled: betaUpdates });
+  // The Go side re-checks on the new channel as part of this call, so turning
+  // the toggle on surfaces an available beta right away rather than at the
+  // next app start - the "update:available" event does the rest.
+  await SetBetaUpdates(betaUpdates);
 });
 
 // --- Appearance -------------------------------------------------------------
@@ -731,6 +753,10 @@ let showProxySettings = true;
 // Whether tiles/inputs/the nav bar render translucent (see style.css's
 // body.glass-effect) - off by default (see settings.go).
 let glassEffect = false;
+
+// Whether the updater also offers GitHub prereleases - off by default (see
+// settings.go and updater.go's two-endpoint split).
+let betaUpdates = false;
 
 const paletteGridEl = document.getElementById('palette-grid');
 const backgroundOptionsEl = document.getElementById('background-options');
@@ -970,10 +996,28 @@ setInterval(refreshStatus, 4000);
   }
   document.getElementById('glass-effect-toggle').classList.toggle('active', glassEffect);
   document.documentElement.classList.toggle('glass-effect', glassEffect);
+  try {
+    betaUpdates = await GetBetaUpdates();
+  } catch (e) {
+    // default (stable channel only) stays if the Go call fails
+  }
+  document.getElementById('beta-updates-toggle').classList.toggle('active', betaUpdates);
   applyAppearance();
   applyStaticTranslations();
   document.getElementById('btn-lang-ru').classList.toggle('active', getLang() === 'ru');
   document.getElementById('btn-lang-en').classList.toggle('active', getLang() === 'en');
+
+  // Environment + CSS capability probes first (does this WebView2 even do
+  // backdrop-filter / mask-composite), then what the glass variables actually
+  // resolved to on a real tile - the two halves of any "it looks wrong" report.
+  logEnvironment();
+  diag(Cat.BG, 'startup', {
+    palette: appearance.palette,
+    background: appearance.background,
+    glassEffect,
+    showProxySettings,
+  });
+  requestAnimationFrame(() => logGlassState('startup'));
 
   await reloadConfigs();
   await refreshStatus();
@@ -1026,6 +1070,15 @@ function showSection(name) {
   }
   for (const item of document.querySelectorAll('.nav-item')) {
     item.classList.toggle('active', item.dataset.section === name);
+  }
+  // Section switching is where the glass effect was reported arriving late -
+  // this pins down when the switch happened, and the delayed follow-up below
+  // captures what the newly-shown tiles actually resolved to once a frame has
+  // passed (a tile coming back from display:none has no resolved
+  // backdrop-filter to read at this instant).
+  diag(Cat.UI, 'showSection', { name, glassOn: document.documentElement.classList.contains('glass-effect') });
+  if (glassEffect) {
+    requestAnimationFrame(() => logGlassState('after-section-' + name));
   }
 }
 
@@ -1239,6 +1292,16 @@ async function refreshRoutingHealth() {
   } catch (e) {
     return;
   }
+  // Sampled (2.5s poll). This is the view that answers "why is auto-select
+  // taking so long to decide" - probed=0 across the board means probes are
+  // still in flight rather than having failed.
+  diagSampled('health', Cat.ROUTE, 'health', () => ({
+    configs: health.length,
+    probed: health.filter((h) => h.probed).length,
+    alive: health.filter((h) => h.alive).length,
+    active: (health.find((h) => h.active) || {}).id || 'none',
+    detail: health.map((h) => `${String(h.id).slice(0, 8)}:${h.probed ? 'p' : '-'}${h.alive ? 'a' : '-'}${h.latency_ms}`).join(','),
+  }), 6000);
   for (const entry of health) {
     const el = document.querySelector('[data-health-for="' + entry.id + '"]');
     if (!el) continue;

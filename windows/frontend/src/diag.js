@@ -1,0 +1,106 @@
+// Structured diagnostic logging for the frontend half of the app, routed into
+// the same phantom.log the Go side writes (via the UIDiag binding) so one file
+// holds the whole picture. Same `cat=X ev=Y k=v ...` shape as Android's
+// Diag.kt and windows/diag.go, so all three are greppable the same way:
+//
+//     findstr "cat=GLASS" phantom.log
+//
+// This exists because everything the glass effect and the animated backdrop
+// actually do lives in the WebView, which has no console the user can open -
+// without routing it out, the most-reported half of the UI would be the only
+// part with no trace in the log at all.
+
+const ENABLED = true;
+
+export const Cat = {
+  APP: 'APP',
+  GLASS: 'GLASS',
+  BG: 'BG',
+  UI: 'UI',
+  VPN: 'VPN',
+  ROUTE: 'ROUTE',
+};
+
+function fieldsToString(fields) {
+  if (!fields) return '';
+  return Object.entries(fields)
+    .map(([k, v]) => `${k}=${v === null || v === undefined ? 'null' : v}`)
+    .join(' ');
+}
+
+/** One structured line. Never throws - a diagnostic that can break the app is
+ *  worse than no diagnostic, and this runs on paths as hot as section
+ *  switching. */
+export function diag(category, event, fields) {
+  if (!ENABLED) return;
+  try {
+    window.go.main.App.UIDiag(category, event, fieldsToString(fields));
+  } catch (_) {
+    // binding not ready yet (very early startup) - drop it rather than
+    // interfering with whatever is actually starting up.
+  }
+}
+
+const lastEmit = new Map();
+
+/** For call sites that can fire every frame or every poll tick: drops
+ *  everything but roughly one line per `everyMs` per `key`, so a 4s status
+ *  poll or a rAF-driven redraw doesn't bury the rest of the log. */
+export function diagSampled(key, category, event, fieldsFn, everyMs = 2000) {
+  if (!ENABLED) return;
+  const now = Date.now();
+  const last = lastEmit.get(key);
+  if (last !== undefined && now - last < everyMs) return;
+  lastEmit.set(key, now);
+  diag(category, event, fieldsFn());
+}
+
+/** Dumped once at startup. The CSS capability probes are the point: "does this
+ *  WebView2 actually support backdrop-filter / mask-composite" is exactly the
+ *  question a "the glass effect looks wrong" report needs answered, and it's
+ *  unanswerable after the fact without this. */
+export function logEnvironment() {
+  if (!ENABLED) return;
+  const supports = (prop, value) => {
+    try {
+      return CSS.supports(prop, value);
+    } catch (_) {
+      return 'probe-failed';
+    }
+  };
+  diag(Cat.APP, 'environment', {
+    ua: (navigator.userAgent || '').replace(/\s+/g, '_'),
+    dpr: window.devicePixelRatio,
+    viewport: `${window.innerWidth}x${window.innerHeight}`,
+    backdropFilter: supports('backdrop-filter', 'blur(10px)'),
+    webkitBackdropFilter: supports('-webkit-backdrop-filter', 'blur(10px)'),
+    maskComposite: supports('mask-composite', 'exclude'),
+    colorMix: supports('color', 'color-mix(in srgb, red 50%, transparent)'),
+    reducedMotion: window.matchMedia('(prefers-reduced-motion: reduce)').matches,
+  });
+}
+
+/** The computed values the glass effect actually resolves to at runtime -
+ *  not what the stylesheet says, but what this WebView decided they are after
+ *  var() resolution and color-mix(). A mismatch between these and the intended
+ *  values is the single most useful thing to see when the effect looks off. */
+export function logGlassState(where) {
+  if (!ENABLED) return;
+  const root = document.documentElement;
+  const cs = getComputedStyle(root);
+  const sampleTile = document.querySelector('.config-card, .routing-tile, .bottom-nav');
+  const tileCs = sampleTile ? getComputedStyle(sampleTile) : null;
+  diag(Cat.GLASS, 'state', {
+    where,
+    htmlClass: root.className || '(none)',
+    glassOn: root.classList.contains('glass-effect'),
+    surfaceAlpha: cs.getPropertyValue('--surface-alpha').trim(),
+    glassBlurVar: cs.getPropertyValue('--glass-blur').trim(),
+    surfaceGlass: cs.getPropertyValue('--surface-glass').trim().replace(/\s+/g, ''),
+    sampleTile: sampleTile ? sampleTile.className.split(' ')[0] : 'none',
+    // The two that decide whether a tile actually frosts, as resolved on a
+    // real element rather than in theory.
+    tileBackdrop: tileCs ? (tileCs.backdropFilter || tileCs.webkitBackdropFilter || 'none') : 'n/a',
+    tileBackground: tileCs ? tileCs.backgroundColor.replace(/\s+/g, '') : 'n/a',
+  });
+}

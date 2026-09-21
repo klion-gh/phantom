@@ -74,6 +74,9 @@ object I18n {
             "share" to "Поделиться",
             "show_proxy_settings" to "Отобразить настройки прокси",
             "glass_effect" to "Эффект прозрачности",
+            "beta_updates" to "Скачивать beta-версии",
+            "beta_updates_hint" to "Предлагать обновления до тестовых сборок. Они выходят чаще, но могут содержать ошибки.",
+            "update_available_beta" to "Доступна beta-версия",
             // routing section
             "routing" to "Маршрутизация",
             "smart_vpn" to "Умный VPN",
@@ -176,6 +179,9 @@ object I18n {
             "share" to "Share",
             "show_proxy_settings" to "Show proxy settings",
             "glass_effect" to "Glass effect",
+            "beta_updates" to "Download beta versions",
+            "beta_updates_hint" to "Offer updates to test builds. They ship more often, but may contain bugs.",
+            "update_available_beta" to "A beta version is available",
             // routing section
             "routing" to "Routing",
             "smart_vpn" to "Smart VPN",

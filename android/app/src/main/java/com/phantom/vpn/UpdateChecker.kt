@@ -8,44 +8,85 @@ import android.provider.Settings
 import androidx.core.content.FileProvider
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
 import java.net.HttpURLConnection
 import java.net.URL
 
-private const val GITHUB_RELEASES_API = "https://api.github.com/repos/klion-gh/phantom/releases/latest"
+// Two endpoints, one per update channel - the split is GitHub's own, not
+// something this app invents on top of it:
+//
+//  - /releases/latest deliberately skips anything marked as a prerelease (and
+//    any draft), so it is exactly the stable channel with no filtering needed.
+//  - /releases lists everything, newest first, each entry carrying its own
+//    prerelease/draft flags - which is what the beta channel reads, taking the
+//    newest non-draft whether it's marked prerelease or not (a beta user should
+//    still get a stable release that supersedes the last beta).
+//
+// So publishing a beta is just ticking "Set as a pre-release" on the GitHub
+// release - no special asset names, no parallel tagging scheme to keep in sync.
+private const val GITHUB_LATEST_RELEASE_API = "https://api.github.com/repos/klion-gh/phantom/releases/latest"
+private const val GITHUB_RELEASE_LIST_API = "https://api.github.com/repos/klion-gh/phantom/releases?per_page=20"
 private const val APK_ASSET_NAME = "phantom.apk"
 private const val UPDATE_APK_FILE_NAME = "phantom-update.apk"
 private const val PREFS_NAME = "phantom_update_prefs"
 private const val PREF_DOWNLOADED_TAG = "downloaded_tag"
 
-/** What checkForUpdate found: the release tag (for display) and the direct download
- * URL for its phantom.apk asset. */
-data class UpdateInfo(val tag: String, val downloadUrl: String)
+/** What checkForUpdate found: the release tag (for display), the direct download
+ * URL for its phantom.apk asset, and whether GitHub marks it as a prerelease -
+ * the last so the UI can say "beta" rather than presenting a test build as an
+ * ordinary update. */
+data class UpdateInfo(val tag: String, val downloadUrl: String, val prerelease: Boolean = false)
 
 /**
  * Checks GitHub for a release newer than [currentVersion] (pass
  * BuildConfig.VERSION_NAME), returning its tag and phantom.apk download URL, or null
  * if already current, offline, rate-limited, or the release has no matching asset -
  * never treated as an error worth surfacing.
+ *
+ * [allowBeta] picks the channel (see the endpoint constants above): false reads
+ * only stable releases, true takes the newest published release of either kind.
  */
-suspend fun checkForUpdate(currentVersion: String): UpdateInfo? = withContext(Dispatchers.IO) {
+suspend fun checkForUpdate(currentVersion: String, allowBeta: Boolean = false): UpdateInfo? = withContext(Dispatchers.IO) {
     runCatching {
-        val conn = URL(GITHUB_RELEASES_API).openConnection() as HttpURLConnection
+        val endpoint = if (allowBeta) GITHUB_RELEASE_LIST_API else GITHUB_LATEST_RELEASE_API
+        val conn = URL(endpoint).openConnection() as HttpURLConnection
         conn.connectTimeout = 6000
         conn.readTimeout = 6000
         conn.setRequestProperty("Accept", "application/vnd.github+json")
         val body = conn.inputStream.bufferedReader().use { it.readText() }
-        val json = JSONObject(body)
+
+        // The list endpoint returns an array, newest first; drafts are skipped
+        // (a draft's assets are still being attached - see the release
+        // workflow, which publishes one deliberately). The latest endpoint
+        // returns a single object that is already the right one.
+        val json = if (allowBeta) {
+            val arr = JSONArray(body)
+            (0 until arr.length())
+                .map { arr.getJSONObject(it) }
+                .firstOrNull { !it.optBoolean("draft", false) }
+                ?: return@runCatching null
+        } else {
+            JSONObject(body)
+        }
+
         val tag = json.optString("tag_name").takeIf { it.isNotBlank() } ?: return@runCatching null
+        val prerelease = json.optBoolean("prerelease", false)
         if (!isNewerVersion(tag, currentVersion)) return@runCatching null
+        Diag.log(
+            Diag.Cat.APP, "updateFound",
+            "tag" to tag, "prerelease" to prerelease,
+            "channel" to if (allowBeta) "beta" else "stable",
+            "current" to currentVersion,
+        )
 
         val assets = json.optJSONArray("assets") ?: return@runCatching null
         for (i in 0 until assets.length()) {
             val asset = assets.getJSONObject(i)
             if (asset.optString("name") == APK_ASSET_NAME) {
                 val url = asset.optString("browser_download_url").takeIf { it.isNotBlank() } ?: return@runCatching null
-                return@runCatching UpdateInfo(tag, url)
+                return@runCatching UpdateInfo(tag, url, prerelease)
             }
         }
         FileLog.i("update check: release $tag has no $APK_ASSET_NAME asset")
@@ -65,7 +106,15 @@ private fun isNewerVersion(latest: String, current: String): Boolean {
 }
 
 private fun parseVersion(v: String): IntArray {
-    val parts = v.trim().removePrefix("v").split(".")
+    // Drop any prerelease/build suffix ("1.18.0-beta.2" -> "1.18.0") so a beta
+    // tag compares on its numeric version alone. Consequence worth knowing: a
+    // beta must carry a numerically higher version than the stable it
+    // supersedes, because "1.18.0-beta.1" and "1.18.0" compare equal here -
+    // which is right for "the stable of the same version isn't an update for
+    // someone already on its beta", but means betas can't be tagged off the
+    // current stable's own number.
+    val numeric = v.trim().removePrefix("v").substringBefore('-').substringBefore('+')
+    val parts = numeric.split(".")
     return IntArray(3) { i -> parts.getOrNull(i)?.trim()?.toIntOrNull() ?: 0 }
 }
 

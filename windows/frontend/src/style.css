@@ -154,6 +154,15 @@ textarea,
     backdrop-filter: var(--glass-blur);
     -webkit-backdrop-filter: var(--glass-blur);
     transition: backdrop-filter 260ms ease;
+    /* Hints the compositor to keep a layer ready for this property
+       unconditionally (not just while glass-effect is on) - without it, a
+       tile hidden behind display:none (switching Конфигурации/Маршрутизация/
+       Ресурсы, see .section-page's own fade-in below) had to stand up
+       backdrop-filter's compositing layer from cold the moment it became
+       visible again, arriving a beat after the tile's own fill/fade-in
+       already had, which read as the blur "catching up late" instead of
+       appearing together with the rest of the tile. */
+    will-change: backdrop-filter;
 }
 
 * { box-sizing: border-box; }
@@ -661,6 +670,13 @@ html, body {
     color: var(--text-secondary);
     line-height: 1.5;
     margin-top: -20px;
+}
+/* Sits directly under the toggle it explains, inside .toggle-row-group's own
+   flex flow - so it doesn't inherit the negative top margin the standalone
+   variant above uses to pull itself up under a section heading. */
+.settings-hint-inline {
+    margin-top: -4px;
+    font-size: 12.5px;
 }
 
 .excluded-app-path {

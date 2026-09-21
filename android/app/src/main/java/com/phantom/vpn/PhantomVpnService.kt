@@ -245,6 +245,14 @@ class PhantomVpnService : VpnService() {
     // ever gets to run.
     private fun connect(configId: String, configYaml: String, onResult: ((Boolean) -> Unit)? = null) {
         FileLog.i("connect: establishing tunnel")
+        val connectStartedAt = System.currentTimeMillis()
+        Diag.log(
+            Diag.Cat.VPN, "connectStart",
+            "configId" to configId,
+            "isRetry" to (onResult != null),
+            "smartEnabled" to RoutingStore.smartEnabled,
+            "autoEnabled" to RoutingStore.autoEnabled,
+        )
         VpnStateHolder.update(ConnectionStatus.CONNECTING, "Establishing tunnel...", configId)
         showPersistentNotification(ConnectionStatus.CONNECTING)
         activeConfigId = configId
@@ -333,12 +341,26 @@ class PhantomVpnService : VpnService() {
                 RoutingStore.clearSitesDirty()
 
                 FileLog.i("Mobile.start returned, tunnel connected")
+                // Wall-clock cost of the whole connect path - the number to
+                // look at for any "connecting feels slow" report, and the one
+                // that made the Windows DNS stall visible earlier.
+                Diag.log(
+                    Diag.Cat.VPN, "connectOk",
+                    "configId" to configId,
+                    "ms" to (System.currentTimeMillis() - connectStartedAt),
+                )
                 VpnStateHolder.update(ConnectionStatus.CONNECTED, "Connected", configId)
                 showPersistentNotification(ConnectionStatus.CONNECTED)
                 registerNetworkCallback(cm)
                 onResult?.invoke(true)
             } catch (e: Throwable) {
                 FileLog.e("connect failed", e)
+                Diag.log(
+                    Diag.Cat.VPN, "connectFail",
+                    "configId" to configId,
+                    "ms" to (System.currentTimeMillis() - connectStartedAt),
+                    "error" to (e.message ?: e::class.java.simpleName),
+                )
                 VpnStateHolder.update(ConnectionStatus.ERROR, e.message ?: "connection failed", configId)
                 if (onResult != null) {
                     try {

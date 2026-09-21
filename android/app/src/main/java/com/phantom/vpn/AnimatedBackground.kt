@@ -9,20 +9,34 @@ import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Box
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.blur
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.DrawScope
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.drawscope.translate
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.drawText
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.rememberTextMeasurer
+import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlin.math.cos
 import kotlin.math.min
@@ -56,16 +70,46 @@ private fun seeded(initialSeed: Int): () -> Float {
     }
 }
 
-private class Star(val x: Float, val y: Float, val baseRadius: Float, val phase: Float, val accent: Boolean)
+private class Star(
+    val angle0: Float,
+    val radiusFrac: Float,
+    val speed: Int,
+    val direction: Int,
+    val trailArc: Float,
+    val birthT: Float,
+    val lifeLen: Float,
+    val baseRadius: Float,
+    val accent: Boolean,
+)
 private class MeshNode(val baseX: Float, val baseY: Float, val ampX: Float, val ampY: Float, val fx: Int, val fy: Int, val phase: Float)
 private class Meteor(val speed: Int, val length: Float, val lane: Float, val offset: Float)
 private class Ember(val speed: Int, val sway: Float, val swayFreq: Int, val radius: Float, val lane: Float, val offset: Float, val accent: Boolean)
 private class MatrixColumn(val lane: Float, val speed: Int, val offset: Float, val glyphs: List<Boolean>)
 private class GalaxyStar(val armPhase: Float, val radiusFrac: Float, val speed: Int, val size: Float, val accent: Boolean)
 
+// Long-exposure star-trail photo: every star circles the same fixed pole
+// point at a constant angular speed (an integer number of full turns per 60s
+// cycle, same seamless-loop rule as everything else here - see drawStars),
+// tracing a fading arc behind it rather than sitting still. birthT/lifeLen
+// give each star its own window within the cycle to fade in, hold, and fade
+// out - not literal randomness (which would break the loop), but with 64
+// stars on staggered windows the repeat isn't perceptible. Ported from the
+// Windows client's identical background.js redesign.
 private fun makeStars(): List<Star> {
     val rng = seeded(42)
-    return List(90) { i -> Star(rng(), rng(), rng() * 1.4f + 0.4f, rng() * TAU, i % 5 == 0) }
+    return List(64) { i ->
+        Star(
+            angle0 = rng() * TAU,
+            radiusFrac = 0.15f + rng() * 0.85f,
+            speed = 1 + (rng() * 3).toInt(),
+            direction = if (rng() < 0.5f) 1 else -1,
+            trailArc = 0.3f + rng() * 0.35f,
+            birthT = rng(),
+            lifeLen = 0.25f + rng() * 0.5f,
+            baseRadius = rng() * 1.3f + 0.5f,
+            accent = i % 6 == 0,
+        )
+    }
 }
 private fun makeMeshNodes(): List<MeshNode> {
     val rng = seeded(7)
@@ -112,6 +156,159 @@ private fun makeGalaxyStars(): List<GalaxyStar> {
             size = rng() * 1.6f + 0.5f,
             accent = i % 4 == 0,
         )
+    }
+}
+
+// Computed once for the process, not per-composition (remember { makeX() }
+// would still be one instance per Canvas, and GlassFill below draws a second,
+// translated copy of the exact same layout for every glass tile on screen -
+// module-level state is what makes it *the same* layout rather than an
+// independently-reseeded one).
+private val sharedStars = makeStars()
+private val sharedMeshNodes = makeMeshNodes()
+private val sharedMeteors = makeMeteors()
+private val sharedEmbers = makeEmbers()
+private val sharedMatrixColumns = makeMatrixColumns()
+private val sharedGalaxyStars = makeGalaxyStars()
+
+// The single shared animation clock + screen geometry the real backdrop and
+// every glass tile's blurred fill (see GlassFill) both read, so a tile's
+// "window into the backdrop" is never a frame behind or out of phase with the
+// real thing moving under it - two independent rememberInfiniteTransitions
+// would each start from whenever they were first composed, drifting apart by
+// however long that was.
+object BackdropClock {
+    var t by mutableFloatStateOf(0f)
+        private set
+    var screenWidth by mutableFloatStateOf(0f)
+        private set
+    var screenHeight by mutableFloatStateOf(0f)
+        private set
+    var zeroGlyph: TextLayoutResult? = null
+        private set
+    var oneGlyph: TextLayoutResult? = null
+        private set
+
+    fun reportSize(w: Float, h: Float) {
+        screenWidth = w
+        screenHeight = h
+    }
+
+    @Composable
+    fun Ticker() {
+        val transition = rememberInfiniteTransition(label = "backdropClock")
+        val value by transition.animateFloat(
+            initialValue = 0f, targetValue = 1f,
+            animationSpec = infiniteRepeatable(animation = tween(60_000, easing = LinearEasing), repeatMode = RepeatMode.Restart),
+            label = "t",
+        )
+        t = value
+        val textMeasurer = rememberTextMeasurer()
+        if (zeroGlyph == null) {
+            zeroGlyph = textMeasurer.measure("0", style = TextStyle(fontFamily = FontFamily.Monospace, fontSize = 13.sp))
+            oneGlyph = textMeasurer.measure("1", style = TextStyle(fontFamily = FontFamily.Monospace, fontSize = 13.sp))
+        }
+    }
+}
+
+// The style dispatch, shared between the real backdrop and GlassFill's
+// translated copy - see the class doc on both for why they have to draw
+// pixel-identical content.
+private fun DrawScope.drawBackdropContent(style: BackgroundStyle, w: Float, h: Float, t: Float, primary: Color, accent: Color) {
+    when (style) {
+        BackgroundStyle.ORBS -> drawOrbs(w, h, t, primary, accent)
+        BackgroundStyle.AURORA -> drawAurora(w, h, t, primary, accent)
+        BackgroundStyle.STARS -> drawStars(sharedStars, w, h, t, accent)
+        BackgroundStyle.MESH -> drawMesh(sharedMeshNodes, w, h, t, primary, accent)
+        BackgroundStyle.METEORS -> drawMeteors(sharedMeteors, w, h, t, primary, accent)
+        BackgroundStyle.WAVES -> drawWaves(w, h, t, primary, accent)
+        BackgroundStyle.EMBERS -> drawEmbers(sharedEmbers, w, h, t, primary, accent)
+        BackgroundStyle.MATRIX -> {
+            val zero = BackdropClock.zeroGlyph
+            val one = BackdropClock.oneGlyph
+            if (zero != null && one != null) drawMatrix(sharedMatrixColumns, w, h, t, zero, one, accent)
+        }
+        BackgroundStyle.GALAXY -> drawGalaxy(sharedGalaxyStars, w, h, t, primary, accent)
+        BackgroundStyle.PLAIN -> Unit
+    }
+}
+
+/**
+ * A tile's blurred backdrop fill - the Android half of making "Эффект
+ * прозрачности" actually read as glass. Blurring the tile's own flat [color]
+ * (a uniform fill has almost nothing in it for a blur to visibly soften) was
+ * the first approach here and produced no visible effect. Redrawing a
+ * translated copy of the real backdrop straight inside a blurred `Canvas`
+ * (DrawScope.translate + draw calls, blur() chained onto the Canvas itself)
+ * was the second, and *also* produced nothing - blur() reliably softens a
+ * plain layout of composables (see the popup backdrop blur elsewhere in this
+ * app) but not a bare Canvas's own programmatic draw calls, at least not in a
+ * way that kept re-rendering as the animation ticked.
+ *
+ * This is the third attempt, structured to match the one that's actually
+ * proven to work: `.blur()` sits on a plain [Box] wrapping ordinary
+ * Compose children - a screen-sized [Canvas] shifted into place with a
+ * regular layout [Modifier.offset] (not a DrawScope-level translate) plus a
+ * tint [Box] on top - rather than being chained directly onto a Canvas whose
+ * own content is what needs to animate. Since every background variant is a
+ * pure, deterministic function of (style, t, screen size), redrawing that
+ * same function at the shifted position produces a pixel-accurate "window"
+ * onto whatever's really behind this tile, which blur() then has real detail
+ * to soften instead of a flat rectangle.
+ */
+@Composable
+fun GlassFill(color: Color, modifier: Modifier = Modifier, blurRadius: Dp = 9.dp) {
+    if (!Appearance.glassEffect) {
+        Box(modifier.background(color))
+        return
+    }
+    var positionInRoot by remember { mutableStateOf(Offset.Zero) }
+    val style = Appearance.background
+    val primary = Primary
+    val accent = Accent
+    val t = BackdropClock.t
+    val screenW = BackdropClock.screenWidth
+    val screenH = BackdropClock.screenHeight
+
+    // blur() applied to this outer Box, exactly like the popup backdrop blur
+    // elsewhere in this app (Column(modifier.blur(x)) - a *proven* working
+    // combination) - and the child is an ordinary tile-sized Canvas
+    // (matchParentSize, not the tile's own huge screen-sized double with a
+    // large layout offset, which is what the previous attempt tried and which
+    // still didn't blur - large offsets might be getting culled or otherwise
+    // mishandled somewhere before reaching the blur layer). The coordinate
+    // shift happens inside the draw scope via translate() instead, on a
+    // Canvas no bigger than the tile itself.
+    Box(modifier = modifier.onGloballyPositioned { positionInRoot = it.positionInRoot() }.blur(blurRadius)) {
+        Canvas(modifier = Modifier.matchParentSize()) {
+            // Sampled, not per-frame: this runs on every redraw of every glass
+            // tile on screen. Keyed by position so each distinct tile still
+            // gets its own line rather than one tile starving out the rest.
+            Diag.sampled("glassfill@${positionInRoot.y.toInt()}", Diag.Cat.GLASS, "fill") {
+                arrayOf(
+                    "tileW" to size.width,
+                    "tileH" to size.height,
+                    "posX" to positionInRoot.x,
+                    "posY" to positionInRoot.y,
+                    "screenW" to screenW,
+                    "screenH" to screenH,
+                    "blurDp" to blurRadius.value,
+                    "style" to style,
+                    "t" to t,
+                    // The whole effect silently degrades to a plain tint if
+                    // the backdrop never reported its size, so this is the
+                    // first thing worth checking in a "no blur" report.
+                    "drawingBackdrop" to (screenW > 0f && screenH > 0f),
+                    "tintAlpha" to color.alpha,
+                )
+            }
+            if (screenW > 0f && screenH > 0f) {
+                translate(left = -positionInRoot.x, top = -positionInRoot.y) {
+                    drawBackdropContent(style, screenW, screenH, t, primary, accent)
+                }
+            }
+            drawRect(color)
+        }
     }
 }
 
@@ -168,12 +365,49 @@ private fun DrawScope.drawAurora(w: Float, h: Float, t: Float, primary: Color, a
 }
 
 private fun DrawScope.drawStars(stars: List<Star>, w: Float, h: Float, t: Float, accent: Color) {
-    for (s in stars) {
-        val twinkle = 0.45f + 0.55f * (0.5f + 0.5f * sin(t * TAU * 2 + s.phase))
-        val alpha = 0.55f * twinkle
-        val radius = s.baseRadius * twinkle
-        val color = if (s.accent) accent else Color.White
-        drawCircle(color = color.copy(alpha = alpha), radius = radius, center = Offset(s.x * w, s.y * h))
+    val s = kotlin.math.max(w, h)
+    // Off the top edge, like most real polar star-trail photos - only the
+    // lower arcs of each circle sweep through the visible frame instead of
+    // full rings centred on screen.
+    val poleX = w * 0.5f
+    val poleY = h * -0.15f
+    val segments = 18
+    for (star in stars) {
+        var lifeT = t - star.birthT
+        if (lifeT < 0f) lifeT += 1f
+        if (lifeT > star.lifeLen) continue
+        val lifeFrac = lifeT / star.lifeLen
+        val fadeIn = (lifeFrac / 0.2f).coerceAtMost(1f)
+        val fadeOut = ((1f - lifeFrac) / 0.2f).coerceAtMost(1f)
+        val lifeAlpha = min(fadeIn, fadeOut)
+        if (lifeAlpha <= 0.01f) continue
+
+        val radius = star.radiusFrac * s
+        val angle = star.angle0 + star.direction * star.speed * t * TAU
+        val color = if (star.accent) accent else Color.White
+
+        for (i in 0 until segments) {
+            val a0 = angle - star.direction * (i.toFloat() / segments) * star.trailArc
+            val a1 = angle - star.direction * ((i + 1).toFloat() / segments) * star.trailArc
+            val segAlpha = lifeAlpha * 0.5f * (1f - i.toFloat() / segments)
+            if (segAlpha <= 0.01f) continue
+            drawArc(
+                color = color.copy(alpha = segAlpha),
+                startAngle = Math.toDegrees(min(a0, a1).toDouble()).toFloat(),
+                sweepAngle = Math.toDegrees((kotlin.math.abs(a1 - a0)).toDouble()).toFloat(),
+                useCenter = false,
+                topLeft = Offset(poleX - radius, poleY - radius),
+                size = Size(radius * 2, radius * 2),
+                style = Stroke(width = star.baseRadius * 0.9f),
+            )
+        }
+
+        val headAlpha = lifeAlpha * 0.9f
+        drawCircle(
+            color = color.copy(alpha = headAlpha),
+            radius = star.baseRadius,
+            center = Offset(poleX + cos(angle) * radius, poleY + sin(angle) * radius),
+        )
     }
 }
 
@@ -286,7 +520,12 @@ private fun DrawScope.drawMatrix(
     val trailPx = trailLen * glyphH
     for (col in columns) {
         val progress = (t * col.speed + col.offset).mod(1f)
-        val headY = progress * (h + trailPx) - trailPx
+        // Head travels from trailPx above the screen to trailPx *past* the
+        // bottom edge - not just to the bottom edge itself - so the tail (a
+        // full trailPx behind the head) has completely scrolled off before
+        // the column wraps, instead of vanishing mid-scroll the moment the
+        // head alone touches the bottom.
+        val headY = progress * (h + 2f * trailPx) - trailPx
         val x = col.lane * w
         for (i in 0 until trailLen) {
             val y = headY - i * glyphH
@@ -344,37 +583,55 @@ private fun reducedMotionEnabled(): Boolean {
     }
 }
 
-// The actual drawing, decoupled from Appearance.background so it can also
-// drive the background list's small live thumbnails (BackgroundThumbnail),
-// each forced to a specific variant regardless of which one is actually
-// active - see the class doc on AnimatedBackground/BackgroundThumbnail below.
+/** The app's real backdrop - whatever [Appearance.background] currently is.
+ * Ticks [BackdropClock] and reports the canvas size into it every frame, so
+ * every glass tile's [GlassFill] can redraw a pixel-accurate, perfectly
+ * in-phase copy of whatever's actually showing here right now. */
 @Composable
-private fun BackgroundCanvas(style: BackgroundStyle, modifier: Modifier = Modifier) {
+fun AnimatedBackground(modifier: Modifier = Modifier) {
+    BackdropClock.Ticker()
+    val primary = Primary
+    val accent = Accent
+    val backdrop = Backdrop
+    val reducedMotion = reducedMotionEnabled()
+    val style = if (reducedMotion) BackgroundStyle.PLAIN else Appearance.background
+
+    // Not sampled - this only fires when the setting actually changes, and
+    // "which style was active when it looked wrong" is the first thing any
+    // rendering report needs. reducedMotion silently forces PLAIN, which has
+    // confused this before, so it's logged explicitly rather than inferred.
+    LaunchedEffect(style, reducedMotion, Appearance.glassEffect) {
+        Diag.log(
+            Diag.Cat.BG, "style",
+            "style" to style,
+            "requested" to Appearance.background,
+            "reducedMotion" to reducedMotion,
+            "glassEffect" to Appearance.glassEffect,
+        )
+    }
+
+    Canvas(modifier = modifier.background(Brush.linearGradient(backdrop))) {
+        BackdropClock.reportSize(size.width, size.height)
+        Diag.sampled("backdrop", Diag.Cat.BG, "draw", everyMs = 5000) {
+            arrayOf("w" to size.width, "h" to size.height, "t" to BackdropClock.t, "style" to style)
+        }
+        drawBackdropContent(style, size.width, size.height, BackdropClock.t, primary, accent)
+    }
+}
+
+/** A small, independent live preview of one specific variant - used by the
+ * background list (SettingsScreen), not tied to whichever background is
+ * actually active, or to [BackdropClock] - a thumbnail never needs to line up
+ * with a glass tile's fill the way the real backdrop does. */
+@Composable
+fun BackgroundThumbnail(style: BackgroundStyle, modifier: Modifier = Modifier) {
     val primary = Primary
     val accent = Accent
     val backdrop = Backdrop
     val reducedMotion = reducedMotionEnabled()
     val effectiveStyle = if (reducedMotion) BackgroundStyle.PLAIN else style
 
-    val stars = remember { makeStars() }
-    val meshNodes = remember { makeMeshNodes() }
-    val meteors = remember { makeMeteors() }
-    val embers = remember { makeEmbers() }
-    val matrixColumns = remember { makeMatrixColumns() }
-    val galaxyStars = remember { makeGalaxyStars() }
-
-    // Measured once, not per glyph per frame - drawText(TextLayoutResult, ...)
-    // lets colour/alpha vary per call without re-measuring, so this pair
-    // covers every "0"/"1" the Matrix variant ever draws.
-    val textMeasurer = rememberTextMeasurer()
-    val zeroGlyph = remember(textMeasurer) {
-        textMeasurer.measure("0", style = TextStyle(fontFamily = FontFamily.Monospace, fontSize = 13.sp))
-    }
-    val oneGlyph = remember(textMeasurer) {
-        textMeasurer.measure("1", style = TextStyle(fontFamily = FontFamily.Monospace, fontSize = 13.sp))
-    }
-
-    val transition = rememberInfiniteTransition(label = "backdrop")
+    val transition = rememberInfiniteTransition(label = "backdropThumb")
     val t by transition.animateFloat(
         initialValue = 0f, targetValue = 1f,
         animationSpec = infiniteRepeatable(animation = tween(60_000, easing = LinearEasing), repeatMode = RepeatMode.Restart),
@@ -382,33 +639,6 @@ private fun BackgroundCanvas(style: BackgroundStyle, modifier: Modifier = Modifi
     )
 
     Canvas(modifier = modifier.background(Brush.linearGradient(backdrop))) {
-        val w = size.width
-        val h = size.height
-        when (effectiveStyle) {
-            BackgroundStyle.ORBS -> drawOrbs(w, h, t, primary, accent)
-            BackgroundStyle.AURORA -> drawAurora(w, h, t, primary, accent)
-            BackgroundStyle.STARS -> drawStars(stars, w, h, t, accent)
-            BackgroundStyle.MESH -> drawMesh(meshNodes, w, h, t, primary, accent)
-            BackgroundStyle.METEORS -> drawMeteors(meteors, w, h, t, primary, accent)
-            BackgroundStyle.WAVES -> drawWaves(w, h, t, primary, accent)
-            BackgroundStyle.EMBERS -> drawEmbers(embers, w, h, t, primary, accent)
-            BackgroundStyle.MATRIX -> drawMatrix(matrixColumns, w, h, t, zeroGlyph, oneGlyph, accent)
-            BackgroundStyle.GALAXY -> drawGalaxy(galaxyStars, w, h, t, primary, accent)
-            BackgroundStyle.PLAIN -> Unit
-        }
+        drawBackdropContent(effectiveStyle, size.width, size.height, t, primary, accent)
     }
-}
-
-/** The app's real backdrop - whatever [Appearance.background] currently is. */
-@Composable
-fun AnimatedBackground(modifier: Modifier = Modifier) {
-    BackgroundCanvas(style = Appearance.background, modifier = modifier)
-}
-
-/** A small, independent live preview of one specific variant - used by the
- * background list (SettingsScreen), not tied to whichever background is
- * actually active. */
-@Composable
-fun BackgroundThumbnail(style: BackgroundStyle, modifier: Modifier = Modifier) {
-    BackgroundCanvas(style = style, modifier = modifier)
 }
