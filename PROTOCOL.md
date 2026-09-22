@@ -575,23 +575,51 @@ version has checked in.
 ### 9.1 `internal/pingcheck.Ping` — previewing a server without connecting
 
 Both apps show each saved config's live latency and resolved IP before (and while) the
-user is connected to it. `pingcheck.Ping(configYAML string) (Result, error)`:
+user is connected to it. `pingcheck.PingWith(configYAML string, opts Options) (Result,
+error)` (`Ping` is the same with zero `Options`):
 
-1. Parses the config, resolves the server host via `net.DefaultResolver.LookupIP(ctx,
-   "ip4", host)` — **`"ip4"` specifically, not a dual-stack lookup**: on at least one
-   real network this project was tested on, the AAAA query stalled for several seconds
-   before falling back to A, which dominated total connect time; skipping it outright
-   was the fix (see the identical fix in `windows/wintun.go`'s own server-address
-   resolution, §11.2).
-2. Dials via `transport.Dial` (the full disguised handshake, §5), timing from just
-   before the dial to just after it succeeds.
+1. Parses the config, resolves the server host with `LookupIP(ctx, "ip4", host)` —
+   **`"ip4"` specifically, not a dual-stack lookup**: on at least one real network this
+   project was tested on, the AAAA query stalled for several seconds before falling back
+   to A, which dominated total connect time; skipping it outright was the fix (see the
+   identical fix in `windows/wintun.go`'s own server-address resolution, §11.2).
+2. Dials **the resolved IP** (not the hostname, so the dialer never does a second,
+   unprotected lookup of its own; SNI stays `domain`) via `transport.Dial` (the full
+   disguised handshake, §5), timing from just before the dial to just after it succeeds.
 3. Closes the connection immediately — no session, no tunnel, no netstack involved.
+
+**Pings never go through the app's own tunnel.** A config's ping answers "can this
+device reach that server, and how fast" - measured from inside a running tunnel it would
+instead report device → current server → that server, so a dead config could look alive
+through a live one and every latency would carry the current server's round trip. So
+while a tunnel is up, `Options.ProtectFD` is applied to every socket a ping opens, the
+handshake and the DNS lookup alike:
+
+- **Android**: `VpnService.protect`, registered by `PhantomVpnService` via
+  `Mobile.setPingProtector` right after `Mobile.start` and cleared at every teardown
+  (`mobile/pingpath.go`). Without it the app's sockets follow its own VpnService's
+  0.0.0.0/0 route like any other app's.
+- **Windows**: an `IP_UNICAST_IF` bind to the physical interface captured before the
+  tunnel's default route existed - the same index and mechanism split tunneling uses
+  (`windows/pingpath.go`, §11). Only the *current* server's IPs have /32 bypass routes,
+  so without it a ping to any other config went through the tunnel.
+
+With the socket protected, the system resolver would still point into the tunnel
+(10.10.0.1 on Android, the Wintun adapter's DNS on Windows), so a protected ping resolves
+through 1.1.1.1/8.8.8.8 on protected sockets instead, falling back to the system resolver
+only if neither answers (a network blocking outside DNS) - that fallback gives up
+directness for the lookup only; the timed handshake stays protected. A server given as a
+literal IP needs no lookup at all. With no tunnel up, `Options` is empty and pings use the
+default route, which is already direct. Auto-select probes (§9.3) go out the same way.
 
 Returns `{IP, LatencyMs}`. `mobile.Ping` wraps this as a JSON string (gomobile-safe
 return type, same pattern as `Tunnel.Stats()`); the Windows `App.Ping` method does the
-same for its Wails binding. Both UIs poll this per saved config tile on a **jittered**
+same for its Wails binding. Both UIs poll this once per saved config on a **jittered**
 6-10s schedule - a flat interval put a perfectly periodic connection on the wire for as
-long as the app was open, which is exactly the shape traffic analysis looks for.
+long as the app was open, which is exactly the shape traffic analysis looks for. That one
+result is shared: the Маршрутизация page's config list shows exactly what the config tile
+shows (Android `PingStore`/`PingPoller`, Windows `pingData`), rather than a second,
+separately-timed check that could disagree with it.
 
 ### 9.2 Tile metadata (`internal/geoip`)
 
@@ -721,8 +749,9 @@ replacing it - see below.
   the Windows client's own three sections in the same order:
   - **Конфигурации** - saved-config tiles (`ConfigInfoCard`, `ConfigInfo.kt`), one per
     `ConfigStore` entry. Each shows the config's domain, resolved IP, live ping
-    (`fetchPing`/`pingcheck.Ping` via the `Mobile.ping` gomobile binding, polled on a
-    jittered 6-10s schedule independently per tile), and an optional country label from
+    (`fetchPing`/`pingcheck.PingWith` via the `Mobile.ping` gomobile binding, polled on a
+    jittered 6-10s schedule per config by `PingPoller` into `PingStore`, which the
+    Маршрутизация page's config list reads too), and an optional country label from
     the config's own `country`/`country_code` fields (§8, §9.2) as a flag emoji
     (`countryCodeToFlag`, built locally from regional-indicator characters, nothing
     downloaded) plus name. A `GradientSwitch` (`Theme.kt`) connects/disconnects that
@@ -736,7 +765,12 @@ replacing it - see below.
     driving the tunnel - a manually-connected config, "Выбирать лучшую", and "Умный
     VPN" - are mutually exclusive in the UI: whichever isn't in charge is dimmed
     (`InactiveOverlay`, 40% opacity + a tap-swallowing overlay) and explains why, rather
-    than silently conflicting with whichever mode actually owns the tunnel.
+    than silently conflicting with whichever mode actually owns the tunnel. The Умный
+    VPN site list and config picker below its toggle are the exception to "off means
+    dimmed": they stay editable with the mode switched off, so everything can be set up
+    before turning it on - only "Выбирать лучшую", which overrides the whole page, dims
+    them (Windows' `#smart-details` follows the same rule). Each config in the picker
+    shows the same ping line as its Конфигурации tile, from the same measurement (§9.1).
   - **Ресурсы под обход** - a user-maintained list of extra sites pinged for reachability
     (independent of, and in addition to, the Умный VPN site list above), plus
     `AddResourceDialog`, a small popup (`androidx.compose.material3.AlertDialog`) for

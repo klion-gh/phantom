@@ -1230,8 +1230,6 @@ textarea::placeholder { color: var(--text-muted); }
     text-overflow: ellipsis;
 }
 .routing-config-health { font-size: 12px; margin-top: 3px; color: var(--text-secondary); }
-.routing-config-health.alive { color: var(--success); }
-.routing-config-health.dead { color: var(--danger); }
 /* The bar marks the config actually carrying traffic, as opposed to merely
    being one the selector is allowed to pick. */
 .routing-config-active-bar {

@@ -39,8 +39,6 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.isActive
 import kotlinx.coroutines.withContext
 import mobile.Mobile
 import org.json.JSONObject
@@ -111,19 +109,16 @@ suspend fun lookupCountry(ip: String): Pair<String, String>? = withContext(Dispa
 
 /**
  * One tile on the main screen: a saved config's domain/IP/live ping/location on the
- * left, a connect button on the right. Owns its own ping-polling loop (keyed on the
- * config's own yaml/id) so each tile refreshes independently of the others. Long-press
- * anywhere on the tile (outside the button itself) opens it for editing/deletion.
- *
- * [pingEnabled] should be true only while this tile's page is the one currently visible
- * in the pager *and* the app itself is in the foreground - see MainActivity.
+ * left, a connect button on the right. The ping comes from [PingStore], filled by the
+ * app-wide [PingPoller] - shared with the Маршрутизация page's config list, so both
+ * always show the same measurement. Long-press anywhere on the tile (outside the
+ * button itself) opens it for editing/deletion.
  */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun ConfigInfoCard(
     config: SavedConfig,
     status: ConnectionStatus,
-    pingEnabled: Boolean,
     proxyRunning: Boolean,
     proxyPort: Int?,
     showProxy: Boolean,
@@ -131,20 +126,9 @@ fun ConfigInfoCard(
     onToggleProxy: (requestedPort: String) -> Unit,
     onLongPress: () -> Unit,
 ) {
-    var pingInfo by remember(config.id) { mutableStateOf<PingInfo?>(null) }
-
-    LaunchedEffectPing(config.yaml, pingEnabled) { result ->
-        pingInfo = if (result != null) {
-            val (ip, latency) = result
-            PingInfo(ip, latency)
-        } else {
-            pingInfo?.copy(latencyMs = null)
-        }
-    }
-
     val domain = parseYamlField(config.yaml, "domain") ?: ""
     val server = parseYamlField(config.yaml, "server") ?: ""
-    val info = pingInfo
+    val info = PingStore[config.id]
 
     // The port field mirrors whatever's actually running once it starts (in case it
     // had to fall back... it doesn't anymore - see ProxyManager - but this also covers
@@ -310,34 +294,3 @@ private fun ProxyBlock(
     }
 }
 
-/**
- * Runs fetchPing on a repeating timer for as long as the calling composable is alive
- * AND [pingEnabled] is true, restarting whenever [yaml] or [pingEnabled] changes -
- * [pingEnabled] going false immediately cancels the loop rather than just skipping a
- * cycle (see MainActivity's page/foreground wiring for when that happens), and going
- * true again resumes with an immediate check rather than waiting out a full interval.
- * Deliberately does *not* reset to null when only [pingEnabled] flips (a separate
- * effect below handles the real "yaml changed" reset) - otherwise every pause/resume
- * (minimize, switch pager page) would flash the tile to "—" instead of keeping the
- * last-known value on screen, same as the Windows app's visibility-based pause.
- */
-@Composable
-private fun LaunchedEffectPing(yaml: String, pingEnabled: Boolean, onResult: suspend (Pair<String, Long>?) -> Unit) {
-    androidx.compose.runtime.LaunchedEffect(yaml) {
-        onResult(null)
-    }
-    androidx.compose.runtime.LaunchedEffect(yaml, pingEnabled) {
-        if (!pingEnabled) return@LaunchedEffect
-        while (isActive) {
-            onResult(fetchPing(yaml))
-            // Jittered, not a flat 6s. Each ping is a full TCP+TLS+handshake to the
-            // server, so a fixed interval put a perfectly periodic connection every
-            // 6.000 seconds on the wire for as long as the app was open. Real
-            // browsing produces nothing like that regularity, and a metronome is
-            // exactly the kind of behavioural signature traffic analysis looks for -
-            // no amount of per-connection disguise hides it. 6-10s keeps the tile
-            // feeling live while making the cadence irregular.
-            delay(6000L + (0..4000L).random())
-        }
-    }
-}

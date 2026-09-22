@@ -381,7 +381,7 @@ func (a *App) DeleteConfig(id string) string {
 // failure (unreachable, bad config), which the frontend treats as "no data
 // yet" rather than a hard error since this runs on a background timer.
 func (a *App) Ping(configYAML string) string {
-	result, err := pingcheck.Ping(configYAML)
+	result, err := pingcheck.PingWith(configYAML, pingOptions())
 	if err != nil {
 		return "{}"
 	}

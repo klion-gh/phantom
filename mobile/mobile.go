@@ -286,7 +286,7 @@ func (t *Tunnel) IsAlive() bool {
 // this gomobile-safe, same pattern as Stats). The actual work lives in
 // internal/pingcheck, shared with the Windows app.
 func Ping(configYAML string) (string, error) {
-	result, err := pingcheck.Ping(configYAML)
+	result, err := pingcheck.PingWith(configYAML, pingOptions())
 	if err != nil {
 		return "", err
 	}

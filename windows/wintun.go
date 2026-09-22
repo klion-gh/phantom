@@ -314,6 +314,12 @@ func StartWindows(configYAML string, onNetworkChanged func()) (*WinTunnel, error
 	}
 	applyRoutingToEngine()
 	installRouting(inner, physicalIfIndex, physicalIfErr == nil)
+	// Config pings/probes go around this tunnel, not through it - see
+	// pingpath.go. Without a known physical interface they fall back to the
+	// default route (i.e. through the tunnel), same as split tunneling does.
+	if physicalIfErr == nil {
+		setPingInterface(physicalIfIndex)
+	}
 
 	if onNetworkChanged != nil {
 		if err := startWatchingRouteChanges(gateway, onNetworkChanged); err != nil {
@@ -335,6 +341,10 @@ func (w *WinTunnel) Stop() {
 	// anything else - once this tunnel is on its way down, a network-change
 	// callback firing mid-teardown must not try to reconnect out from under it.
 	stopWatchingRouteChanges()
+	// Before anything else goes down: a ping pinned to the physical interface
+	// is harmless either way, but one started after this returns should see
+	// the plain default route again.
+	setPingInterface(0)
 	if w.cancel != nil {
 		w.cancel()
 	}

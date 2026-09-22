@@ -6,8 +6,10 @@ package pingcheck
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
+	"syscall"
 	"time"
 
 	"phantom/internal/config"
@@ -22,11 +24,39 @@ type Result struct {
 	LatencyMs int64
 }
 
+// Options controls how a ping reaches the network.
+type Options struct {
+	// ProtectFD, if set, is applied to every socket the ping opens - the DNS
+	// lookup and the handshake alike - before it connects, to take it out of
+	// the platform's VPN routing (VpnService.protect on Android, a bind to the
+	// physical interface on Windows). Nil means "the tunnel isn't up, use the
+	// default route", which is already direct.
+	//
+	// This exists because a config's ping is a statement about the path from
+	// this device to that server. Measured from inside a running tunnel it
+	// instead reports device -> current server -> that server: a dead config
+	// could look reachable through a live one, and every latency would carry
+	// the current server's round trip on top.
+	ProtectFD func(fd int) bool
+}
+
+// Public resolvers a protected lookup goes to. Needed only while a tunnel is
+// up: the system resolver then points into the tunnel (10.10.0.1 on Android,
+// the Wintun adapter's DNS on Windows), so the lookup itself would leak into
+// it even with the handshake socket protected. Two, so one being filtered on
+// a given network doesn't take the ping down with it.
+var directDNSServers = []string{"1.1.1.1:53", "8.8.8.8:53"}
+
 // Ping resolves configYAML's server address and performs one full disguised
 // handshake (TCP connect + uTLS ClientHello + the WS-upgrade auth exchange -
 // the same cost a real connect incurs), timing it, then closes the
 // connection without building a tunnel. Safe to call repeatedly/periodically.
 func Ping(configYAML string) (Result, error) {
+	return PingWith(configYAML, Options{})
+}
+
+// PingWith is Ping with control over the network path - see Options.
+func PingWith(configYAML string, opts Options) (Result, error) {
 	cfg, err := config.ParseClientConfig([]byte(configYAML))
 	if err != nil {
 		return Result{}, fmt.Errorf("parse config: %w", err)
@@ -45,7 +75,9 @@ func Ping(configYAML string) (Result, error) {
 		Fingerprint: cfg.Fingerprint,
 		PSK:         psk,
 		ServerPub:   serverPub,
+		ProtectFD:   opts.ProtectFD,
 	}
+	resolver := resolverFor(opts.ProtectFD)
 
 	// Try each configured endpoint in order and report the first that responds -
 	// so the tile shows "up" (and that reachable endpoint's IP/latency) as long
@@ -53,7 +85,7 @@ func Ping(configYAML string) (Result, error) {
 	// the real tunnel rather than only ever previewing the primary.
 	var lastErr error
 	for _, endpoint := range cfg.ServerList() {
-		host, _, splitErr := net.SplitHostPort(endpoint)
+		host, port, splitErr := net.SplitHostPort(endpoint)
 		if splitErr != nil {
 			lastErr = fmt.Errorf("invalid server address %q: %w", endpoint, splitErr)
 			continue
@@ -62,14 +94,19 @@ func Ping(configYAML string) (Result, error) {
 		// "ip4" (rather than a dual-stack lookup) skips the AAAA query, which on
 		// some networks stalls for several seconds before falling back to A.
 		resolveCtx, resolveCancel := context.WithTimeout(context.Background(), 5*time.Second)
-		ips, resolveErr := net.DefaultResolver.LookupIP(resolveCtx, "ip4", host)
+		ips, resolveErr := resolver.LookupIP(resolveCtx, "ip4", host)
 		resolveCancel()
 		if resolveErr != nil || len(ips) == 0 {
 			lastErr = fmt.Errorf("resolve server address %q: %w", host, resolveErr)
 			continue
 		}
 
-		tlsCfg.ServerAddr = endpoint
+		// Dial the address just resolved rather than the hostname: handing the
+		// dialer a hostname has it do its own lookup through the system
+		// resolver, which is the one path ProtectFD can't reach. It also means
+		// the IP shown on the tile is the one that was actually timed. SNI stays
+		// cfg.Domain, so the real certificate still validates.
+		tlsCfg.ServerAddr = net.JoinHostPort(ips[0].String(), port)
 		dialCtx, dialCancel := context.WithTimeout(context.Background(), 8*time.Second)
 		start := time.Now()
 		conn, _, dialErr := transport.Dial(dialCtx, tlsCfg)
@@ -87,4 +124,70 @@ func Ping(configYAML string) (Result, error) {
 		lastErr = fmt.Errorf("no endpoints configured")
 	}
 	return Result{}, lastErr
+}
+
+// ipLookuper is the one resolver method a ping needs, so the system resolver
+// and protectedResolver can stand in for each other.
+type ipLookuper interface {
+	LookupIP(ctx context.Context, network, host string) ([]net.IP, error)
+}
+
+// resolverFor returns the resolver a ping should use: the system one when
+// nothing needs protecting, otherwise one whose sockets go through protect to
+// a public server (see directDNSServers).
+func resolverFor(protect func(fd int) bool) ipLookuper {
+	if protect == nil {
+		return net.DefaultResolver
+	}
+	return &protectedResolver{protect: protect}
+}
+
+type protectedResolver struct {
+	protect func(fd int) bool
+}
+
+func (r *protectedResolver) LookupIP(ctx context.Context, network, host string) ([]net.IP, error) {
+	// A literal address needs no lookup at all - the common case, since most
+	// configs name their server by IP.
+	if ip := net.ParseIP(host); ip != nil {
+		return []net.IP{ip}, nil
+	}
+	direct := &net.Resolver{
+		PreferGo: true,
+		Dial: func(ctx context.Context, network, _ string) (net.Conn, error) {
+			d := net.Dialer{Timeout: 2 * time.Second, Control: protectControl(r.protect)}
+			var lastErr error
+			for _, server := range directDNSServers {
+				conn, err := d.DialContext(ctx, network, server)
+				if err == nil {
+					return conn, nil
+				}
+				lastErr = err
+			}
+			return nil, lastErr
+		},
+	}
+	ips, err := direct.LookupIP(ctx, network, host)
+	if err == nil && len(ips) > 0 {
+		return ips, nil
+	}
+	// A network that blocks outside DNS outright would otherwise make every
+	// ping fail while the tunnel is up. Falling back gives up directness for
+	// the lookup only - the handshake that is actually timed stays protected.
+	return net.DefaultResolver.LookupIP(ctx, network, host)
+}
+
+// protectControl adapts a ProtectFD callback to net.Dialer.Control.
+func protectControl(protect func(fd int) bool) func(string, string, syscall.RawConn) error {
+	return func(_, _ string, c syscall.RawConn) error {
+		var protectErr error
+		if err := c.Control(func(fd uintptr) {
+			if !protect(int(fd)) {
+				protectErr = errors.New("failed to take the DNS socket out of the VPN")
+			}
+		}); err != nil {
+			return err
+		}
+		return protectErr
+	}
 }

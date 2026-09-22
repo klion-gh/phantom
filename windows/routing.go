@@ -235,7 +235,7 @@ func syncSelector() {
 	if selector == nil {
 		selector = routing.NewSelector(
 			routing.WithProbeTimeout(func(configYAML string) (int64, error) {
-				result, err := pingcheck.Ping(configYAML)
+				result, err := pingcheck.PingWith(configYAML, pingOptions())
 				if err != nil {
 					return 0, err
 				}

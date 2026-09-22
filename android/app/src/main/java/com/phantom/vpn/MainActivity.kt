@@ -619,10 +619,11 @@ private fun PhantomApp(
 }
 
 /**
- * Two swipeable pages sharing one fixed header: configs on the left/page 0 (the
- * default), resource-reachability tiles on the right/page 1 (swipe left to reach it).
- * Only the page currently on screen ever pings anything, and only while [appInForeground]
- * is true - see ConfigInfoCard/ResourceCard's pingEnabled parameter.
+ * Three swipeable pages sharing one fixed header: configs (page 0, the default),
+ * routing (page 1) and resource-reachability tiles (page 2). Pings only run for what
+ * is on screen, and only while [appInForeground] is true - config pings via
+ * [PingPoller] (shared by pages 0 and 1), resource pings via ResourceCard's
+ * pingEnabled parameter.
  */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -754,6 +755,11 @@ private fun MainScreen(
 
         Spacer(modifier = Modifier.height(20.dp))
 
+        // One ping loop per config for both the Конфигурации and Маршрутизация
+        // pages (see PingStore) - running while either is on screen, so the
+        // routing list's numbers are as live as the tiles' own.
+        PingPoller(configs = configs, enabled = appInForeground && pagerState.currentPage in 0..1)
+
         HorizontalPager(
             state = pagerState,
             modifier = Modifier.weight(1f),
@@ -770,7 +776,6 @@ private fun MainScreen(
                     message = message,
                     activeConfigId = activeConfigId,
                     configs = configs,
-                    pingEnabled = appInForeground && pagerState.currentPage == 0,
                     proxyRunningPorts = proxyRunningPorts,
                     autoEnabled = RoutingStore.autoEnabled,
                     onToggleAuto = onToggleAuto,
@@ -929,7 +934,6 @@ private fun ConfigsPage(
     message: String,
     activeConfigId: String?,
     configs: List<SavedConfig>,
-    pingEnabled: Boolean,
     proxyRunningPorts: Map<String, Int>,
     autoEnabled: Boolean,
     onToggleAuto: (Boolean) -> Unit,
@@ -1038,7 +1042,6 @@ private fun ConfigsPage(
                         ConfigInfoCard(
                             config = config,
                             status = cardStatus,
-                            pingEnabled = pingEnabled,
                             proxyRunning = proxyRunningPorts.containsKey(config.id),
                             proxyPort = proxyRunningPorts[config.id],
                             showProxy = Appearance.showProxySettings,

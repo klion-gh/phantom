@@ -82,7 +82,11 @@ fun RoutingPage(
                 )
             }
 
-            val inactive = !RoutingStore.smartEnabled || autoEnabled
+            // Only "Выбирать лучшую" dims these - it genuinely overrides this
+            // page. With Умный VPN merely switched off they stay live, so the
+            // site list and configs can be set up before turning it on rather
+            // than having to switch it on first just to be allowed to edit.
+            val inactive = autoEnabled
             item {
                 InactiveOverlay(inactive) {
                     Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
@@ -97,6 +101,7 @@ fun RoutingPage(
                             configs = configs,
                             selected = RoutingStore.smartConfigIds,
                             health = health,
+                            smartOn = RoutingStore.smartEnabled,
                             onToggleConfig = onToggleConfig,
                         )
                     }
@@ -363,6 +368,7 @@ private fun ConfigPickerSection(
     configs: List<SavedConfig>,
     selected: Set<String>,
     health: Map<String, ConfigHealth>,
+    smartOn: Boolean,
     onToggleConfig: (String) -> Unit,
 ) {
     SectionTile {
@@ -396,7 +402,11 @@ private fun ConfigPickerSection(
             ConfigPickRow(
                 config = config,
                 selected = config.id in selected,
-                health = health[config.id],
+                ping = PingStore[config.id],
+                // The selector only decides anything while the mode is on -
+                // with it off, a stale "this one is carrying traffic" marker
+                // from before it was switched off would be misleading.
+                active = smartOn && health[config.id]?.active == true,
                 onClick = { onToggleConfig(config.id) },
             )
             Spacer(Modifier.height(8.dp))
@@ -404,14 +414,17 @@ private fun ConfigPickerSection(
     }
 }
 
-/** Health of one config as last measured by the smart selector. */
+/** Health of one config as last measured by the smart selector - which one it
+ * is carrying traffic through. What the rows *show* as latency is the same
+ * [PingStore] value the Конфигурации tiles show, not this. */
 data class ConfigHealth(val alive: Boolean, val latencyMs: Long, val probed: Boolean, val active: Boolean)
 
 @Composable
 private fun ConfigPickRow(
     config: SavedConfig,
     selected: Boolean,
-    health: ConfigHealth?,
+    ping: PingInfo?,
+    active: Boolean,
     onClick: () -> Unit,
 ) {
     val borderWidth by animateDpAsState(if (selected) 2.dp else 1.dp, tween(200), label = "pickBorderWidth")
@@ -442,21 +455,19 @@ private fun ConfigPickRow(
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
-                if (selected && health != null) {
-                    Spacer(Modifier.height(3.dp))
-                    val (label, color) = when {
-                        !health.probed -> I18n.t("routing_checking") to TextMuted
-                        !health.alive -> I18n.t("routing_unreachable") to Danger
-                        health.active -> "${I18n.t("routing_active")} · ${health.latencyMs} ${I18n.t("ms")}" to Success
-                        else -> "${health.latencyMs} ${I18n.t("ms")}" to TextSecondary
-                    }
-                    Text(label, color = color, fontSize = 12.sp)
-                }
+                // Word for word what the Конфигурации tile shows for this
+                // config, from the same measurement (see PingStore).
+                Spacer(Modifier.height(3.dp))
+                Text(
+                    ping?.latencyMs?.let { "${I18n.t("ping")}: $it ${I18n.t("ms")}" } ?: "${I18n.t("ping")}: —",
+                    color = TextSecondary,
+                    fontSize = 12.sp,
+                )
             }
             // The active config is the one actually carrying traffic right now -
             // worth distinguishing from "selected", which only means the selector
             // is allowed to choose it.
-            if (selected && health?.active == true) {
+            if (selected && active) {
                 Box(
                     modifier = Modifier
                         .size(width = 26.dp, height = 4.dp)

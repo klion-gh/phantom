@@ -271,6 +271,7 @@ class PhantomVpnService : VpnService() {
                 FileLog.e("tunnel stop error (switching config)", e)
             }
             tunnel = null
+            Mobile.setPingProtector(null)
             try {
                 tunInterface?.close()
             } catch (e: Throwable) {
@@ -327,6 +328,12 @@ class PhantomVpnService : VpnService() {
                 }
 
                 tunnel = Mobile.start(configYaml, pfd.fd.toLong(), MTU.toLong(), protector)
+                // Config pings and auto-select probes run in this same process,
+                // so while this tunnel is up they'd be captured by it too and
+                // measure the path through the current server instead of the
+                // direct one - see mobile/pingpath.go. Cleared wherever the
+                // tunnel is torn down.
+                Mobile.setPingProtector(protector)
 
                 // Applied right after the tunnel exists and before it's
                 // announced as connected, so the very first flow already sees
@@ -600,6 +607,7 @@ class PhantomVpnService : VpnService() {
                 FileLog.e("tunnel stop error", e)
             }
             tunnel = null
+            Mobile.setPingProtector(null)
 
             try {
                 tunInterface?.close()
@@ -636,6 +644,7 @@ class PhantomVpnService : VpnService() {
         activeConfigId = null
         activeConfigYaml = null
         tunnel = null
+        Mobile.setPingProtector(null)
         try {
             tunInterface?.close()
         } catch (e: Throwable) {

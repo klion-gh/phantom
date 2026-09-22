@@ -207,6 +207,7 @@ async function pollPing(config) {
     pingData.set(config.id, { ...prev, latencyMs: null });
   }
   updateTileMeta(config.id);
+  updateRoutingPing(config.id);
 }
 
 // Each ping is a full TCP+TLS+handshake to the server, so setInterval(..., 6000)
@@ -237,6 +238,19 @@ function stopAllPingLoops() {
   pingData.clear();
 }
 
+// The Маршрутизация list shows exactly what the config tile shows, from the
+// same measurement (pingData) - not a second, separately-timed check that
+// could disagree with it.
+function pingLabel(id) {
+  const info = pingData.get(id) || {};
+  return info.latencyMs != null ? `${t('ping')}: ${info.latencyMs} ${t('ms')}` : `${t('ping')}: —`;
+}
+
+function updateRoutingPing(id) {
+  const el = document.querySelector(`[data-ping-for="${id}"]`);
+  if (el) el.textContent = pingLabel(id);
+}
+
 function updateTileMeta(id) {
   const card = configList.querySelector(`[data-id="${id}"]`);
   const config = configs.find((c) => c.id === id);
@@ -244,7 +258,7 @@ function updateTileMeta(id) {
 
   const info = pingData.get(id) || {};
   card.querySelector('.config-ip').textContent = info.ip || config.ip || parseYamlField(config.yaml, 'server') || '—';
-  card.querySelector('.ping-text').textContent = info.latencyMs != null ? `${t('ping')}: ${info.latencyMs} ${t('ms')}` : `${t('ping')}: —`;
+  card.querySelector('.ping-text').textContent = pingLabel(id);
 
   // Country label comes from the operator-provided country/country_code in
   // the config, or a LookupCountry resolution keyed off the resolved IP (see
@@ -1127,11 +1141,13 @@ function refreshModeAvailability() {
       ? t('smart_vpn_blocked_by_config')
       : t('smart_vpn_hint');
 
-  // Dimmed rather than removed: the point of a switch is to show what it
-  // controls, and hiding the controls makes the section jump in height and
-  // leaves the user guessing what turning it on would do.
+  // Only "Выбирать лучшую" dims these - it genuinely overrides this whole
+  // section. With Умный VPN merely switched off (or a config connected by
+  // hand) they stay live, so the site list and configs can be set up before
+  // turning the mode on rather than having to switch it on first just to be
+  // allowed to edit.
   document.getElementById('smart-details')
-    .classList.toggle('inactive', !routingState.smartEnabled || smartBlocked);
+    .classList.toggle('inactive', overriddenByAuto());
 
   document.getElementById('auto-tile').classList.toggle('inactive', smartDriving());
   document.getElementById('smart-configs-warning').classList.toggle('hidden', !smartDriving());
@@ -1234,7 +1250,7 @@ function renderRoutingConfigs() {
       <div class="routing-config-row${on ? ' active' : ''}" data-id="${config.id}">
         <div class="routing-config-text">
           <div class="routing-config-name">${escapeHtml(domain)}</div>
-          <div class="routing-config-health" data-health-for="${config.id}"></div>
+          <div class="routing-config-health" data-ping-for="${config.id}">${escapeHtml(pingLabel(config.id))}</div>
         </div>
       </div>`;
   }).join('');
@@ -1251,8 +1267,10 @@ function renderRoutingConfigs() {
   refreshRoutingHealth();
 }
 
-// Health is polled rather than pushed: the selector already probes on its own
-// schedule, so this just mirrors whatever it last measured.
+// Which config the selector is carrying traffic through, shown as the bar on
+// its row. Polled rather than pushed: the selector already probes on its own
+// schedule. The latency on each row is not this - it's the same ping the
+// config tiles show (see updateRoutingPing).
 async function refreshRoutingHealth() {
   let health = [];
   try {
@@ -1271,29 +1289,18 @@ async function refreshRoutingHealth() {
     detail: health.map((h) => `${String(h.id).slice(0, 8)}:${h.probed ? 'p' : '-'}${h.alive ? 'a' : '-'}${h.latency_ms}`).join(','),
   }), 6000);
   for (const entry of health) {
-    const el = document.querySelector('[data-health-for="' + entry.id + '"]');
-    if (!el) continue;
-    const row = el.closest('.routing-config-row');
-    let label = t('routing_checking');
-    let cls = '';
-    if (entry.probed && !entry.alive) {
-      label = t('routing_unreachable');
-      cls = 'dead';
-    } else if (entry.probed && entry.alive) {
-      label = entry.active
-        ? t('routing_active') + ' · ' + entry.latency_ms + ' ' + t('ms')
-        : entry.latency_ms + ' ' + t('ms');
-      cls = entry.active ? 'alive' : '';
-    }
-    el.textContent = label;
-    el.className = 'routing-config-health ' + cls;
+    const row = document.querySelector(`.routing-config-row[data-id="${entry.id}"]`);
     if (!row) continue;
+    // Only while the mode is on and this config is still ticked: with the
+    // mode off the selector decides nothing, and a leftover "carrying traffic"
+    // bar from before it was switched off would be misleading.
+    const carrying = entry.active && routingState.smartEnabled && routingState.smartConfigs.includes(entry.id);
     const existingBar = row.querySelector('.routing-config-active-bar');
-    if (entry.active && !existingBar) {
+    if (carrying && !existingBar) {
       const bar = document.createElement('div');
       bar.className = 'routing-config-active-bar';
       row.appendChild(bar);
-    } else if (!entry.active && existingBar) {
+    } else if (!carrying && existingBar) {
       existingBar.remove();
     }
   }
