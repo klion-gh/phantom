@@ -30,6 +30,10 @@ jobs:
             exit 0
           fi
           tag="${GITHUB_REF_NAME#v}"
+          # A prerelease tag (v1.19.0-beta.1) is checked on its numeric part,
+          # exactly as both updaters compare it (parseVersion strips the same
+          # suffix) - the files carry the plain X.Y.Z either way.
+          tag="${tag%%-*}"
           fail=0
 
           win=$(grep -oE 'AppVersion = "[0-9]+\.[0-9]+\.[0-9]+"' windows/version.go | grep -oE '[0-9]+\.[0-9]+\.[0-9]+')
@@ -174,6 +178,13 @@ jobs:
         with:
           files: dist/*
           draft: true
+          # Any "-suffix" tag (v1.19.0-beta.1) is published as a GitHub
+          # prerelease: /releases/latest skips those, so stable-channel clients
+          # never see it, and only clients with "Скачивать beta-версии" on
+          # (which read /releases instead) are offered it. Set here rather than
+          # left to the operator's Publish click, where forgetting the checkbox
+          # would push a test build to everyone.
+          prerelease: ${{ contains(github.ref_name, '-') }}
           generate_release_notes: true
           append_body: true
           body: |
