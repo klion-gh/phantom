@@ -92,12 +92,12 @@ private class GalaxyStar(val armPhase: Float, val radiusFrac: Float, val speed: 
 // cycle, same seamless-loop rule as everything else here - see drawStars),
 // tracing a fading arc behind it rather than sitting still. birthT/lifeLen
 // give each star its own window within the cycle to fade in, hold, and fade
-// out - not literal randomness (which would break the loop), but with 64
+// out - not literal randomness (which would break the loop), but with 110
 // stars on staggered windows the repeat isn't perceptible. Ported from the
 // Windows client's identical background.js redesign.
 private fun makeStars(): List<Star> {
     val rng = seeded(42)
-    return List(64) { i ->
+    return List(110) { i ->
         Star(
             angle0 = rng() * TAU,
             radiusFrac = 0.15f + rng() * 0.85f,
@@ -106,14 +106,14 @@ private fun makeStars(): List<Star> {
             trailArc = 0.3f + rng() * 0.35f,
             birthT = rng(),
             lifeLen = 0.25f + rng() * 0.5f,
-            baseRadius = rng() * 1.3f + 0.5f,
+            baseRadius = rng() * 1.5f + 0.9f,
             accent = i % 6 == 0,
         )
     }
 }
 private fun makeMeshNodes(): List<MeshNode> {
     val rng = seeded(7)
-    return List(26) {
+    return List(40) {
         MeshNode(
             baseX = rng(), baseY = rng(),
             ampX = rng() * 0.05f + 0.04f, ampY = rng() * 0.05f + 0.04f,
@@ -124,14 +124,14 @@ private fun makeMeshNodes(): List<MeshNode> {
 }
 private fun makeMeteors(): List<Meteor> {
     val rng = seeded(19)
-    return List(14) { Meteor(1 + (rng() * 3).toInt(), rng() * 0.12f + 0.08f, rng(), rng()) }
+    return List(26) { Meteor(1 + (rng() * 3).toInt(), rng() * 0.14f + 0.12f, rng(), rng()) }
 }
 private fun makeEmbers(): List<Ember> {
     val rng = seeded(101)
-    return List(40) { i ->
+    return List(70) { i ->
         Ember(
             speed = 1 + (rng() * 2).toInt(), sway = rng() * 0.04f + 0.02f, swayFreq = 1 + (rng() * 3).toInt(),
-            radius = rng() * 1.8f + 0.8f, lane = rng(), offset = rng(), accent = i % 3 == 0,
+            radius = rng() * 2.2f + 1.2f, lane = rng(), offset = rng(), accent = i % 3 == 0,
         )
     }
 }
@@ -222,25 +222,44 @@ private fun DrawScope.drawOrbs(w: Float, h: Float, t: Float, primary: Color, acc
     }
 }
 
+// Element sizes are in "units" of the canvas's short side over 400 - about one
+// dp on a phone backdrop - so they read the same on any screen density and
+// scale down with the settings screen's thumbnails instead of swamping them.
+private fun unitOf(w: Float, h: Float) = min(w, h) / 400f
+
+// A filled band whose top edge follows yAt across the full width, as one
+// smooth curve: dense samples joined by quadratic segments through their
+// midpoints, so the edge has no corners at all (straight segments between a
+// couple of dozen samples read as a faceted polyline on a phone screen).
+private fun smoothBand(w: Float, h: Float, yAt: (u: Float) -> Float): androidx.compose.ui.graphics.Path {
+    val n = 96
+    val path = androidx.compose.ui.graphics.Path()
+    var px = 0f
+    var py = yAt(0f)
+    path.moveTo(px, py)
+    for (k in 1..n) {
+        val x = w * k / n
+        val y = yAt(k.toFloat() / n)
+        path.quadraticBezierTo(px, py, (px + x) / 2, (py + y) / 2)
+        px = x; py = y
+    }
+    path.lineTo(px, py)
+    path.lineTo(w, h)
+    path.lineTo(0f, h)
+    path.close()
+    return path
+}
+
 private fun DrawScope.drawAurora(w: Float, h: Float, t: Float, primary: Color, accent: Color) {
     for (i in 0 until 3) {
         val phase = t * TAU + i * 1.7f
         val baseY = h * (0.28f + i * 0.22f)
         val color = if (i % 2 == 0) primary else accent
-        val path = androidx.compose.ui.graphics.Path()
-        var x = 0f
-        var first = true
-        while (x <= w) {
-            val u = x / w
-            val y = baseY +
+        val path = smoothBand(w, h) { u ->
+            baseY +
                 sin(u * 3 * Math.PI.toFloat() + phase) * h * 0.06f +
                 cos(u * TAU - phase * 2) * h * 0.03f
-            if (first) { path.moveTo(x, y); first = false } else path.lineTo(x, y)
-            x += w / 24
         }
-        path.lineTo(w, h)
-        path.lineTo(0f, h)
-        path.close()
         drawPath(
             path = path,
             brush = Brush.verticalGradient(
@@ -259,6 +278,7 @@ private fun DrawScope.drawStars(stars: List<Star>, w: Float, h: Float, t: Float,
     val poleX = w * 0.5f
     val poleY = h * -0.15f
     val segments = 18
+    val unit = unitOf(w, h)
     for (star in stars) {
         var lifeT = t - star.birthT
         if (lifeT < 0f) lifeT += 1f
@@ -285,14 +305,14 @@ private fun DrawScope.drawStars(stars: List<Star>, w: Float, h: Float, t: Float,
                 useCenter = false,
                 topLeft = Offset(poleX - radius, poleY - radius),
                 size = Size(radius * 2, radius * 2),
-                style = Stroke(width = star.baseRadius * 0.9f),
+                style = Stroke(width = star.baseRadius * unit * 0.9f),
             )
         }
 
         val headAlpha = lifeAlpha * 0.9f
         drawCircle(
             color = color.copy(alpha = headAlpha),
-            radius = star.baseRadius,
+            radius = star.baseRadius * unit,
             center = Offset(poleX + cos(angle) * radius, poleY + sin(angle) * radius),
         )
     }
@@ -301,6 +321,7 @@ private fun DrawScope.drawStars(stars: List<Star>, w: Float, h: Float, t: Float,
 private fun DrawScope.drawMesh(nodes: List<MeshNode>, w: Float, h: Float, t: Float, primary: Color, accent: Color) {
     val s = min(w, h)
     val limit = s * 0.22f
+    val unit = unitOf(w, h)
     val pts = nodes.map { n ->
         Offset(
             (n.baseX + n.ampX * sin(t * TAU * n.fx + n.phase)) * w,
@@ -315,15 +336,16 @@ private fun DrawScope.drawMesh(nodes: List<MeshNode>, w: Float, h: Float, t: Flo
             if (d >= limit) continue
             drawLine(
                 color = primary.copy(alpha = 0.16f * (1 - d / limit)),
-                start = pts[i], end = pts[j], strokeWidth = 1f,
+                start = pts[i], end = pts[j], strokeWidth = 1.3f * unit,
             )
         }
     }
-    for (p in pts) drawCircle(color = accent.copy(alpha = 0.5f), radius = 1.6f, center = p)
+    for (p in pts) drawCircle(color = accent.copy(alpha = 0.5f), radius = 2.6f * unit, center = p)
 }
 
 private fun DrawScope.drawMeteors(meteors: List<Meteor>, w: Float, h: Float, t: Float, primary: Color, accent: Color) {
     val s = min(w, h)
+    val unit = unitOf(w, h)
     for (m in meteors) {
         val progress = (t * m.speed + m.offset).mod(1f)
         val x = (m.lane * 1.4f - 0.2f) * w + progress * w * 0.5f
@@ -342,7 +364,7 @@ private fun DrawScope.drawMeteors(meteors: List<Meteor>, w: Float, h: Float, t: 
                 start = Offset(tx, ty), end = Offset(x, y),
             ),
             start = Offset(tx, ty), end = Offset(x, y),
-            strokeWidth = 1.6f, cap = StrokeCap.Round,
+            strokeWidth = 2.4f * unit, cap = StrokeCap.Round,
         )
     }
 }
@@ -353,18 +375,7 @@ private fun DrawScope.drawWaves(w: Float, h: Float, t: Float, primary: Color, ac
         val amp = h * (0.05f - i * 0.008f)
         val speed = i + 1
         val color = if (i % 2 == 0) primary else accent
-        val path = androidx.compose.ui.graphics.Path()
-        var x = 0f
-        var first = true
-        while (x <= w) {
-            val u = x / w
-            val y = baseY + sin(u * TAU * (i + 2) + t * TAU * speed) * amp
-            if (first) { path.moveTo(x, y); first = false } else path.lineTo(x, y)
-            x += w / 40
-        }
-        path.lineTo(w, h)
-        path.lineTo(0f, h)
-        path.close()
+        val path = smoothBand(w, h) { u -> baseY + sin(u * TAU * (i + 2) + t * TAU * speed) * amp }
         drawPath(
             path = path,
             brush = Brush.verticalGradient(
@@ -376,12 +387,13 @@ private fun DrawScope.drawWaves(w: Float, h: Float, t: Float, primary: Color, ac
 }
 
 private fun DrawScope.drawEmbers(embers: List<Ember>, w: Float, h: Float, t: Float, primary: Color, accent: Color) {
+    val unit = unitOf(w, h)
     for (e in embers) {
         val progress = (t * e.speed + e.offset).mod(1f)
         val y = (1.1f - progress * 1.2f) * h
         val x = (e.lane + e.sway * sin(progress * TAU * e.swayFreq)) * w
         val alpha = (0.5f * sin(progress * Math.PI.toFloat())).coerceAtLeast(0f)
-        drawCircle(color = (if (e.accent) accent else primary).copy(alpha = alpha), radius = e.radius, center = Offset(x, y))
+        drawCircle(color = (if (e.accent) accent else primary).copy(alpha = alpha), radius = e.radius * unit, center = Offset(x, y))
     }
 }
 

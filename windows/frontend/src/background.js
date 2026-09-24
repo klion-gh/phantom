@@ -61,12 +61,12 @@ function rgba(hex, alpha) {
 // cycle, same seamless-loop rule as everything else here), tracing a fading
 // arc behind it rather than sitting still. birthT/lifeLen give each star its
 // own window within the cycle to fade in, hold, and fade out - not literal
-// randomness (which would break the loop), but with 64 stars on staggered
+// randomness (which would break the loop), but with 110 stars on staggered
 // windows the repeat isn't perceptible.
 function makeStars() {
   const rng = seeded(42);
   const stars = [];
-  for (let i = 0; i < 64; i++) {
+  for (let i = 0; i < 110; i++) {
     stars.push({
       angle0: rng() * TAU,
       radiusFrac: 0.15 + rng() * 0.85,
@@ -75,7 +75,7 @@ function makeStars() {
       trailArc: 0.3 + rng() * 0.35, // radians of visible trail behind the head
       birthT: rng(),
       lifeLen: 0.25 + rng() * 0.5,
-      baseRadius: rng() * 1.3 + 0.5,
+      baseRadius: rng() * 1.5 + 0.9,
       accent: i % 6 === 0,
     });
   }
@@ -85,7 +85,7 @@ function makeStars() {
 function makeMeshNodes() {
   const rng = seeded(7);
   const nodes = [];
-  for (let i = 0; i < 26; i++) {
+  for (let i = 0; i < 40; i++) {
     nodes.push({
       baseX: rng(), baseY: rng(),
       ampX: rng() * 0.05 + 0.04,
@@ -101,10 +101,10 @@ function makeMeshNodes() {
 function makeMeteors() {
   const rng = seeded(19);
   const meteors = [];
-  for (let i = 0; i < 14; i++) {
+  for (let i = 0; i < 26; i++) {
     meteors.push({
       speed: 1 + Math.floor(rng() * 3), // 1..3
-      length: rng() * 0.12 + 0.08, // fraction of S, 0.08..0.20
+      length: rng() * 0.14 + 0.12, // fraction of S, 0.12..0.26
       lane: rng(),
       offset: rng(),
     });
@@ -115,12 +115,12 @@ function makeMeteors() {
 function makeEmbers() {
   const rng = seeded(101);
   const embers = [];
-  for (let i = 0; i < 40; i++) {
+  for (let i = 0; i < 70; i++) {
     embers.push({
       speed: 1 + Math.floor(rng() * 2), // 1..2
       sway: rng() * 0.04 + 0.02, // 0.02..0.06
       swayFreq: 1 + Math.floor(rng() * 3), // 1..3
-      radius: rng() * 1.8 + 0.8, // 0.8..2.6
+      radius: rng() * 2.2 + 1.2, // 1.2..3.4
       lane: rng(),
       offset: rng(),
       accent: i % 3 === 0,
@@ -178,6 +178,30 @@ function drawOrbs(ctx, w, h, t, primary, accent) {
   }
 }
 
+// Element sizes are CSS px at full-window size; the background list's small
+// previews scale them down with the canvas instead of being swamped by them.
+function unitOf(w, h) {
+  return Math.min(1, Math.min(w, h) / 500);
+}
+
+// Traces a band's top edge as one smooth curve: dense samples joined by
+// quadratic segments through their midpoints, so the edge has no corners
+// (straight segments between a couple of dozen samples read as a polyline).
+function smoothEdge(ctx, w, yAt) {
+  const n = 96;
+  let px = 0;
+  let py = yAt(0);
+  ctx.moveTo(px, py);
+  for (let k = 1; k <= n; k++) {
+    const x = (w * k) / n;
+    const y = yAt(k / n);
+    ctx.quadraticCurveTo(px, py, (px + x) / 2, (py + y) / 2);
+    px = x;
+    py = y;
+  }
+  ctx.lineTo(px, py);
+}
+
 function drawAurora(ctx, w, h, t, primary, accent) {
   ctx.save();
   ctx.filter = 'blur(30px)';
@@ -186,13 +210,9 @@ function drawAurora(ctx, w, h, t, primary, accent) {
     const baseY = h * (0.28 + i * 0.22);
     const color = i % 2 === 0 ? primary : accent;
     ctx.beginPath();
-    for (let x = 0; x <= w; x += w / 24) {
-      const u = x / w;
-      const y = baseY
-        + Math.sin(u * 3 * Math.PI + phase) * h * 0.06
-        + Math.cos(u * TAU - phase * 2) * h * 0.03;
-      if (x === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
-    }
+    smoothEdge(ctx, w, (u) => baseY
+      + Math.sin(u * 3 * Math.PI + phase) * h * 0.06
+      + Math.cos(u * TAU - phase * 2) * h * 0.03);
     ctx.lineTo(w, h);
     ctx.lineTo(0, h);
     ctx.closePath();
@@ -213,6 +233,7 @@ function drawStars(ctx, w, h, t, accent) {
   const poleX = w * 0.5;
   const poleY = h * -0.15;
   const segments = 18;
+  const unit = unitOf(w, h);
   for (const s of stars) {
     let lifeT = t - s.birthT;
     if (lifeT < 0) lifeT += 1;
@@ -227,7 +248,7 @@ function drawStars(ctx, w, h, t, accent) {
     const angle = s.angle0 + s.direction * s.speed * t * TAU;
     const color = s.accent ? accent : null;
 
-    ctx.lineWidth = s.baseRadius * 0.9;
+    ctx.lineWidth = s.baseRadius * unit * 0.9;
     for (let i = 0; i < segments; i++) {
       const a0 = angle - s.direction * (i / segments) * s.trailArc;
       const a1 = angle - s.direction * ((i + 1) / segments) * s.trailArc;
@@ -242,7 +263,7 @@ function drawStars(ctx, w, h, t, accent) {
     const headAlpha = lifeAlpha * 0.9;
     ctx.fillStyle = color ? rgba(color, headAlpha) : `rgba(255, 255, 255, ${headAlpha})`;
     ctx.beginPath();
-    ctx.arc(poleX + Math.cos(angle) * radius, poleY + Math.sin(angle) * radius, s.baseRadius, 0, TAU);
+    ctx.arc(poleX + Math.cos(angle) * radius, poleY + Math.sin(angle) * radius, s.baseRadius * unit, 0, TAU);
     ctx.fill();
   }
 }
@@ -254,7 +275,8 @@ function drawMesh(ctx, w, h, t, primary, accent) {
     x: (n.baseX + n.ampX * Math.sin(t * TAU * n.fx + n.phase)) * w,
     y: (n.baseY + n.ampY * Math.cos(t * TAU * n.fy + n.phase)) * h,
   }));
-  ctx.lineWidth = 1;
+  const unit = unitOf(w, h);
+  ctx.lineWidth = 1.3 * unit;
   for (let i = 0; i < pts.length; i++) {
     for (let j = i + 1; j < pts.length; j++) {
       const dx = pts[i].x - pts[j].x;
@@ -271,7 +293,7 @@ function drawMesh(ctx, w, h, t, primary, accent) {
   ctx.fillStyle = rgba(accent, 0.5);
   for (const p of pts) {
     ctx.beginPath();
-    ctx.arc(p.x, p.y, 1.6, 0, TAU);
+    ctx.arc(p.x, p.y, 2.6 * unit, 0, TAU);
     ctx.fill();
   }
 }
@@ -279,7 +301,7 @@ function drawMesh(ctx, w, h, t, primary, accent) {
 function drawMeteors(ctx, w, h, t, primary, accent) {
   const S = Math.min(w, h);
   ctx.lineCap = 'round';
-  ctx.lineWidth = 1.6;
+  ctx.lineWidth = 2.4 * unitOf(w, h);
   for (const m of meteors) {
     const progress = (t * m.speed + m.offset) % 1;
     const x = (m.lane * 1.4 - 0.2) * w + progress * w * 0.5;
@@ -331,6 +353,7 @@ function drawMatrix(ctx, w, h, t, accent) {
 }
 
 function drawEmbers(ctx, w, h, t, primary, accent) {
+  const unit = unitOf(w, h);
   for (const e of embers) {
     const progress = (t * e.speed + e.offset) % 1;
     const y = (1.1 - progress * 1.2) * h;
@@ -338,7 +361,7 @@ function drawEmbers(ctx, w, h, t, primary, accent) {
     const alpha = Math.max(0, 0.5 * Math.sin(progress * Math.PI));
     ctx.fillStyle = rgba(e.accent ? accent : primary, alpha);
     ctx.beginPath();
-    ctx.arc(x, y, e.radius, 0, TAU);
+    ctx.arc(x, y, e.radius * unit, 0, TAU);
     ctx.fill();
   }
 }
