@@ -215,6 +215,16 @@ func installRouting(inner *netstack.Tunnel, physicalIfIndex uint32, haveIfIndex 
 	// The engine's own counters ride along on netstack's periodic summary, so
 	// one line says both what flowed and why it went where it did.
 	inner.SetDiagExtra(engine.DiagFields)
+	// Split DNS - see internal/netstack/splitdns.go: in smart mode only
+	// queries for listed names ride the tunnel; the rest go out the physical
+	// interface to whichever resolver Windows asked (1.1.1.1/8.8.8.8, set on
+	// the tunnel adapter), retried through the tunnel if that goes unanswered.
+	inner.SetDNSRouter(func(qname string) netstack.RouteDecision {
+		if engine.TunnelDNSQuery(qname) {
+			return netstack.RouteTunnel
+		}
+		return netstack.RouteDirect
+	})
 }
 
 // --- smart config selection ------------------------------------------------

@@ -12,7 +12,7 @@ type ClientConfig struct {
 	Server          string   `yaml:"server"`            // VPS address:port, e.g. "1.2.3.4:443". Primary endpoint; see servers for failover.
 	Servers         []string `yaml:"servers"`           // optional list of address:port endpoints, all serving the same domain/cert/psk. Tried with failover (see ServerList/transport.NewFailoverDialer); if set, takes precedence over server. Blocking one IP/port no longer kills everything.
 	Domain          string   `yaml:"domain"`            // real domain the server has a CA-signed cert for; used as SNI and as the Host header in the disguised handshake
-	Fingerprint     string   `yaml:"fingerprint"`       // uTLS ClientHello mimicry: chrome133/chrome131 (post-quantum X25519MLKEM768 key share)/chrome120/firefox120/safari16
+	Fingerprint     string   `yaml:"fingerprint"`       // uTLS ClientHello mimicry: auto (default: Firefox)/firefox/edge/360/qq/chrome133/chrome131/chrome120/safari16 - see internal/transport/fingerprint.go
 	PSK             string   `yaml:"psk"`               // shared secret (hex, 32 bytes) - one of several HKDF inputs, must match server's psk
 	ServerPublicKey string   `yaml:"server_public_key"` // server's static X25519 public key (hex, 32 bytes) - for real per-session ECDH
 	Listen          string   `yaml:"listen"`            // SOCKS5 proxy, desktop only
@@ -63,7 +63,7 @@ func LoadClientConfig(path string) (*ClientConfig, error) {
 // receives the config as an in-memory string (imported/pasted client.yaml).
 func ParseClientConfig(data []byte) (*ClientConfig, error) {
 	cfg := &ClientConfig{
-		Fingerprint: "chrome133",
+		Fingerprint: "auto",
 		Listen:      "127.0.0.1:1080",
 		PoolSize:    4,
 		LogLevel:    "info",

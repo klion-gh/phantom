@@ -76,6 +76,9 @@ object I18n {
             "beta_updates" to "Скачивать beta-версии",
             "beta_updates_hint" to "Предлагать обновления до тестовых сборок. Они выходят чаще, но могут содержать ошибки.",
             "update_available_beta" to "Доступна beta-версия",
+            "fingerprint_title" to "Отпечаток TLS",
+            "fingerprint_hint" to "Каким браузером подключение представляется серверу. «Авто» — рекомендуемый вариант; Chrome сейчас блокируется чаще других.",
+            "fingerprint_auto" to "Авто",
             // routing section
             "routing" to "Маршрутизация",
             "smart_vpn" to "Умный VPN",
@@ -177,6 +180,9 @@ object I18n {
             "beta_updates" to "Download beta versions",
             "beta_updates_hint" to "Offer updates to test builds. They ship more often, but may contain bugs.",
             "update_available_beta" to "A beta version is available",
+            "fingerprint_title" to "TLS fingerprint",
+            "fingerprint_hint" to "Which browser the connection presents itself as to the server. «Auto» is recommended; Chrome is currently blocked more than the others.",
+            "fingerprint_auto" to "Auto",
             // routing section
             "routing" to "Routing",
             "smart_vpn" to "Smart VPN",

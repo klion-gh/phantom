@@ -242,6 +242,14 @@ func Start(configYAML string, tunFD int, mtu int, protector Protector) (*Tunnel,
 	inner.SetDNSObserver(func(stream io.ReadWriteCloser) io.ReadWriteCloser {
 		return routing.SniffDNS(stream, engine.Domains())
 	})
+	// Split DNS - see internal/netstack/splitdns.go: in smart mode only
+	// queries for listed names ride the tunnel.
+	inner.SetDNSRouter(func(qname string) netstack.RouteDecision {
+		if engine.TunnelDNSQuery(qname) {
+			return netstack.RouteTunnel
+		}
+		return netstack.RouteDirect
+	})
 	// See netstack.Tunnel.SetDNSUpstream: fakeDNSServer must match whatever
 	// address the platform layer (PhantomVpnService.kt's VpnService.Builder)
 	// hands the OS as the VPN's DNS server.
@@ -257,6 +265,41 @@ func Start(configYAML string, tunFD int, mtu int, protector Protector) (*Tunnel,
 		"dnsUpstream", upstreamDNSAddr)
 
 	return &Tunnel{pool: pool, cancel: cancel, inner: inner, engine: engine}, nil
+}
+
+// SetDirectDNS tells the tunnel which resolver answers directly-resolved
+// (non-listed) names in smart mode: servers is the physical network's DNS
+// servers, comma-separated, as Android reports them - its ISP's or router's,
+// i.e. exactly where the query would have gone with the VPN off. The first
+// usable IPv4 address wins (then IPv6, skipping link-local, which needs an
+// interface scope a protected socket can't be relied on to carry). Without it
+// direct queries go to the placeholder's real upstream (1.1.1.1), which some
+// networks block - the split-DNS fallback covers that, but slower.
+func (t *Tunnel) SetDirectDNS(servers string) {
+	if t.inner == nil {
+		return
+	}
+	var v6 string
+	for _, s := range strings.Split(servers, ",") {
+		ip := net.ParseIP(strings.TrimSpace(s))
+		if ip == nil || ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsUnspecified() {
+			continue
+		}
+		if ip.To4() != nil {
+			t.inner.SetDirectDNSUpstream(net.JoinHostPort(ip.String(), "53"))
+			diag.Event(diag.CatVPN, "directDNS", "server", ip.String())
+			return
+		}
+		if v6 == "" {
+			v6 = ip.String()
+		}
+	}
+	if v6 != "" {
+		t.inner.SetDirectDNSUpstream(net.JoinHostPort(v6, "53"))
+		diag.Event(diag.CatVPN, "directDNS", "server", v6)
+		return
+	}
+	diag.Event(diag.CatVPN, "directDNS", "server", "none", "reported", servers)
 }
 
 // Stop tears down the tunnel: the netstack, the Phantom session/pool, and

@@ -858,6 +858,22 @@ textarea::placeholder { color: var(--text-muted); }
     align-self: stretch;
 }
 
+/* Config dialog's TLS fingerprint row: four language tiles in a compact size,
+   sharing the row evenly. */
+.fingerprint-picker { display: flex; flex-direction: column; gap: 8px; margin: 14px 0 4px; }
+.fingerprint-title { font-size: 15px; font-weight: 500; color: var(--text-primary); }
+.fingerprint-hint { font-size: 12.5px; line-height: 1.4; color: var(--text-secondary); }
+.fingerprint-options { display: flex; gap: 8px; }
+.lang-tile.fingerprint-tile {
+    flex: 1 1 0;
+    align-self: stretch;
+    height: 42px;
+    min-height: 42px;
+    padding: 0 10px;
+    border-radius: 14px;
+    font-size: 13px;
+}
+
 .lang-tile.active {
     border-width: 2px;
     border-color: var(--primary);

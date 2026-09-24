@@ -646,9 +646,53 @@ async function reloadConfigs() {
   renderRouting();
 }
 
+// --- TLS fingerprint picker (config dialog) ----------------------------------
+//
+// Why it exists: as of June 2026 TSPU freezes connections to datacenter IPs
+// that present a Chrome/Safari ClientHello, while Firefox and Edge pass (see
+// internal/transport/fingerprint.go) - and configs generated before this carry
+// `fingerprint: "chrome133"`. The choice is written into the YAML itself (one
+// `fingerprint:` line) rather than stored beside it, so the tunnel, pings and
+// auto-select probes, which all read the YAML, follow it with no extra wiring,
+// and the user sees exactly what changed. Same as Android's Fingerprint.kt.
+const FINGERPRINT_LINE = /^[ \t]*fingerprint[ \t]*:.*$/m;
+
+// Which tile the YAML currently names; null for a profile not offered here
+// (360, qq, safari, an older chrome) - left as the operator wrote it. No line
+// at all means "auto", the core's default.
+function currentFingerprint(yaml) {
+  const raw = (parseYamlField(yaml, 'fingerprint') || '').toLowerCase().trim();
+  if (raw === '' || raw === 'auto') return 'auto';
+  if (raw.startsWith('firefox')) return 'firefox';
+  if (raw === 'edge') return 'edge';
+  if (raw === 'chrome133' || raw === 'chrome') return 'chrome133';
+  return null;
+}
+
+function setFingerprint(yaml, value) {
+  const line = `fingerprint: "${value}"`;
+  if (FINGERPRINT_LINE.test(yaml)) return yaml.replace(FINGERPRINT_LINE, line);
+  const base = yaml.replace(/\s+$/, '');
+  return base ? `${base}\n${line}` : line;
+}
+
+const fingerprintTiles = document.querySelectorAll('.fingerprint-tile');
+function syncFingerprintTiles() {
+  const current = currentFingerprint(configTextarea.value);
+  for (const tile of fingerprintTiles) tile.classList.toggle('active', tile.dataset.fp === current);
+}
+for (const tile of fingerprintTiles) {
+  tile.addEventListener('click', () => {
+    configTextarea.value = setFingerprint(configTextarea.value, tile.dataset.fp);
+    syncFingerprintTiles();
+  });
+}
+configTextarea.addEventListener('input', syncFingerprintTiles);
+
 function openEditScreen(config) {
   editingId = config.id;
   configTextarea.value = config.yaml;
+  syncFingerprintTiles();
   configScreenTitle.textContent = t('edit_config_title');
   btnDelete.classList.remove('hidden');
   showOverlay(configOverlay);
@@ -657,6 +701,7 @@ function openEditScreen(config) {
 document.getElementById('btn-add').addEventListener('click', () => {
   editingId = null;
   configTextarea.value = '';
+  syncFingerprintTiles();
   configScreenTitle.textContent = t('add_config');
   btnDelete.classList.add('hidden');
   showOverlay(configOverlay);

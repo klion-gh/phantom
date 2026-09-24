@@ -335,6 +335,15 @@ class PhantomVpnService : VpnService() {
                 // direct one - see mobile/pingpath.go. Cleared wherever the
                 // tunnel is torn down.
                 Mobile.setPingProtector(protector)
+                // Where smart mode's non-listed names resolve (split DNS): the
+                // physical network's own resolver, captured before our tunnel
+                // became the default - exactly where the query would have gone
+                // with the VPN off. See mobile.Tunnel.SetDirectDNS.
+                val directDns = runCatching {
+                    cm?.getLinkProperties(underlyingNetwork)?.dnsServers
+                        ?.joinToString(",") { it.hostAddress ?: "" }
+                }.getOrNull().orEmpty()
+                tunnel?.setDirectDNS(directDns)
 
                 // Applied right after the tunnel exists and before it's
                 // announced as connected, so the very first flow already sees

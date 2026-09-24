@@ -194,6 +194,18 @@
           <div class="form-inner">
             <div class="label" data-i18n="paste_yaml">Вставьте содержимое client.yaml целиком:</div>
             <textarea id="config-textarea" placeholder='server: "1.2.3.4:8443"&#10;domain: "your-domain.example"&#10;...'></textarea>
+            <!-- Writes the config's own `fingerprint:` line - see
+                 setFingerprint in main.js for why it lives in the YAML. -->
+            <div class="fingerprint-picker">
+              <div class="fingerprint-title" data-i18n="fingerprint_title">Отпечаток TLS</div>
+              <div class="fingerprint-hint" data-i18n="fingerprint_hint">Каким браузером подключение представляется серверу. «Авто» — рекомендуемый вариант; Chrome сейчас блокируется чаще других.</div>
+              <div class="fingerprint-options">
+                <button class="lang-tile fingerprint-tile" data-fp="auto" data-i18n="fingerprint_auto">Авто</button>
+                <button class="lang-tile fingerprint-tile" data-fp="firefox">Firefox</button>
+                <button class="lang-tile fingerprint-tile" data-fp="edge">Edge</button>
+                <button class="lang-tile fingerprint-tile" data-fp="chrome133">Chrome</button>
+              </div>
+            </div>
             <div class="row">
               <button id="btn-save" class="btn btn-gradient" data-i18n="save">Сохранить</button>
               <button id="btn-delete" class="btn btn-danger hidden" data-i18n="delete">Удалить</button>

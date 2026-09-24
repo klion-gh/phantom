@@ -395,20 +395,31 @@ handles all three:
 caller uses — `cmd/client`, `mobile.Start`, `windows/wintun.go`'s `StartWindows`, and
 `internal/pingcheck.Ping` all call it directly.
 
-- uTLS-based fingerprint mimicry (`fingerprint` config field). Default is `chrome133`
-  (`utls.HelloChrome_133`), which carries a real `X25519MLKEM768` post-quantum hybrid
-  key share in its ClientHello - matching current real Chrome, where a majority of
-  connections now include one. `chrome131` is the same story (`X25519MLKEM768` too);
-  `chrome120` (`utls.HelloChrome_120`) is kept only for explicit opt-in/backward
-  compatibility and predates Chrome's PQ rollout, making it the more anomalous-looking
-  ClientHello of the two now, not the safer/older-is-stabler choice it used to be - a
-  passive fingerprint-matching censor comparing ClientHello shape against the current
-  real-browser population (JA3/JA4-style) can use "claims to be modern Chrome but has no
-  PQ key share" as a distinguisher precisely because that share is no longer rare.
-  `firefox120`/`safari16` remain available but have no PQ-carrying capture in the pinned
-  uTLS version. This only affects the outer TLS camouflage layer (what a passive
-  fingerprint check sees) - it has no bearing on Phantom's own inner handshake crypto
-  (§5.1's semi-static X25519 ECDH), which is unrelated and still classical.
+- uTLS-based fingerprint mimicry (`fingerprint` config field, mapped in
+  `internal/transport/fingerprint.go`). Default is **`auto`**, which resolves to
+  `utls.HelloFirefox_120`. It used to be `chrome133` (a real `X25519MLKEM768`
+  post-quantum key share, matching current Chrome), chosen to blend in with the largest
+  browser population - which stopped being an advantage in June 2026: per the
+  reverse-engineered TSPU scheme ("О схеме ограничений РКН в июне 2026-го", Habr), a
+  connection is frozen for ~120s when its server IP is in a "suspicious" (datacenter)
+  subnet **and** its ClientHello is Chrome/Safari/iOS **and** more than 3 handshakes to
+  that SNI arrived <~350-400ms apart in 60s. Firefox, Edge, 360 and QQ pass on most
+  operators, so `auto` breaks the second condition by default; `firefox`, `edge`, `360`,
+  `qq`, `chrome133`/`chrome131`/`chrome120`, `safari16` stay selectable - in the apps
+  from a "Отпечаток TLS" row in the config dialog, which rewrites the config's
+  `fingerprint:` line - since which profiles pass can change again. The large PQ Chrome
+  ClientHello (~1.8KB, two TCP segments) was also reported losing its second segment on
+  some operators. uTLS's OkHttp profile (on the same passing list) is **not** offered:
+  it's TLS 1.2-only and the server is TLS 1.3-only - `TestEveryFingerprintCompletesTheFullHandshake`
+  runs every offered profile through the real client path to catch exactly that. The
+  fingerprint is deliberately never rotated automatically on failure: changing it during
+  a freeze was reported to extend the freeze to 600s. This only affects the outer TLS
+  camouflage layer - it has no bearing on Phantom's own inner handshake crypto (§5.1).
+- **Handshake pacing.** `dialAddr` waits for `waitHandshakeTurn` right before sending the
+  ClientHello: handshakes to one SNI from this process are at least ~500ms apart (plus a
+  little jitter), so the tunnel's own redials, a ping per config and an auto-select probe
+  round - all of which can coincide at connect time or right after a network change -
+  can never form the burst in the third condition above.
 - **SNI is the operator's real domain**, not a borrowed/spoofed one.
 - **Certificate validation is real** (no `InsecureSkipVerify`) — since the server
   presents a genuinely CA-signed certificate, the client validates it exactly like a
@@ -488,7 +499,7 @@ server: "yourdomain.com:8443"       # required (unless servers: is set) - primar
 #   - "203.0.113.10:8443"             # all must serve the same domain/cert/psk. Tried in order with
 #   - "198.51.100.20:443"             # last-good memory (transport.NewFailoverDialer). See §13.1.
 domain: "yourdomain.com"             # required - SNI + Host header; must match the server's real cert domain
-fingerprint: "chrome133"             # default if unset - see §6.1 for the post-quantum note
+fingerprint: "auto"                  # default if unset (Firefox) - see §6.1
 psk: "<64 hex chars>"                 # required - shared secret, one HKDF input alongside the ECDH secret
 server_public_key: "<64 hex chars>"   # required - server's static X25519 public key
 listen: "127.0.0.1:1080"              # default; desktop SOCKS5 (cmd/client only)
@@ -681,10 +692,18 @@ either; both call straight into this package (Android via `mobile.Tunnel`/
 - `ModeAll` - tunnel everything. The default, and what a plain "Автоматически"/manual
   config connection uses; domain matching plays no part in it.
 - `ModeSmart` - tunnel only what `DomainSet.Match` (below) says belongs to the user's
-  site list; DNS itself (port 53) always rides the tunnel regardless of the list, both
-  because resolving a blocked domain over the local network is how it comes back
-  poisoned/NXDOMAIN, and because the DNS sniffer (below) needs to see the answer to learn
-  from it. An **empty** site list under `ModeSmart` still tunnels everything rather than
+  site list. DNS is **split per queried name** (`internal/netstack/splitdns.go`,
+  `Engine.TunnelDNSQuery`): a query for a listed name rides the tunnel - resolving a
+  blocked domain over the local network is how it comes back poisoned/NXDOMAIN, and the
+  DNS sniffer (below) needs to see the answer to learn from it - while every other query
+  resolves directly (Android: to the physical network's own resolver, passed in via
+  `Tunnel.SetDirectDNS`; Windows: to whichever resolver was asked, out the physical
+  interface). A direct query unanswered within 1.5s is retried through the tunnel, for
+  networks that block outside resolvers; a listed name is never sent direct. Until this,
+  all DNS rode the tunnel in smart mode, so a tunnel that stopped answering (a network
+  change, or a censor silently freezing the connection) left *no* name resolving and the
+  whole device looked offline, not just the listed sites. DNS over TCP still rides the
+  tunnel. An **empty** site list under `ModeSmart` still tunnels everything rather than
   nothing - the safer reading of "the user turned a VPN on" is the UI's job to prevent by
   not letting them get here with nothing listed, not the engine's.
 

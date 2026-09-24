@@ -106,6 +106,8 @@ type Tunnel struct {
 
 	stats     flowStats
 	diagExtra func() []any
+	dnsRouter DNSRouterFunc
+	directDNS string
 	stopDiag  chan struct{}
 	stopOnce  sync.Once
 }
@@ -311,6 +313,13 @@ func (t *Tunnel) handleUDP(r *udp.ForwarderRequest) bool {
 	}
 	local := gonet.NewUDPConn(&wq, ep)
 
+	if isDNSTarget(target) {
+		if route, direct, dnsWrap, directDNS := t.currentDNSSplit(); route != nil {
+			go t.serveSplitDNS(local, id.RemotePort, t.dnsUpstream(target), route, direct, dnsWrap, directDNS)
+			return true
+		}
+	}
+
 	remote := t.openRemote("udp", id.RemotePort, target)
 	if remote == nil {
 		local.Close()
@@ -334,11 +343,7 @@ func (t *Tunnel) handleUDP(r *udp.ForwarderRequest) bool {
 func (t *Tunnel) openRemote(network string, localPort uint16, target string) io.ReadWriteCloser {
 	dns := network == "udp" && isDNSTarget(target)
 	if dns {
-		if fake, real := t.currentDNSUpstream(); fake != "" {
-			if host, _, err := net.SplitHostPort(target); err == nil && host == fake {
-				target = real
-			}
-		}
+		target = t.dnsUpstream(target)
 	}
 	if bypass := t.currentBypass(); bypass != nil {
 		if conn := bypass(network, localPort, target); conn != nil {
@@ -391,6 +396,17 @@ func (t *Tunnel) openRemote(network string, localPort uint16, target string) io.
 	}
 	t.countFlow(network, true)
 	return t.meterFlow(network, target, true, false, stream)
+}
+
+// dnsUpstream applies SetDNSUpstream's rewrite: a query addressed to the
+// placeholder resolver goes to the real one instead.
+func (t *Tunnel) dnsUpstream(target string) string {
+	if fake, real := t.currentDNSUpstream(); fake != "" {
+		if host, _, err := net.SplitHostPort(target); err == nil && host == fake {
+			return real
+		}
+	}
+	return target
 }
 
 // isDNSTarget reports whether target ("ip:port") is a plain DNS destination.

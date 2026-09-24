@@ -145,3 +145,28 @@ func TestEngineSmartModeWithEmptyListTunnels(t *testing.T) {
 		t.Error("expected an empty site list to fall back to tunnelling, not to bypass everything")
 	}
 }
+
+// Split DNS decides per queried name: listed names (and their subdomains)
+// through the tunnel, the rest direct - but only in smart mode with a
+// non-empty list; otherwise every query rides the tunnel as it always did.
+func TestTunnelDNSQueryFollowsTheSiteList(t *testing.T) {
+	e := NewEngine()
+	e.SetSites([]string{"198.51.100.1"}) // a literal, so nothing resolves in the background
+	if !e.TunnelDNSQuery("example.org") {
+		t.Fatal("outside smart mode every query must ride the tunnel")
+	}
+
+	e.SetMode(ModeSmart)
+	e.domains.Set([]string{"youtube.com"})
+	if !e.TunnelDNSQuery("youtube.com") || !e.TunnelDNSQuery("www.youtube.com") {
+		t.Fatal("a listed name and its subdomains must ride the tunnel")
+	}
+	if e.TunnelDNSQuery("example.org") {
+		t.Fatal("an unlisted name must resolve directly")
+	}
+
+	e.domains.Set(nil)
+	if !e.TunnelDNSQuery("example.org") {
+		t.Fatal("smart mode with an empty list tunnels everything, DNS included")
+	}
+}

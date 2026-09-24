@@ -38,7 +38,9 @@ type Engine struct {
 	// these: listed sites should be a small share, and anything counted
 	// under emptyList means smart mode was tunnelling everything.
 	whyListed, whyDNS, whyEmptyList, whyAllMode, whyBadTarget, whyDirect atomic.Int64
-	sites                                                                atomic.Int64
+	// Split DNS: queries for listed names (tunnel) vs everything else (direct).
+	dnsListed, dnsUnlisted atomic.Int64
+	sites                  atomic.Int64
 }
 
 func NewEngine() *Engine {
@@ -99,7 +101,29 @@ func (e *Engine) DiagFields() []any {
 		"whyAllMode", e.whyAllMode.Swap(0),
 		"whyBadTarget", e.whyBadTarget.Swap(0),
 		"whyDirect", e.whyDirect.Swap(0),
+		"dnsListed", e.dnsListed.Swap(0),
+		"dnsUnlisted", e.dnsUnlisted.Swap(0),
 	}
+}
+
+// TunnelDNSQuery decides where one DNS query goes under split DNS (see
+// internal/netstack/splitdns.go): through the tunnel for a listed name - its
+// answer is what teaches the engine the site's addresses, and resolving it
+// locally is how it comes back poisoned - and directly for anything else, the
+// way it would resolve with the VPN off.
+//
+// Outside smart mode, or with an empty list (where smart mode tunnels
+// everything - see ShouldTunnel), every query rides the tunnel as before.
+func (e *Engine) TunnelDNSQuery(qname string) bool {
+	if e.Mode() != ModeSmart || e.domains.Empty() {
+		return true
+	}
+	if e.domains.MatchesName(qname) {
+		e.dnsListed.Add(1)
+		return true
+	}
+	e.dnsUnlisted.Add(1)
+	return false
 }
 
 // seedDomainIPs resolves each name-based entry once, immediately, and feeds
@@ -155,11 +179,11 @@ func (e *Engine) ShouldTunnel(network, target string) bool {
 		e.whyBadTarget.Add(1)
 		return true
 	}
-	// DNS always rides the tunnel in smart mode, whatever the site list says.
-	// Resolving a blocked domain through the local network is exactly how it
-	// comes back poisoned or NXDOMAIN - and it is also where the sniffer
-	// learns which addresses belong to the listed sites, so sending it direct
-	// would break the matching that everything else here depends on.
+	// DNS that reaches this rule rides the tunnel. UDP DNS normally doesn't
+	// get here at all: split DNS decides it per queried name instead (see
+	// TunnelDNSQuery). What's left - DNS over TCP, or a platform without a
+	// direct path - keeps the old rule: resolving a blocked domain locally is
+	// how it comes back poisoned, and the tunnel is where the sniffer learns.
 	if port == "53" {
 		e.whyDNS.Add(1)
 		return true

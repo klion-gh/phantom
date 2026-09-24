@@ -3,6 +3,7 @@ package transport
 import (
 	"context"
 	"crypto/tls"
+	"crypto/x509"
 	"fmt"
 	"net"
 	"sync"
@@ -29,6 +30,11 @@ type TLSClientConfig struct {
 	// server gets captured by that same route unless the socket is
 	// explicitly "protected" to bypass the VPN. Unused on desktop clients.
 	ProtectFD func(fd int) bool
+
+	// rootCAs overrides the system trust store. Tests only (unexported): it
+	// lets them run the real Dial path - fingerprint, handshake pacing, TLS
+	// 1.3, the disguised handshake - against a throwaway certificate.
+	rootCAs *x509.CertPool
 }
 
 const defaultTimeout = 10 * time.Second
@@ -119,12 +125,21 @@ func dialAddr(ctx context.Context, cfg *TLSClientConfig, addr string) (net.Conn,
 	utlsCfg := &utls.Config{
 		ServerName: cfg.Domain,
 		MinVersion: tls.VersionTLS13,
+		RootCAs:    cfg.rootCAs,
 	}
 
 	clientHelloID, err := getFingerprint(cfg.Fingerprint)
 	if err != nil {
 		conn.Close()
 		return nil, nil, err
+	}
+
+	// Paces handshakes to one SNI - see waitHandshakeTurn. After the TCP
+	// connect, right before the ClientHello: it's the ClientHellos' spacing
+	// that's counted, and TCP connect times vary too much to pace by.
+	if err := waitHandshakeTurn(ctx, cfg.Domain); err != nil {
+		conn.Close()
+		return nil, nil, fmt.Errorf("waiting to handshake: %w", err)
 	}
 
 	uconn := utls.UClient(conn, utlsCfg, clientHelloID)
@@ -185,30 +200,4 @@ func dialAddr(ctx context.Context, cfg *TLSClientConfig, addr string) (net.Conn,
 	}
 
 	return uconn, crypto, nil
-}
-
-// getFingerprint maps a config's fingerprint name to a uTLS ClientHelloID.
-//
-// chrome131/chrome133 carry a real X25519MLKEM768 post-quantum hybrid key
-// share, matching current real Chrome (~57%+ of real browser connections
-// have one as of early 2026) - chrome120 (kept only for explicit opt-in/
-// backward compat) predates Chrome's PQ rollout and is now the more
-// anomalous-looking ClientHello of the two, not the safer default it used to
-// be. firefox120/safari16 have no PQ-carrying capture available in the
-// pinned uTLS version, so they stay as-is.
-func getFingerprint(name string) (utls.ClientHelloID, error) {
-	switch name {
-	case "chrome131":
-		return utls.HelloChrome_131, nil
-	case "chrome133", "chrome":
-		return utls.HelloChrome_133, nil
-	case "chrome120":
-		return utls.HelloChrome_120, nil
-	case "firefox120", "firefox130", "firefox":
-		return utls.HelloFirefox_120, nil
-	case "safari16", "safari18", "safari":
-		return utls.HelloSafari_16_0, nil
-	default:
-		return utls.HelloChrome_133, fmt.Errorf("unknown fingerprint %q, using chrome133", name)
-	}
 }

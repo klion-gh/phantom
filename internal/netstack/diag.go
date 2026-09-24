@@ -39,7 +39,10 @@ type flowStats struct {
 	noSession      atomic.Int64 // no live session to open a stream on; the flow was dropped
 
 	dnsQueries, dnsAnswers, dnsUnanswered atomic.Int64
-	dnsLatSumMs, dnsLatCount, dnsLatMaxMs atomic.Int64
+	// Split DNS (splitdns.go): where each query went, and how many direct
+	// ones got no answer in time and were retried through the tunnel.
+	dnsViaDirect, dnsViaTunnel, dnsDirectFallback atomic.Int64
+	dnsLatSumMs, dnsLatCount, dnsLatMaxMs         atomic.Int64
 
 	tunnelUnanswered, directUnanswered atomic.Int64
 	tunnelTTFBSumMs, tunnelTTFBCount   atomic.Int64
@@ -246,6 +249,7 @@ func (t *Tunnel) runSummaries(stop <-chan struct{}) {
 			udpT, udpD, byp := swap(&s.udpTunnel), swap(&s.udpDirect), swap(&s.bypass)
 			dirFail, openFail, noSess := swap(&s.directFail), swap(&s.tunnelOpenFail), swap(&s.noSession)
 			dnsQ, dnsA, dnsU := swap(&s.dnsQueries), swap(&s.dnsAnswers), swap(&s.dnsUnanswered)
+			dnsDir, dnsTun, dnsFb := swap(&s.dnsViaDirect), swap(&s.dnsViaTunnel), swap(&s.dnsDirectFallback)
 			dnsSum, dnsCnt, dnsMax := swap(&s.dnsLatSumMs), swap(&s.dnsLatCount), swap(&s.dnsLatMaxMs)
 			tunU, dirU := swap(&s.tunnelUnanswered), swap(&s.directUnanswered)
 			tunSum, tunCnt := swap(&s.tunnelTTFBSumMs), swap(&s.tunnelTTFBCount)
@@ -268,6 +272,7 @@ func (t *Tunnel) runSummaries(stop <-chan struct{}) {
 				"tcpTunnel", tcpT, "tcpDirect", tcpD,
 				"udpTunnel", udpT, "udpDirect", udpD, "bypass", byp,
 				"dnsQ", dnsQ, "dnsAns", dnsA, "dnsUnanswered", dnsU,
+				"dnsDirect", dnsDir, "dnsTunnel", dnsTun, "dnsFallback", dnsFb,
 				"dnsAvgMs", avg(dnsSum, dnsCnt), "dnsMaxMs", dnsMax,
 				"tunnelTTFBms", avg(tunSum, tunCnt), "tunnelUnanswered", tunU,
 				"directTTFBms", avg(dirSum, dirCnt), "directUnanswered", dirU,

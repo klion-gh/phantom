@@ -1293,6 +1293,8 @@ private fun ConfigDialog(
                     .height(280.dp),
             )
 
+            FingerprintPicker(yaml = yaml, onYamlChange = onYamlChange)
+
             // Matches the app's other primary affordances (GradientSwitch's
             // active track, the update progress fill) instead of the flat
             // Material button this used to be - a solid colour read as a

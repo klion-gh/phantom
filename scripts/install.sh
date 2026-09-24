@@ -269,7 +269,7 @@ fi
 
 CLIENT_YAML="server: \"$DOMAIN:8443\"
 domain: \"$DOMAIN\"
-fingerprint: \"chrome133\"
+fingerprint: \"auto\"
 psk: \"$PSK\"
 server_public_key: \"$SERVER_PUB\"
 listen: \"127.0.0.1:1080\"

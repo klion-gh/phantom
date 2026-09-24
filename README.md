@@ -381,9 +381,11 @@ log_level: "debug"
 ```yaml
 server: "ваш-домен.ru:8443"           # адрес:порт сервера
 domain: "ваш-домен.ru"                # тот же домен — используется как SNI
-fingerprint: "chrome133"              # chrome133/chrome131 (с постквантовым X25519MLKEM768,
-                                       # как у настоящего современного Chrome) / chrome120 (старый,
-                                       # без посткванта) / firefox120 / safari16
+fingerprint: "auto"                   # auto (= Firefox) / firefox / edge / 360 / qq /
+                                       # chrome133 / chrome131 / safari16. С июня 2026 ТСПУ
+                                       # замораживает соединения с отпечатком Chrome/Safari к
+                                       # серверам в дата-центрах - используйте auto; в приложении
+                                       # это переключатель «Отпечаток TLS» в окне конфигурации
 psk: "..."                            # должен совпадать с сервером
 server_public_key: "..."              # X25519 публичный ключ сервера (из keygen)
 listen: "127.0.0.1:1080"              # SOCKS5 (только desktop-прокси клиент)
