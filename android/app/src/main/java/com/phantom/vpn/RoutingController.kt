@@ -157,6 +157,8 @@ object RoutingController {
         })
     }
 
+    private var lastHealthLogged: String? = null
+
     /** Per-config health for the UI, keyed by config id. */
     fun health(): Map<String, ConfigHealth> {
         val active = selector ?: return emptyMap()
@@ -174,18 +176,22 @@ object RoutingController {
                 )
             }
         }.getOrDefault(emptyMap())
-        // Polled by the UI, hence sampled - but this is the view that answers
-        // "why is auto-select taking so long to decide": probed=false across
-        // the board means probes are still in flight, not that they failed.
-        Diag.sampled("health", Diag.Cat.ROUTE, "health", everyMs = 4000) {
-            arrayOf(
-                "current" to current,
+        // Polled by the UI every 2s, so written only when the picture changes:
+        // which configs have been probed, which answered, which one carries
+        // traffic. Latency is left out of the comparison - it jitters every
+        // probe and would defeat the point. The selector's own probeRound
+        // line (Go side) has the numbers.
+        val snapshot = "current=${current.take(8)} " + result.entries.joinToString(",") {
+            "${it.key.take(8)}:${if (it.value.probed) "p" else "-"}${if (it.value.alive) "a" else "-"}"
+        }
+        if (snapshot != lastHealthLogged) {
+            lastHealthLogged = snapshot
+            Diag.log(
+                Diag.Cat.ROUTE, "health",
                 "configs" to result.size,
                 "probed" to result.values.count { it.probed },
                 "alive" to result.values.count { it.alive },
-                "detail" to result.entries.joinToString(",") {
-                    "${it.key.take(8)}:${if (it.value.probed) "p" else "-"}${if (it.value.alive) "a" else "-"}${it.value.latencyMs}"
-                },
+                "detail" to snapshot,
             )
         }
         return result

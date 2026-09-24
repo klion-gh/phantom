@@ -171,6 +171,13 @@ func (d *DomainSet) Learn(name string, ips []net.IP) {
 	}
 }
 
+// LearnedCount is how many addresses DNS answers have tied to listed sites.
+func (d *DomainSet) LearnedCount() int {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	return len(d.learned)
+}
+
 func (d *DomainSet) pruneLocked(now time.Time) {
 	for ip, at := range d.learned {
 		if now.Sub(at) > learnedTTL {

@@ -26,8 +26,11 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.*
+import android.content.ClipData
+import androidx.core.content.FileProvider
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.PagerState
 import androidx.compose.foundation.pager.rememberPagerState
@@ -62,6 +65,8 @@ import androidx.lifecycle.LifecycleEventObserver
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.Dispatchers
 
 private enum class Screen { MAIN, SETTINGS, LOG, POPULAR_RESOURCES }
 
@@ -1635,10 +1640,24 @@ private fun setShowProxySettings(context: android.content.Context, show: Boolean
     })
 }
 
+// How much of the log the Лог screen shows: the newest part, which is what's
+// being looked at. "Поделиться" sends the whole retained day as a file.
+private const val LOG_VIEW_TAIL_CHARS = 300_000
+
 @Composable
 private fun LogScreen(onClose: () -> Unit) {
     val context = LocalContext.current
-    val logText = remember { FileLog.readAll() }
+    val scope = rememberCoroutineScope()
+    // Read off the main thread: a few hundred KB of file reads used to happen
+    // inside composition, and the whole thing was then laid out as one Text.
+    var lines by remember { mutableStateOf<List<String>>(emptyList()) }
+    var sharing by remember { mutableStateOf(false) }
+    val listState = rememberLazyListState()
+    LaunchedEffect(Unit) {
+        lines = withContext(Dispatchers.IO) { FileLog.readTail(LOG_VIEW_TAIL_CHARS).lines() }
+        // Opens on the newest lines, which is where anything worth looking at is.
+        if (lines.isNotEmpty()) listState.scrollToItem(lines.lastIndex)
+    }
 
     Column(
         modifier = Modifier
@@ -1658,30 +1677,54 @@ private fun LogScreen(onClose: () -> Unit) {
             Text(I18n.t("log_title", FileLog.path()), color = TextPrimary, fontSize = 15.sp)
         }
 
-        Text(
-            text = logText,
-            color = TextSecondary,
-            fontFamily = FontFamily.Monospace,
-            fontSize = 11.sp,
+        // Lazy, one item per line: only what's on screen is ever laid out, so
+        // the viewer stays responsive however much log there is.
+        LazyColumn(
+            state = listState,
             modifier = Modifier
                 .weight(1f)
-                .fillMaxWidth()
-                .verticalScroll(rememberScrollState()),
-        )
+                .fillMaxWidth(),
+        ) {
+            items(lines) { line ->
+                Text(
+                    text = line,
+                    color = TextSecondary,
+                    fontFamily = FontFamily.Monospace,
+                    fontSize = 11.sp,
+                )
+            }
+        }
 
-        Button(
-            onClick = {
+        // Same tile as the language switcher (see LangTile), stretched across
+        // the screen. Its "selected" border doubles as the busy state while the
+        // export file is being written.
+        LangTile(
+            label = I18n.t("share"),
+            selected = sharing,
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            if (sharing) return@LangTile
+            sharing = true
+            scope.launch {
+                val file = withContext(Dispatchers.IO) {
+                    runCatching { FileLog.exportForShare(context) }.getOrNull()
+                }
+                sharing = false
+                if (file == null) return@launch
+                // As an attachment, not intent text: a day of log is far past
+                // the ~1 MB binder limit that text had to fit in.
+                val uri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
                 val shareIntent = Intent(Intent.ACTION_SEND).apply {
                     type = "text/plain"
-                    putExtra(Intent.EXTRA_TEXT, logText)
+                    putExtra(Intent.EXTRA_STREAM, uri)
+                    putExtra(Intent.EXTRA_SUBJECT, file.name)
+                    // ClipData as well as EXTRA_STREAM: the read grant only
+                    // travels through the chooser to the picked app via ClipData.
+                    clipData = ClipData.newRawUri(file.name, uri)
+                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
                 }
-                context.startActivity(Intent.createChooser(shareIntent, "Share Phantom log"))
-            },
-            shape = RoundedCornerShape(16.dp),
-            colors = ButtonDefaults.buttonColors(containerColor = Primary, contentColor = Color.White),
-            modifier = Modifier.fillMaxWidth().height(54.dp),
-        ) {
-            Text(I18n.t("share"), fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
+                context.startActivity(Intent.createChooser(shareIntent, I18n.t("share")))
+            }
         }
     }
 }

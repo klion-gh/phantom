@@ -212,6 +212,9 @@ func installRouting(inner *netstack.Tunnel, physicalIfIndex uint32, haveIfIndex 
 	inner.SetDNSObserver(func(stream io.ReadWriteCloser) io.ReadWriteCloser {
 		return routing.SniffDNS(stream, engine.Domains())
 	})
+	// The engine's own counters ride along on netstack's periodic summary, so
+	// one line says both what flowed and why it went where it did.
+	inner.SetDiagExtra(engine.DiagFields)
 }
 
 // --- smart config selection ------------------------------------------------

@@ -501,9 +501,6 @@ fun AnimatedBackground(modifier: Modifier = Modifier) {
     }
 
     Canvas(modifier = modifier.background(Brush.linearGradient(backdrop))) {
-        Diag.sampled("backdrop", Diag.Cat.BG, "draw", everyMs = 5000) {
-            arrayOf("w" to size.width, "h" to size.height, "t" to t, "style" to style)
-        }
         drawBackdropContent(style, size.width, size.height, t, primary, accent, zeroGlyph, oneGlyph)
     }
 }

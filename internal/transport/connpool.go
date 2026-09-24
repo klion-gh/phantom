@@ -9,9 +9,20 @@ import (
 
 	"net"
 
+	"phantom/internal/diag"
 	"phantom/internal/protocol"
 	"phantom/internal/tunnel"
 )
+
+// connSeq numbers every connection this process dials, so a log's dial, stall
+// and death lines for one connection can be told apart from the next one's.
+var connSeq atomic.Int64
+
+// stallAfter is how long the server may stay silent while we keep sending
+// before the connection is logged as stalled. Long enough that an ordinary
+// round trip (even a slow mobile one) never trips it, short enough to line up
+// with the DNS timeouts a stall causes - a resolver gives up after ~5s.
+const stallAfter = 8 * time.Second
 
 type ConnPool struct {
 	conns    []*poolConn
@@ -27,6 +38,7 @@ type poolConn struct {
 	mux     *tunnel.Multiplexer
 	healthy bool
 	mu      sync.Mutex
+	id      int64
 }
 
 func NewConnPool(maxConns int, dialFunc func(ctx context.Context) (net.Conn, *protocol.SessionCrypto, error)) *ConnPool {
@@ -76,10 +88,14 @@ func (p *ConnPool) Get(ctx context.Context) (*tunnel.Multiplexer, error) {
 }
 
 func (p *ConnPool) newConn(ctx context.Context) (*poolConn, error) {
+	id := connSeq.Add(1)
+	start := time.Now()
 	conn, crypto, err := p.dialFunc(ctx)
 	if err != nil {
+		diag.Event(diag.CatTunnel, "dialFail", "conn", id, "ms", time.Since(start), "err", err)
 		return nil, err
 	}
+	diag.Event(diag.CatTunnel, "dialOk", "conn", id, "ms", time.Since(start), "remote", conn.RemoteAddr())
 
 	mux := tunnel.NewMultiplexer(conn, crypto)
 
@@ -88,11 +104,51 @@ func (p *ConnPool) newConn(ctx context.Context) (*poolConn, error) {
 		crypto:  crypto,
 		mux:     mux,
 		healthy: true,
+		id:      id,
 	}
 
 	go p.monitorConn(pc)
+	go watchStall(pc)
 
 	return pc, nil
+}
+
+// watchStall logs when the server goes silent on a connection we are still
+// sending on, and when it comes back. A censor that blackholes a connection
+// (drops its packets instead of resetting it) produces exactly this and
+// nothing else: no error, no close, the connection simply stops answering -
+// so without this the log would show a perfectly healthy tunnel while every
+// request through it, DNS included, times out.
+func watchStall(pc *poolConn) {
+	ticker := time.NewTicker(2 * time.Second)
+	defer ticker.Stop()
+	var stalledSince time.Time
+	for {
+		select {
+		case <-pc.mux.Done():
+			return
+		case now := <-ticker.C:
+			a := pc.mux.Activity()
+			silent := now.Sub(a.LastRx)
+			sendingIntoSilence := a.LastTx.After(a.LastRx)
+			switch {
+			case stalledSince.IsZero() && sendingIntoSilence && silent > stallAfter:
+				stalledSince = a.LastRx
+				diag.Event(diag.CatTunnel, "stall",
+					"conn", pc.id,
+					"silentMs", silent,
+					"lastTxAgoMs", now.Sub(a.LastTx),
+					"ageS", int(now.Sub(a.Created).Seconds()),
+					"rxBytes", a.BytesRx,
+					"txBytes", a.BytesTx)
+			case !stalledSince.IsZero() && a.LastRx.After(stalledSince):
+				diag.Event(diag.CatTunnel, "stallEnd",
+					"conn", pc.id,
+					"stalledMs", a.LastRx.Sub(stalledSince))
+				stalledSince = time.Time{}
+			}
+		}
+	}
 }
 
 func (p *ConnPool) monitorConn(pc *poolConn) {
@@ -103,6 +159,15 @@ func (p *ConnPool) monitorConn(pc *poolConn) {
 	// otherwise-idle pool, which is exactly what made a phone's Wi-Fi<->cellular
 	// switch look like total internet loss instead of a brief reconnect.
 	<-pc.mux.Done()
+	a := pc.mux.Activity()
+	now := time.Now()
+	diag.Event(diag.CatTunnel, "connDied",
+		"conn", pc.id,
+		"ageS", int(now.Sub(a.Created).Seconds()),
+		"silentMs", now.Sub(a.LastRx),
+		"rxBytes", a.BytesRx,
+		"txBytes", a.BytesTx,
+		"err", errOrClosed(pc.mux.Err()))
 	pc.mu.Lock()
 	pc.healthy = false
 	pc.mu.Unlock()
@@ -173,4 +238,14 @@ type PoolError struct {
 
 func (e *PoolError) Error() string {
 	return e.msg
+}
+
+// errOrClosed names a nil error for the log: nil there means the connection
+// was closed on purpose (disconnect, network change, pool shutdown), not that
+// the cause went unrecorded.
+func errOrClosed(err error) any {
+	if err == nil {
+		return "closedLocally"
+	}
+	return err
 }

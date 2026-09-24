@@ -34,6 +34,7 @@ import (
 	"time"
 
 	"phantom/internal/config"
+	"phantom/internal/diag"
 	"phantom/internal/geoip"
 	"phantom/internal/netstack"
 	"phantom/internal/pingcheck"
@@ -245,6 +246,15 @@ func Start(configYAML string, tunFD int, mtu int, protector Protector) (*Tunnel,
 	// address the platform layer (PhantomVpnService.kt's VpnService.Builder)
 	// hands the OS as the VPN's DNS server.
 	inner.SetDNSUpstream(fakeDNSServer, upstreamDNSAddr)
+	// The routing engine's own counters ride along on netstack's periodic
+	// summary, so one line says both what flowed and why it went where it did.
+	inner.SetDiagExtra(engine.DiagFields)
+	diag.Event(diag.CatVPN, "tunnelUp",
+		"endpoints", len(cfg.ServerList()),
+		"fingerprint", cfg.Fingerprint,
+		"mtu", mtu,
+		"dnsFake", fakeDNSServer,
+		"dnsUpstream", upstreamDNSAddr)
 
 	return &Tunnel{pool: pool, cancel: cancel, inner: inner, engine: engine}, nil
 }

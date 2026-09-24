@@ -789,7 +789,13 @@ replacing it - see below.
   (`BuildConfig.VERSION_NAME`) pinned at the bottom - worth surfacing because the app
   updates itself from GitHub releases, so "which build am I on" is the first question when
   an update does or doesn't arrive.
-- **Log** (`LogScreen`): shows `FileLog`'s persisted plain-text log with a share button.
+- **Log** (`LogScreen`): shows the newest ~300 KB of `FileLog` (a lazy one-item-per-line
+  list, opened scrolled to the end) and a "Поделиться" tile that exports the whole retained
+  day to `cacheDir/logs` and shares it as a `FileProvider` attachment - share-intent text,
+  as before, broke past Android's ~1 MB binder limit. `FileLog` keeps hourly segment files
+  (`filesDir/logs/phantom-yyyyMMdd-HH.log`, UTC) for the last 24h only, the same layout as
+  Windows' `internal/logfile`; the Go core's own `log` output reaches it through
+  `Mobile.setLogSink`, set in `PhantomApplication.onCreate`.
 
 ### 10.1 Config storage (`ConfigStore.kt`)
 
@@ -974,7 +980,8 @@ up) tears down the previous tunnel first, same as the Android side.
 All of `wintun.go`'s `route`/`netsh` subprocess calls run through a `runNetCmd` helper
 that sets `syscall.SysProcAttr{HideWindow: true}` (otherwise each one flashes a visible
 console window, since this is a GUI app with no console of its own) and logs the exact
-command and its output to `phantom.log` either way — useful for diagnosing exactly which
+command and its output to the app log (`logs/` next to the exe, hourly files kept for
+24h - `internal/logfile`) either way — useful for diagnosing exactly which
 step failed without attaching a debugger.
 
 `wintun.dll` (the actual driver, same one WireGuard-for-Windows uses) is embedded in the

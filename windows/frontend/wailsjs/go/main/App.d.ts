@@ -45,6 +45,8 @@ export function Ping(arg1:string):Promise<string>;
 
 export function PopularResources():Promise<string>;
 
+export function ReadFullLog():Promise<string>;
+
 export function ReadLog():Promise<string>;
 
 export function ReconnectActive():Promise<string>;

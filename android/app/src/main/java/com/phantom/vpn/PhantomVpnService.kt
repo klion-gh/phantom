@@ -282,6 +282,7 @@ class PhantomVpnService : VpnService() {
             try {
                 val cm = getSystemService(ConnectivityManager::class.java)
                 val underlyingNetwork = cm?.activeNetwork
+                logNetwork("underlyingNetwork", cm, underlyingNetwork)
 
                 val builder = Builder()
                     .setSession("Phantom")
@@ -402,8 +403,14 @@ class PhantomVpnService : VpnService() {
             .build()
 
         val callback = object : ConnectivityManager.NetworkCallback() {
-            override fun onAvailable(network: Network) = onPhysicalNetworkEvent()
-            override fun onLost(network: Network) = onPhysicalNetworkEvent()
+            override fun onAvailable(network: Network) {
+                logNetwork("netAvailable", cm, network)
+                onPhysicalNetworkEvent()
+            }
+            override fun onLost(network: Network) {
+                Diag.log(Diag.Cat.VPN, "netLost", "network" to network.toString())
+                onPhysicalNetworkEvent()
+            }
         }
         networkCallback = callback
         try {
@@ -411,6 +418,45 @@ class PhantomVpnService : VpnService() {
         } catch (e: Throwable) {
             FileLog.e("registerNetworkCallback failed", e)
         }
+    }
+
+    /**
+     * One line describing a physical network as the tunnel sees it. Several of
+     * these fields can each take the whole device offline on their own, which
+     * is why they're logged rather than inferred later:
+     *  - privateDnsActive/privateDnsServer: a strict Private DNS hostname sends
+     *    DNS over TLS to that host, around this app's DNS entirely;
+     *  - lockdown ("Block connections without VPN"): while the tunnel is down
+     *    or reconnecting, Android drops *all* traffic, not just listed sites;
+     *  - validated: Android itself has decided the network has no internet.
+     */
+    private fun logNetwork(event: String, cm: ConnectivityManager?, network: Network?) {
+        if (cm == null || network == null) {
+            Diag.log(Diag.Cat.VPN, event, "network" to "none")
+            return
+        }
+        val caps = runCatching { cm.getNetworkCapabilities(network) }.getOrNull()
+        val lp = runCatching { cm.getLinkProperties(network) }.getOrNull()
+        val transport = when {
+            caps == null -> "unknown"
+            caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) -> "wifi"
+            caps.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) -> "cellular"
+            caps.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET) -> "ethernet"
+            caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN) -> "vpn"
+            else -> "other"
+        }
+        Diag.log(
+            Diag.Cat.VPN, event,
+            "network" to network.toString(),
+            "transport" to transport,
+            "validated" to caps?.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED),
+            "metered" to (caps?.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_METERED) == false),
+            "privateDnsActive" to (if (Build.VERSION.SDK_INT >= 28) lp?.isPrivateDnsActive else null),
+            "privateDnsServer" to (if (Build.VERSION.SDK_INT >= 28) lp?.privateDnsServerName else null),
+            "dnsServers" to lp?.dnsServers?.joinToString(",") { it.hostAddress ?: "?" },
+            "alwaysOn" to (if (Build.VERSION.SDK_INT >= 29) runCatching { isAlwaysOn }.getOrNull() else null),
+            "lockdown" to (if (Build.VERSION.SDK_INT >= 29) runCatching { isLockdownEnabled }.getOrNull() else null),
+        )
     }
 
     // registerNetworkCallback immediately replays onAvailable for every

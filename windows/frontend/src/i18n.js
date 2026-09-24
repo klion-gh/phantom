@@ -82,6 +82,7 @@ const dict = {
     // log
     log: 'Лог',
     copy: 'Скопировать',
+    copied: 'Скопировано',
     // split tunneling
     apps: 'Приложения',
     apps_manage: 'Настроить',
@@ -191,6 +192,7 @@ const dict = {
     background_plain_desc: 'Background gradient only',
     log: 'Log',
     copy: 'Copy',
+    copied: 'Copied',
     apps: 'Apps',
     apps_manage: 'Manage',
     apps_direction: 'Include / Exclude',

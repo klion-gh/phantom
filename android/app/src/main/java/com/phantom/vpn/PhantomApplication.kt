@@ -1,11 +1,20 @@
 package com.phantom.vpn
 
 import android.app.Application
+import mobile.LogSink
+import mobile.Mobile
 
 class PhantomApplication : Application() {
     override fun onCreate() {
         super.onCreate()
         FileLog.init(this)
+        // Every line the Go core logs (tunnel stalls, dropped connections,
+        // DNS going unanswered, routing decisions) lands in the same file as
+        // the app's own - without this it went only to logcat, invisible on a
+        // phone without adb. Set before anything can start the core.
+        Mobile.setLogSink(object : LogSink {
+            override fun log(line: String) = FileLog.go(line)
+        })
         // First line of every session's diagnostics - device/emulator, API
         // level and app version, which every rendering or connectivity report
         // has to be read against.

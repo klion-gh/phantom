@@ -8,12 +8,12 @@ import './style.css';
 // install ever shows, so the app's own footprint grows by the whole set
 // (~2.4MB) once, not per flag shown.
 import 'flag-icons/css/flag-icons.min.css';
-import { Connect, Disconnect, Status, ReadLog, ListConfigs, AddConfig, UpdateConfig, DeleteConfig, SetConfigGeo, ClearConfigCountry, Ping, ListResources, AddResource, DeleteResource, ListExcludedApps, PickExcludedAppExe, AddExcludedApp, DeleteExcludedApp, ApplyUpdate, StartProxy, StopProxy, GetLanguage, SetLanguage, Version, LookupCountry, GetAppearance, SetAppearance, GetShowProxySettings, SetShowProxySettings, GetBetaUpdates, SetBetaUpdates, GetRoutingState, SetRoutingMode, SetSmartEnabled, SetSmartSites, SetSmartConfigs, SetAutoEnabled, SetAutoConfigs, SetAppsEnabled, SetAppsInclude, ReconnectActive, RoutingHealth, PopularResources } from '../wailsjs/go/main/App';
+import { Connect, Disconnect, Status, ReadLog, ListConfigs, AddConfig, UpdateConfig, DeleteConfig, SetConfigGeo, ClearConfigCountry, Ping, ListResources, AddResource, DeleteResource, ListExcludedApps, PickExcludedAppExe, AddExcludedApp, DeleteExcludedApp, ApplyUpdate, StartProxy, StopProxy, GetLanguage, SetLanguage, Version, LookupCountry, GetAppearance, SetAppearance, GetShowProxySettings, SetShowProxySettings, GetBetaUpdates, SetBetaUpdates, ReadFullLog, GetRoutingState, SetRoutingMode, SetSmartEnabled, SetSmartSites, SetSmartConfigs, SetAutoEnabled, SetAutoConfigs, SetAppsEnabled, SetAppsInclude, ReconnectActive, RoutingHealth, PopularResources } from '../wailsjs/go/main/App';
 import { t, getLang, setLang, applyStaticTranslations } from './i18n.js';
 import { BACKGROUNDS, initBackground, initMiniBackground } from './background.js';
 import { PALETTES } from './palettes.js';
 import { initScrollbars, relayoutScrollbars } from './scrollbar.js';
-import { Cat, diag, diagSampled, logEnvironment } from './diag.js';
+import { Cat, diag, diagOnChange, logEnvironment } from './diag.js';
 
 // The WebView has no console the user can open, so an uncaught frontend error
 // would otherwise be completely invisible - it goes to the app log instead,
@@ -620,14 +620,15 @@ async function refreshStatus() {
   } catch (e) {
     console.error(e);
   }
-  // Sampled: this is the 4s poll, so it would otherwise be most of the log.
-  diagSampled('status', Cat.VPN, 'status', () => ({
+  // Written only when something in it changes: this runs on the 4s poll, and
+  // a line per poll was most of the log while telling nothing new.
+  diagOnChange('status', Cat.VPN, 'status', {
     connected: currentStatus.connected,
     alive: currentStatus.alive,
     activeConfigId: currentStatus.activeConfigId || 'none',
     smartEnabled: routingState.smartEnabled,
     autoEnabled: routingState.autoEnabled,
-  }), 8000);
+  });
   refreshTileStatuses();
   renderSitesApplyRow();
   refreshModeAvailability();
@@ -878,9 +879,21 @@ document.getElementById('btn-back-log').addEventListener('click', () => showScre
 
 document.getElementById('btn-open-split-tunnel').addEventListener('click', () => showScreen('splitTunnel'));
 document.getElementById('btn-back-split-tunnel').addEventListener('click', () => showScreen('settings'));
-document.getElementById('btn-copy-log').addEventListener('click', async () => {
+// Copies the whole retained log (the last day), not just the tail the viewer
+// shows - a bug report needs the full window. The tile briefly takes its
+// "selected" look as confirmation, since nothing else on screen changes.
+const btnCopyLog = document.getElementById('btn-copy-log');
+let copyFeedbackTimer = null;
+btnCopyLog.addEventListener('click', async () => {
   try {
-    await navigator.clipboard.writeText(logText.textContent);
+    await navigator.clipboard.writeText(await ReadFullLog());
+    btnCopyLog.textContent = t('copied');
+    btnCopyLog.classList.add('active');
+    clearTimeout(copyFeedbackTimer);
+    copyFeedbackTimer = setTimeout(() => {
+      btnCopyLog.textContent = t('copy');
+      btnCopyLog.classList.remove('active');
+    }, 1500);
   } catch (e) {
     console.error(e);
   }
@@ -1281,13 +1294,13 @@ async function refreshRoutingHealth() {
   // Sampled (2.5s poll). This is the view that answers "why is auto-select
   // taking so long to decide" - probed=0 across the board means probes are
   // still in flight rather than having failed.
-  diagSampled('health', Cat.ROUTE, 'health', () => ({
+  diagOnChange('health', Cat.ROUTE, 'health', {
     configs: health.length,
     probed: health.filter((h) => h.probed).length,
     alive: health.filter((h) => h.alive).length,
     active: (health.find((h) => h.active) || {}).id || 'none',
-    detail: health.map((h) => `${String(h.id).slice(0, 8)}:${h.probed ? 'p' : '-'}${h.alive ? 'a' : '-'}${h.latency_ms}`).join(','),
-  }), 6000);
+    detail: health.map((h) => `${String(h.id).slice(0, 8)}:${h.probed ? 'p' : '-'}${h.alive ? 'a' : '-'}`).join(','),
+  });
   for (const entry of health) {
     const row = document.querySelector(`.routing-config-row[data-id="${entry.id}"]`);
     if (!row) continue;

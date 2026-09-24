@@ -90,6 +90,10 @@ export function PopularResources() {
   return window['go']['main']['App']['PopularResources']();
 }
 
+export function ReadFullLog() {
+  return window['go']['main']['App']['ReadFullLog']();
+}
+
 export function ReadLog() {
   return window['go']['main']['App']['ReadLog']();
 }

@@ -258,9 +258,16 @@ func (a *App) Status() string {
 	return string(data)
 }
 
-// ReadLog returns the full contents of the log file for the in-app viewer.
+// ReadLog returns the newest part of the log for the in-app viewer - see
+// viewerTailBytes in log.go.
 func (a *App) ReadLog() string {
 	return readLog()
+}
+
+// ReadFullLog returns every retained line (the last day), for the viewer's
+// copy button - a bug report needs the whole window, not just the tail.
+func (a *App) ReadFullLog() string {
+	return readFullLog()
 }
 
 // ListConfigs returns every saved config as a JSON array of {"id","yaml"}.

@@ -53,6 +53,20 @@ export function diagSampled(key, category, event, fieldsFn, everyMs = 2000) {
   diag(category, event, fieldsFn());
 }
 
+const lastValue = new Map();
+
+/** For state that's polled but rarely changes (connection status, config
+ *  health): writes a line only when the fields differ from the last one
+ *  written under `key`. A poll every few seconds otherwise fills the log with
+ *  identical lines that bury the one that actually changed. */
+export function diagOnChange(key, category, event, fields) {
+  if (!ENABLED) return;
+  const serialized = fieldsToString(fields);
+  if (lastValue.get(key) === serialized) return;
+  lastValue.set(key, serialized);
+  diag(category, event, fields);
+}
+
 /** Dumped once at startup. The CSS capability probes are the point: which
  *  features a given WebView2 actually supports is exactly what a "it renders
  *  wrong here" report needs, and it's unanswerable after the fact. */

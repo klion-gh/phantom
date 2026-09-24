@@ -850,6 +850,14 @@ textarea::placeholder { color: var(--text-muted); }
     white-space: nowrap;
     transition: border-color 200ms ease, border-width 200ms ease, color 200ms ease;
 }
+/* The log screen's copy button: the same tile as the language switcher, just
+   stretched across the screen - it's an action rather than one of a pair of
+   choices, but it belongs to the same design system, not the old flat
+   primary-button look. Its .active state is borrowed as "copied" feedback. */
+.lang-tile.log-action {
+    align-self: stretch;
+}
+
 .lang-tile.active {
     border-width: 2px;
     border-color: var(--primary);

@@ -4,43 +4,73 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+
+	"phantom/internal/logfile"
 )
 
-// logFilePath puts phantom.log next to the running executable rather than
-// under a per-user config directory, so it's easy to find without hunting
-// through AppData while testing.
-func logFilePath() (string, error) {
+// viewerTailBytes is how much of the log the in-app viewer shows: the newest
+// part, which is what's being looked at, without handing a WebView textarea a
+// whole day of diagnostics to lay out. "Скопировать" copies the full log.
+const viewerTailBytes = 512 << 10
+
+// logDir keeps the log next to the running executable rather than under a
+// per-user config directory, so it's easy to find without hunting through
+// AppData - in a logs/ folder now that it's hourly segment files rather than
+// one phantom.log.
+func logDir() (string, error) {
 	exePath, err := os.Executable()
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(filepath.Dir(exePath), "phantom.log"), nil
+	return filepath.Join(filepath.Dir(exePath), "logs"), nil
 }
 
-// initLog redirects the standard `log` package (used both here and by every
-// internal/* package - the multiplexer, direct.go, etc. all call log.Printf
-// directly) into a file, mirroring the Android app's FileLog: a real crash or
-// connection failure needs to be diagnosable without a terminal attached.
+// initLog redirects the standard `log` package (used here and by every
+// internal/* package) into hourly segment files that keep only the last day
+// (see internal/logfile), mirroring the Android app's FileLog.
+//
+// Before this it was a single phantom.log appended to forever - with the
+// diagnostics added since, that grew without bound. That file is deleted
+// here on first start of a build that no longer writes it.
 func initLog() {
-	path, err := logFilePath()
+	dir, err := logDir()
 	if err != nil {
 		return
 	}
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0600)
+	os.Remove(filepath.Join(filepath.Dir(dir), "phantom.log"))
+	w, err := logfile.Open(dir)
 	if err != nil {
 		return
 	}
-	log.SetOutput(f)
+	// Milliseconds: stall, DNS-timeout and reconnect lines are only useful
+	// if they can be lined up against each other.
+	log.SetFlags(log.LstdFlags | log.Lmicroseconds)
+	log.SetOutput(w)
 }
 
+// readLog is what the in-app viewer shows - see viewerTailBytes.
 func readLog() string {
-	path, err := logFilePath()
+	dir, err := logDir()
 	if err != nil {
 		return "(no log directory)"
 	}
-	data, err := os.ReadFile(path)
+	s, err := logfile.ReadTail(dir, viewerTailBytes)
 	if err != nil {
 		return "(no log yet)"
 	}
-	return string(data)
+	return s
+}
+
+// readFullLog is every retained line - what "Скопировать" puts on the
+// clipboard, so a bug report carries the whole last day, not just the tail.
+func readFullLog() string {
+	dir, err := logDir()
+	if err != nil {
+		return "(no log directory)"
+	}
+	s, err := logfile.ReadAll(dir)
+	if err != nil {
+		return "(no log yet)"
+	}
+	return s
 }

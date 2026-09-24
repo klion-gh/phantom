@@ -16,12 +16,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
 	"net"
 	"sync"
 	"sync/atomic"
 	"time"
 
+	"phantom/internal/diag"
 	"phantom/internal/tunnel"
 
 	"gvisor.dev/gvisor/pkg/tcpip"
@@ -103,6 +103,11 @@ type Tunnel struct {
 
 	refreshSession     func() (*tunnel.Session, error)
 	lastRefreshAttempt time.Time
+
+	stats     flowStats
+	diagExtra func() []any
+	stopDiag  chan struct{}
+	stopOnce  sync.Once
 }
 
 // SetBypass installs an optional per-connection bypass hook - see BypassFunc.
@@ -225,10 +230,10 @@ func (t *Tunnel) currentSession() *tunnel.Session {
 	t.lastRefreshAttempt = time.Now()
 	fresh, err := t.refreshSession()
 	if err != nil {
-		log.Printf("[netstack] session refresh failed: %v", err)
+		diag.Event(diag.CatTunnel, "sessionRefreshFail", "err", err)
 		return t.session
 	}
-	log.Printf("[netstack] recovered with a fresh session after the previous one died")
+	diag.Event(diag.CatTunnel, "sessionRefreshed")
 	t.session = fresh
 	return t.session
 }
@@ -265,6 +270,9 @@ func New(session *tunnel.Session, linkEndpoint stack.LinkEndpoint, mtu int) (*Tu
 
 	udpForwarder := udp.NewForwarder(s, t.handleUDP)
 	s.SetTransportProtocolHandler(udp.ProtocolNumber, udpForwarder.HandlePacket)
+
+	t.stopDiag = make(chan struct{})
+	go t.runSummaries(t.stopDiag)
 
 	return t, nil
 }
@@ -324,7 +332,8 @@ func (t *Tunnel) handleUDP(r *udp.ForwarderRequest) bool {
 //     direct dial was chosen but failed: an excluded app losing its route is
 //     better served by the tunnel than by no connectivity at all.
 func (t *Tunnel) openRemote(network string, localPort uint16, target string) io.ReadWriteCloser {
-	if network == "udp" && isDNSTarget(target) {
+	dns := network == "udp" && isDNSTarget(target)
+	if dns {
 		if fake, real := t.currentDNSUpstream(); fake != "" {
 			if host, _, err := net.SplitHostPort(target); err == nil && host == fake {
 				target = real
@@ -333,38 +342,55 @@ func (t *Tunnel) openRemote(network string, localPort uint16, target string) io.
 	}
 	if bypass := t.currentBypass(); bypass != nil {
 		if conn := bypass(network, localPort, target); conn != nil {
+			t.stats.bypass.Add(1)
 			return conn
 		}
 	}
 
 	router, direct, dnsWrap := t.currentRouting()
 	if router != nil && direct != nil && router(network, target) == RouteDirect {
-		if conn, err := direct(network, target); err == nil {
-			return conn
+		conn, err := direct(network, target)
+		if err == nil {
+			t.countFlow(network, false)
+			return t.meterFlow(network, target, false, dns, conn)
 		}
+		// Falls through to the tunnel below - which is also why a broken
+		// direct path shows up as traffic that should never have touched
+		// the tunnel suddenly depending on it.
+		t.stats.directFail.Add(1)
+		logFailure("directDialFail", network, target, err)
 	}
 
 	session := t.currentSession()
 	if session == nil {
+		t.stats.noSession.Add(1)
+		logFailure("noSession", network, target, nil)
 		return nil
 	}
 	if network == "udp" {
 		stream, err := session.OpenUDP(target)
 		if err != nil {
+			t.stats.tunnelOpenFail.Add(1)
+			logFailure("tunnelOpenFail", network, target, err)
 			return nil
 		}
+		t.countFlow(network, true)
+		var rw io.ReadWriteCloser = stream
 		// Only DNS is worth looking at, and only when someone asked to - see
 		// SetDNSObserver. Every other UDP flow is passed through untouched.
-		if dnsWrap != nil && isDNSTarget(target) {
-			return dnsWrap(stream)
+		if dnsWrap != nil && dns {
+			rw = dnsWrap(stream)
 		}
-		return stream
+		return t.meterFlow(network, target, true, dns, rw)
 	}
 	stream, err := session.Open(target)
 	if err != nil {
+		t.stats.tunnelOpenFail.Add(1)
+		logFailure("tunnelOpenFail", network, target, err)
 		return nil
 	}
-	return stream
+	t.countFlow(network, true)
+	return t.meterFlow(network, target, true, false, stream)
 }
 
 // isDNSTarget reports whether target ("ip:port") is a plain DNS destination.
@@ -460,6 +486,11 @@ func addressString(a tcpip.Address) string {
 // it - that's the caller's responsibility (closing a TUN device, restoring
 // routing tables, etc).
 func (t *Tunnel) Stop() {
+	t.stopOnce.Do(func() {
+		if t.stopDiag != nil {
+			close(t.stopDiag)
+		}
+	})
 	if t.netstack != nil {
 		t.netstack.Destroy()
 	}

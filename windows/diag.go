@@ -1,10 +1,6 @@
 package main
 
-import (
-	"fmt"
-	"log"
-	"strings"
-)
+import idiag "phantom/internal/diag"
 
 // Structured diagnostic logging, the Windows counterpart to Android's Diag.kt
 // and deliberately the same shape: `cat=X ev=Y k=v ...` lines, so one session
@@ -31,22 +27,12 @@ const (
 	diagCatRoute = "ROUTE" // smart routing, auto-select, per-config probes
 )
 
-// diag writes one structured line. fields are alternating key, value - a
-// vararg of `any` rather than a map so call sites stay short and field order
-// is stable across lines, which is what makes two runs diffable.
+// diag writes one structured line through internal/diag, which the core
+// packages use too - one formatter, so a value with spaces or "=" is quoted
+// the same way whichever side logged it.
 func diag(category, event string, fields ...any) {
 	if !diagEnabled {
 		return
 	}
-	var b strings.Builder
-	fmt.Fprintf(&b, "cat=%s ev=%s", category, event)
-	for i := 0; i+1 < len(fields); i += 2 {
-		fmt.Fprintf(&b, " %v=%v", fields[i], fields[i+1])
-	}
-	// Odd trailing field would silently vanish above; surface it instead of
-	// hiding a call-site typo.
-	if len(fields)%2 != 0 {
-		fmt.Fprintf(&b, " MALFORMED_TRAILING=%v", fields[len(fields)-1])
-	}
-	log.Print(b.String())
+	idiag.Event(category, event, fields...)
 }

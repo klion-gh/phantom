@@ -4,4 +4,8 @@
          (context.getExternalFilesDir(null)) - app-private, no storage
          permission needed on modern Android. -->
     <external-files-path name="updates" path="." />
+    <!-- The log export FileLog.exportForShare writes for the Лог screen's
+         "Поделиться" (context.cacheDir/logs) - shared as an attachment, since
+         a day of log is far past what fits in share-intent text. -->
+    <cache-path name="logs" path="logs/" />
 </paths>

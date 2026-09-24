@@ -5,6 +5,8 @@ import (
 	"io"
 	"net"
 	"sync"
+	"sync/atomic"
+	"time"
 
 	"phantom/internal/logx"
 	"phantom/internal/protocol"
@@ -20,6 +22,61 @@ type Multiplexer struct {
 	writeCh      chan *writeRequest
 	acceptCh     chan *Stream
 	closeOnce    sync.Once
+
+	// Liveness bookkeeping for diagnostics (see Activity). Unix nanos, so
+	// the read and write loops can update them without taking m.mu.
+	created time.Time
+	lastRx  atomic.Int64
+	lastTx  atomic.Int64
+	bytesRx atomic.Int64
+	bytesTx atomic.Int64
+
+	// Why the connection ended, if it ended on its own rather than by Close:
+	// the read error was otherwise only logged at Debug, so "the tunnel died"
+	// carried no cause at all in a bug report.
+	errMu    sync.Mutex
+	closeErr error
+}
+
+// Activity is a snapshot of when the connection last moved data each way.
+type Activity struct {
+	Created, LastRx, LastTx time.Time
+	BytesRx, BytesTx        int64
+}
+
+// Activity reports the connection's traffic timestamps and totals. The one
+// question it exists to answer: has the server gone silent while we're still
+// sending - a connection that looks open but has stopped delivering anything,
+// which no error ever reports.
+func (m *Multiplexer) Activity() Activity {
+	return Activity{
+		Created: m.created,
+		LastRx:  time.Unix(0, m.lastRx.Load()),
+		LastTx:  time.Unix(0, m.lastTx.Load()),
+		BytesRx: m.bytesRx.Load(),
+		BytesTx: m.bytesTx.Load(),
+	}
+}
+
+// Err is the read error that ended the connection, or nil if it is still up
+// or was closed deliberately.
+func (m *Multiplexer) Err() error {
+	m.errMu.Lock()
+	defer m.errMu.Unlock()
+	return m.closeErr
+}
+
+func (m *Multiplexer) setErr(err error) {
+	select {
+	case <-m.closed:
+		return // closed on purpose; the resulting read error isn't the cause
+	default:
+	}
+	m.errMu.Lock()
+	if m.closeErr == nil {
+		m.closeErr = err
+	}
+	m.errMu.Unlock()
 }
 
 type writeRequest struct {
@@ -42,7 +99,12 @@ func NewMultiplexer(conn net.Conn, crypto *protocol.SessionCrypto) *Multiplexer 
 		closed:       make(chan struct{}),
 		writeCh:      make(chan *writeRequest, 256),
 		acceptCh:     make(chan *Stream, 64),
+		created:      time.Now(),
 	}
+	// Counted from creation: a connection that never receives anything shows
+	// as silent since it was opened, not since 1970.
+	m.lastRx.Store(m.created.UnixNano())
+	m.lastTx.Store(m.created.UnixNano())
 
 	go m.readLoop()
 	go m.writeLoop()
@@ -180,6 +242,7 @@ func (m *Multiplexer) readLoop() {
 
 		headerBuf := make([]byte, protocol.FrameHeaderSize)
 		if _, err := io.ReadFull(m.conn, headerBuf); err != nil {
+			m.setErr(err)
 			if !errors.Is(err, io.EOF) {
 				// Debug: an ordinary disconnect (reset, interface gone, pool
 				// recycle) lands here, so at Info this was one line per closed
@@ -195,6 +258,7 @@ func (m *Multiplexer) readLoop() {
 		if payloadLen > 0 {
 			payloadBuf := make([]byte, payloadLen)
 			if _, err := io.ReadFull(m.conn, payloadBuf); err != nil {
+				m.setErr(err)
 				logx.Debugf("[mux] read payload error: %v", err)
 				return
 			}
@@ -202,6 +266,8 @@ func (m *Multiplexer) readLoop() {
 		} else {
 			fullFrame = headerBuf
 		}
+		m.lastRx.Store(time.Now().UnixNano())
+		m.bytesRx.Add(int64(len(fullFrame)))
 
 		frame, err := protocol.Decode(fullFrame)
 		if err != nil {
@@ -336,6 +402,10 @@ func (m *Multiplexer) writeLoop() {
 			}
 
 			_, err = m.conn.Write(data)
+			if err == nil {
+				m.lastTx.Store(time.Now().UnixNano())
+				m.bytesTx.Add(int64(len(data)))
+			}
 			req.errCh <- err
 
 		case <-m.closed:

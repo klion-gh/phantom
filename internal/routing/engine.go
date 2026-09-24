@@ -4,6 +4,9 @@ import (
 	"net"
 	"strings"
 	"sync"
+	"sync/atomic"
+
+	"phantom/internal/diag"
 )
 
 // Mode is how the client decides what belongs in the tunnel.
@@ -29,6 +32,13 @@ type Engine struct {
 	mu      sync.RWMutex
 	mode    Mode
 	domains *DomainSet
+
+	// Why each flow went where it went, since the last DiagFields. The
+	// "internet went down in smart mode" question is mostly answered by
+	// these: listed sites should be a small share, and anything counted
+	// under emptyList means smart mode was tunnelling everything.
+	whyListed, whyDNS, whyEmptyList, whyAllMode, whyBadTarget, whyDirect atomic.Int64
+	sites                                                                atomic.Int64
 }
 
 func NewEngine() *Engine {
@@ -41,8 +51,12 @@ func (e *Engine) Domains() *DomainSet { return e.domains }
 // SetMode switches routing strategy.
 func (e *Engine) SetMode(m Mode) {
 	e.mu.Lock()
+	changed := e.mode != m
 	e.mode = m
 	e.mu.Unlock()
+	if changed {
+		diag.Event(diag.CatRoute, "mode", "mode", m, "sites", e.sites.Load())
+	}
 }
 
 // Mode returns the current strategy.
@@ -67,7 +81,25 @@ func (e *Engine) Mode() Mode {
 // names not in the list yet, or CDN addresses picked up after this resolves.
 func (e *Engine) SetSites(entries []string) {
 	e.domains.Set(entries)
+	e.sites.Store(int64(len(entries)))
+	diag.Event(diag.CatRoute, "sites", "count", len(entries), "mode", e.Mode(), "empty", e.domains.Empty())
 	seedDomainIPs(e.domains, entries)
+}
+
+// DiagFields returns (and resets) the per-flow decision counts, plus the
+// engine's current state, as key/value pairs for a periodic summary line.
+func (e *Engine) DiagFields() []any {
+	return []any{
+		"mode", e.Mode(),
+		"sites", e.sites.Load(),
+		"learnedIPs", e.domains.LearnedCount(),
+		"whyListed", e.whyListed.Swap(0),
+		"whyDNS", e.whyDNS.Swap(0),
+		"whyEmptyList", e.whyEmptyList.Swap(0),
+		"whyAllMode", e.whyAllMode.Swap(0),
+		"whyBadTarget", e.whyBadTarget.Swap(0),
+		"whyDirect", e.whyDirect.Swap(0),
+	}
 }
 
 // seedDomainIPs resolves each name-based entry once, immediately, and feeds
@@ -89,6 +121,9 @@ func seedDomainIPs(set *DomainSet, entries []string) {
 		go func(host string) {
 			ips, err := net.LookupIP(host)
 			if err != nil || len(ips) == 0 {
+				// A listed site's own name - the user typed it, so logging it
+				// reveals nothing they didn't choose to put in the list.
+				diag.Event(diag.CatRoute, "seedResolveFail", "site", host, "err", err)
 				return
 			}
 			set.Learn(host, ips)
@@ -103,6 +138,7 @@ func (e *Engine) ShouldTunnel(network, target string) bool {
 	e.mu.RUnlock()
 
 	if mode != ModeSmart {
+		e.whyAllMode.Add(1)
 		return true
 	}
 	// An empty list in smart mode would send *everything* direct - i.e.
@@ -110,11 +146,13 @@ func (e *Engine) ShouldTunnel(network, target string) bool {
 	// reading of "I turned a VPN on": the UI is what stops the user getting
 	// here with nothing listed, and this is the backstop if they do.
 	if e.domains.Empty() {
+		e.whyEmptyList.Add(1)
 		return true
 	}
 
 	host, port, err := net.SplitHostPort(target)
 	if err != nil {
+		e.whyBadTarget.Add(1)
 		return true
 	}
 	// DNS always rides the tunnel in smart mode, whatever the site list says.
@@ -123,7 +161,13 @@ func (e *Engine) ShouldTunnel(network, target string) bool {
 	// learns which addresses belong to the listed sites, so sending it direct
 	// would break the matching that everything else here depends on.
 	if port == "53" {
+		e.whyDNS.Add(1)
 		return true
 	}
-	return e.domains.Match(host)
+	if e.domains.Match(host) {
+		e.whyListed.Add(1)
+		return true
+	}
+	e.whyDirect.Add(1)
+	return false
 }

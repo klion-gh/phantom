@@ -3,8 +3,11 @@ package routing
 import (
 	"fmt"
 	"sort"
+	"strings"
 	"sync"
 	"time"
+
+	"phantom/internal/diag"
 )
 
 // Tuning for the "pick the config that actually works" logic. These are the
@@ -271,23 +274,60 @@ func (s *Selector) Probe() {
 	wg.Wait()
 
 	s.mu.Lock()
+	alive := 0
+	var probeLog strings.Builder
 	for i, st := range states {
 		st.probed = true
+		if i > 0 {
+			probeLog.WriteByte(',')
+		}
 		if results[i].err != nil {
 			st.alive = false
 			st.fails++
+			fmt.Fprintf(&probeLog, "%s:dead%d", shortID(st.ID), st.fails)
 			continue
 		}
 		st.alive = true
 		st.fails = 0
 		st.latencyMs = results[i].latency
+		alive++
+		fmt.Fprintf(&probeLog, "%s:%dms", shortID(st.ID), st.latencyMs)
 	}
+	previous := s.currentID
 	choice, changed := s.evaluateLocked()
 	s.mu.Unlock()
+
+	// One line per round: which configs answered, how fast, and what the
+	// selector made of it. "alive=0" is its own story - every candidate
+	// unreachable, the selector holding on to a dead one because there is
+	// nothing better to move to.
+	diag.Event(diag.CatRoute, "probeRound",
+		"candidates", len(states), "alive", alive,
+		"current", shortID(previous), "switchTo", switchTarget(changed, choice),
+		"results", probeLog.String())
 
 	if changed && s.onSwitch != nil {
 		s.onSwitch(choice)
 	}
+}
+
+// shortID keeps config ids readable in a log line without printing whole
+// UUIDs - the first 8 characters are unique enough to tell configs apart.
+func shortID(id string) string {
+	if id == "" {
+		return "none"
+	}
+	if len(id) > 8 {
+		return id[:8]
+	}
+	return id
+}
+
+func switchTarget(changed bool, c Candidate) string {
+	if !changed {
+		return "none"
+	}
+	return shortID(c.ID)
 }
 
 // evaluateLocked applies the switching policy. Caller holds s.mu.

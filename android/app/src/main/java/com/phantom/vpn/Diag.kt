@@ -49,6 +49,9 @@ object Diag {
             }
         }
         Log.d(TAG, line)
+        // Into the shareable log too: on a phone with no adb, logcat alone
+        // is invisible, and these are exactly the lines a bug report needs.
+        FileLog.d(line)
     }
 
     /**
