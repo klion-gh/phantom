@@ -38,6 +38,14 @@ func PopularResources() []PopularResource {
 		res("Snapchat", "snapchat.com", "sc-cdn.net"),
 		res("LinkedIn", "linkedin.com", "licdn.com"),
 		res("Threads", "threads.net", "threads.com"),
+		// OpenAI and Google both refuse these to Russian IPs themselves, so
+		// every host the app talks to has to come from the tunnel: the page,
+		// its static assets (oaistatic) and uploaded/generated files
+		// (oaiusercontent) for ChatGPT; the web app, AI Studio and the API
+		// behind them for Gemini. Only Gemini's own hosts - not google.com,
+		// which would drag every Google service through the tunnel.
+		res("ChatGPT", "chatgpt.com", "openai.com", "oaistatic.com", "oaiusercontent.com"),
+		res("Gemini", "gemini.google.com", "bard.google.com", "aistudio.google.com", "generativelanguage.googleapis.com"),
 		res("YouTube", "youtube.com", "googlevideo.com", "ytimg.com", "youtu.be"),
 		res("Netflix", "netflix.com", "nflxvideo.net", "nflximg.net", "nflxext.com"),
 		res("Spotify", "spotify.com", "scdn.co", "spotifycdn.com"),
@@ -57,13 +65,7 @@ func PopularResources() []PopularResource {
 		res("Zoom", "zoom.us", "zoom.com"),
 		res("Microsoft", "microsoft.com", "live.com", "office.com"),
 		res("Cloudflare", "cloudflare.com"),
-		res("GoDaddy", "godaddy.com"),
-		res("Intel", "intel.com"),
 		res("Booking.com", "booking.com", "bstatic.com"),
-		res("Airbnb", "airbnb.com", "muscache.com"),
-		res("Tinder", "tinder.com", "gotinder.com"),
-		res("Bumble", "bumble.com"),
-		res("Badoo", "badoo.com"),
 		res("eBay", "ebay.com", "ebayimg.com"),
 	}
 }

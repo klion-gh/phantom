@@ -39,6 +39,9 @@ class PhantomVpnService : VpnService() {
         const val ACTION_PROXY_DISCONNECT = "com.phantom.vpn.PROXY_DISCONNECT"
         const val EXTRA_CONFIG_YAML = "config_yaml"
         const val EXTRA_CONFIG_ID = "config_id"
+        // Marks a disconnect that came from the notification's own button - see
+        // ACTION_DISCONNECT's handling for why that one has to do more.
+        const val EXTRA_FROM_NOTIFICATION = "from_notification"
 
         private const val CHANNEL_ID = "phantom_vpn"
         private const val NOTIFICATION_ID = 1
@@ -170,6 +173,9 @@ class PhantomVpnService : VpnService() {
         FileLog.i("onStartCommand action=${intent?.action}")
         when (intent?.action) {
             ACTION_DISCONNECT -> {
+                if (intent.getBooleanExtra(EXTRA_FROM_NOTIFICATION, false)) {
+                    releaseDrivingModeFromNotification()
+                }
                 disconnect()
                 return START_NOT_STICKY
             }
@@ -235,6 +241,34 @@ class PhantomVpnService : VpnService() {
             }
         }
         return START_STICKY
+    }
+
+    /**
+     * "Отключить" in the notification, while Умный VPN or "Выбирать лучшую" is
+     * what holds the tunnel up, has to switch that mode off - the same thing
+     * the app's own toggle does before disconnecting. Tearing down only the
+     * tunnel left the mode flag on: the app's toggle kept showing it enabled,
+     * and the selector (still running with that mode's candidates) could put
+     * the tunnel straight back up on its next pick.
+     *
+     * Only for the notification's button: the app's own disconnects already
+     * set the flags themselves before calling in, and a manually-connected
+     * config's disconnect must not touch a mode that wasn't driving it.
+     */
+    private fun releaseDrivingModeFromNotification() {
+        val released = when {
+            RoutingStore.autoEnabled -> {
+                RoutingStore.setAutoEnabled(this, false)
+                "auto"
+            }
+            RoutingStore.smartEnabled -> {
+                RoutingStore.setSmartEnabled(this, false)
+                "smart"
+            }
+            else -> return
+        }
+        RoutingController.sync(this)
+        Diag.log(Diag.Cat.VPN, "notificationDisconnect", "modeTurnedOff" to released)
     }
 
     // onResult, when given, means a caller has its own retry plan and is
@@ -839,7 +873,10 @@ class PhantomVpnService : VpnService() {
     }
 
     private fun disconnectPendingIntent(): PendingIntent {
-        val intent = Intent(this, PhantomVpnService::class.java).apply { action = ACTION_DISCONNECT }
+        val intent = Intent(this, PhantomVpnService::class.java).apply {
+            action = ACTION_DISCONNECT
+            putExtra(EXTRA_FROM_NOTIFICATION, true)
+        }
         return PendingIntent.getService(this, 2, intent, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
     }
 

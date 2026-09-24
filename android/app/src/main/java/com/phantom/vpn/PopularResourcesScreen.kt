@@ -93,7 +93,11 @@ fun PopularResourcesScreen(
         }
 
         LazyVerticalGrid(
-            columns = GridCells.Adaptive(minSize = 104.dp),
+            // Exactly three across, whatever the screen: an adaptive minimum
+            // (104dp) came out at only two on narrower phones once the side
+            // padding was taken off. A square tile of ~100dp still fits the 36dp
+            // logo and a two-line name.
+            columns = GridCells.Fixed(3),
             contentPadding = PaddingValues(start = 20.dp, top = 14.dp, end = 20.dp, bottom = 32.dp),
             horizontalArrangement = Arrangement.spacedBy(10.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp),
