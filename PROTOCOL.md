@@ -561,6 +561,19 @@ splicing bytes between the gVisor endpoint and the Phantom stream in both direct
 Only TCP and UDP are registered — **no ICMP**, so ping-through-the-tunnel doesn't work
 end-to-end on either app (see §12).
 
+**Nothing on the UDP forwarder's path may wait on the network.** gVisor calls the TCP
+forwarder's handler in its own goroutine but the UDP forwarder's *inline*, on the single
+goroutine that processes every packet the device sends. `handleUDP` therefore only sets up
+the local end and returns; opening the remote (a tunnel stream, a direct dial, a session
+refresh) happens on the flow's own goroutine. It used to open the stream inline, and opening
+one waits for the multiplexer to write its OPEN frame - so while the server was silent (a
+blackholed connection), one new UDP flow through the tunnel froze *all* of the device's
+packet processing, direct traffic included, and made `Stop` hang behind it. That was the
+"smart mode took the whole internet down" report (§9.3); `TestSilentServerDoesNotFreezePacketProcessing`
+reproduces it with a device-side stack wired to the tunnel. `Stop` also closes the session
+before destroying the netstack, so anything still waiting on the session is released rather
+than holding teardown up.
+
 The only thing that differs per platform is how raw IP packets get into and out of that
 `LinkEndpoint`:
 

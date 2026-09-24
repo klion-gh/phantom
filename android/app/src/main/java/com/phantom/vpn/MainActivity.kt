@@ -724,16 +724,17 @@ private fun MainScreen(
             Spacer(modifier = Modifier.weight(1f))
             if (hasUpdate) {
                 IconButton(onClick = onUpdateClick, enabled = !isUpdating) {
-                    Text(
-                        "⬇",
-                        fontSize = 20.sp,
-                        // Accent rather than Success when what's on offer is a
-                        // prerelease: a test build shouldn't present itself in
-                        // the same "all good, take this" green as a stable one.
-                        color = when {
+                    // Drawn like the nav bar's icons: the brand gradient while
+                    // an update is on offer (the nav bar's "selected" look),
+                    // muted while it downloads. A prerelease gets the flat
+                    // accent instead - a test build shouldn't present itself
+                    // exactly like a stable one.
+                    NavStyleIcon(
+                        R.drawable.ic_nav_update,
+                        tint = when {
                             isUpdating -> TextSecondary
                             updateIsBeta -> Accent
-                            else -> Success
+                            else -> null
                         },
                     )
                 }
@@ -886,27 +887,37 @@ private fun NavBarItem(
     onClick: () -> Unit,
 ) {
     IconButton(onClick = onClick) {
-        if (selected) {
-            val gradient = Brush.linearGradient(BrandGradient)
-            Image(
-                painter = painterResource(iconRes),
-                contentDescription = null,
-                modifier = Modifier
-                    .size(26.dp)
-                    .graphicsLayer(alpha = 0.99f)
-                    .drawWithContent {
-                        drawContent()
-                        drawRect(brush = gradient, blendMode = BlendMode.SrcAtop)
-                    },
-            )
-        } else {
-            Image(
-                painter = painterResource(iconRes),
-                contentDescription = null,
-                colorFilter = ColorFilter.tint(TextSecondary),
-                modifier = Modifier.size(26.dp),
-            )
-        }
+        NavStyleIcon(iconRes, tint = if (selected) null else TextSecondary)
+    }
+}
+
+/**
+ * The bottom nav bar's icon treatment, shared with the header's update button
+ * so the two read as one icon set: a solid mask filled with the brand gradient
+ * when it's the "active" thing ([tint] null), or flat-tinted otherwise.
+ */
+@Composable
+private fun NavStyleIcon(iconRes: Int, tint: Color?) {
+    if (tint == null) {
+        val gradient = Brush.linearGradient(BrandGradient)
+        Image(
+            painter = painterResource(iconRes),
+            contentDescription = null,
+            modifier = Modifier
+                .size(26.dp)
+                .graphicsLayer(alpha = 0.99f)
+                .drawWithContent {
+                    drawContent()
+                    drawRect(brush = gradient, blendMode = BlendMode.SrcAtop)
+                },
+        )
+    } else {
+        Image(
+            painter = painterResource(iconRes),
+            contentDescription = null,
+            colorFilter = ColorFilter.tint(tint),
+            modifier = Modifier.size(26.dp),
+        )
     }
 }
 

@@ -222,10 +222,20 @@ html, body {
 }
 .icon-btn-gear:hover::before { background-color: var(--text-primary); }
 
-.update-btn {
-    color: var(--success);
+/* The update button's icon is drawn like the bottom nav bar's (see .nav-icon):
+   filled with the brand gradient while an update is on offer - the nav bar's
+   "selected" look - and muted while it's downloading (the button is disabled
+   then). */
+.update-btn { display: flex; align-items: center; justify-content: center; }
+.update-btn .nav-icon {
+    background-color: transparent;
+    background-image: linear-gradient(135deg, var(--primary), var(--accent));
 }
-.update-btn:hover { background: color-mix(in srgb, var(--success) 15%, transparent); color: var(--success); }
+.update-btn:disabled { cursor: default; }
+.update-btn:disabled .nav-icon {
+    background-image: none;
+    background-color: var(--text-secondary);
+}
 
 /* --- Update download progress, shown under the header/logo while an update
    is downloading (see 'update:progress' in main.js) --- */
@@ -1098,6 +1108,10 @@ textarea::placeholder { color: var(--text-muted); }
 .nav-icon-globe {
     -webkit-mask-image: url('./assets/images/nav-globe.png');
     mask-image: url('./assets/images/nav-globe.png');
+}
+.nav-icon-update {
+    -webkit-mask-image: url('./assets/images/nav-update.png');
+    mask-image: url('./assets/images/nav-update.png');
 }
 .nav-item.active .nav-icon {
     background-color: transparent;

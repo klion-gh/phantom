@@ -275,6 +275,20 @@ func (t *Tunnel) handleTCP(r *tcp.ForwarderRequest) {
 	t.splice(local, remote)
 }
 
+// handleUDP runs *inline* on the packet-processing path - unlike TCP, gVisor's
+// UDP forwarder calls it synchronously, on the one goroutine that handles
+// every packet the device sends - so it must never wait on the network. It
+// only sets up the local end and returns; reaching the remote happens on the
+// flow's own goroutine.
+//
+// It used to open the remote right here. Opening a tunnel stream waits for the
+// multiplexer to write its OPEN frame, and with the server gone silent that
+// write never completes - so one new UDP flow through the tunnel (QUIC to a
+// listed site, a Telegram call) stopped the device's packet processing
+// outright, direct traffic included, for as long as the server stayed silent:
+// "Умный VPN took the whole internet down". It also deadlocked Stop, whose
+// netstack teardown waited on that same stuck handler.
+// TestSilentServerDoesNotFreezePacketProcessing reproduces it.
 func (t *Tunnel) handleUDP(r *udp.ForwarderRequest) bool {
 	id := r.ID()
 	target := endpointTarget(id)
@@ -296,13 +310,16 @@ func (t *Tunnel) handleUDP(r *udp.ForwarderRequest) bool {
 		}
 	}
 
-	remote := t.openRemote("udp", target)
-	if remote == nil {
-		local.Close()
-		return false
-	}
-
-	go t.spliceUDP(local, remote)
+	go func() {
+		remote := t.openRemote("udp", target)
+		if remote == nil {
+			// Nothing to relay to: the datagrams already queued on local are
+			// dropped, the same as a network that can't reach the target.
+			local.Close()
+			return
+		}
+		t.spliceUDP(local, remote)
+	}()
 	return true
 }
 
@@ -483,20 +500,41 @@ func addressString(a tcpip.Address) string {
 // NOT touch the link endpoint or whatever OS-specific packet source feeds
 // it - that's the caller's responsibility (closing a TUN device, restoring
 // routing tables, etc).
+//
+// The session is closed *before* the netstack is destroyed. Destroy waits for
+// packet processing to finish, and anything in it still waiting on the
+// session - the way handleUDP once waited on a silent server, which hung Stop
+// in the field - is released by the close rather than left holding Destroy up.
+// handleUDP no longer waits on the network at all; this order keeps any path
+// that ever does again from wedging Stop with it.
 func (t *Tunnel) Stop() {
+	start := time.Now()
 	t.stopOnce.Do(func() {
 		if t.stopDiag != nil {
 			close(t.stopDiag)
 		}
 	})
-	if t.netstack != nil {
-		t.netstack.Destroy()
-	}
 	t.sessionMu.Lock()
 	session := t.session
+	// No redialing a replacement for a tunnel that is going away: a flow
+	// arriving between here and Destroy would otherwise open a fresh
+	// connection to the server just to have it torn down.
+	t.refreshSession = nil
 	t.sessionMu.Unlock()
 	if session != nil {
 		session.Close()
+	}
+	if t.netstack != nil {
+		// Should be quick now; if it ever isn't, the log says so and when,
+		// rather than the stop just silently never finishing.
+		slow := time.AfterFunc(3*time.Second, func() {
+			diag.Event(diag.CatTunnel, "netstackStopSlow", "waitingMs", time.Since(start))
+		})
+		t.netstack.Destroy()
+		slow.Stop()
+	}
+	if elapsed := time.Since(start); elapsed > time.Second {
+		diag.Event(diag.CatTunnel, "tunnelStopped", "ms", elapsed)
 	}
 }
 
