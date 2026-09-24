@@ -19,7 +19,9 @@ import kotlinx.coroutines.runBlocking
 import mobile.Mobile
 import mobile.Protector
 import mobile.Tunnel
+import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
 
 class PhantomVpnService : VpnService() {
 
@@ -46,9 +48,14 @@ class PhantomVpnService : VpnService() {
         private const val CHANNEL_ID = "phantom_vpn"
         private const val NOTIFICATION_ID = 1
         private const val MTU = 1500
-        // How long disconnect() waits for the graceful tunnel.stop() path before
-        // forcing the interface down itself - see forceDisconnect().
-        private const val DISCONNECT_FORCE_TIMEOUT_MS = 3000L
+        // How long a tunnel gets to stop before it's abandoned and its
+        // interface closed anyway - see stopTunnelBounded().
+        private const val TUNNEL_STOP_DEADLINE_MS = 2500L
+        // How long disconnect() waits for its whole graceful path before
+        // forcing the interface down itself - see forceDisconnect(). Longer
+        // than TUNNEL_STOP_DEADLINE_MS, which that path is already bounded by;
+        // this is the net for anything else that ever jams the executor.
+        private const val DISCONNECT_FORCE_TIMEOUT_MS = 5000L
         // How long network events settle before the tunnel acts on them - a
         // real Wi-Fi<->cellular handover fires a burst of them.
         private const val NETWORK_SETTLE_MS = 1500L
@@ -306,11 +313,7 @@ class PhantomVpnService : VpnService() {
             // reuse the old one) is what resets its "which network did we just dial on"
             // baseline after a reconnect, so it doesn't immediately re-trigger itself.
             unregisterNetworkCallback()
-            try {
-                tunnel?.stop()
-            } catch (e: Throwable) {
-                FileLog.e("tunnel stop error (switching config)", e)
-            }
+            stopTunnelBounded(tunnel, "switching config")
             tunnel = null
             Mobile.setPingProtector(null)
             try {
@@ -727,14 +730,44 @@ class PhantomVpnService : VpnService() {
     }
 
     /**
-     * Occasionally the Go core's tunnel.stop() below wedges on a stuck socket and
-     * never returns. Since it runs on [executor] - a single-thread executor - that
-     * leaves the thread jammed forever, and every future connect()/disconnect()
-     * call (which all go through the same executor) silently queues up behind it
-     * and never runs: from the user's side, the app just stops responding to the
-     * disconnect toggle, and the only fix used to be force-killing it. The
-     * [DISCONNECT_FORCE_TIMEOUT_MS] watchdog below is the fix - see
-     * forceDisconnect().
+     * Stops [old] on a thread of its own and waits for it at most
+     * [TUNNEL_STOP_DEADLINE_MS]; past that it's abandoned, stop call and all,
+     * and the caller carries on and closes the interface.
+     *
+     * A config switch used to call tunnel.stop() directly, with no deadline,
+     * and only close the old interface once it returned. When it wedged, the
+     * VPN interface stayed up in front of a tunnel that could no longer carry
+     * anything, and the whole device was offline until the user turned smart
+     * mode off - disconnect() had a watchdog, a switch didn't. The Go side
+     * bounds its own teardown now too; this is here so the interface comes
+     * down on time even if something there ever wedges again.
+     */
+    private fun stopTunnelBounded(old: Tunnel?, reason: String) {
+        if (old == null) return
+        val started = System.currentTimeMillis()
+        val done = CountDownLatch(1)
+        Thread({
+            try {
+                old.stop()
+            } catch (e: Throwable) {
+                FileLog.e("tunnel stop error ($reason)", e)
+            }
+            done.countDown()
+        }, "phantom-tunnel-stop").apply { isDaemon = true }.start()
+        if (!done.await(TUNNEL_STOP_DEADLINE_MS, TimeUnit.MILLISECONDS)) {
+            Diag.log(Diag.Cat.VPN, "tunnelStopAbandoned", "reason" to reason, "waitedMs" to (System.currentTimeMillis() - started))
+        }
+    }
+
+    /**
+     * The Go core's tunnel.stop() used to wedge and never return. It ran on
+     * [executor] - a single-thread executor - so that jammed the thread forever,
+     * and every future connect()/disconnect() call (which all go through the
+     * same executor) silently queued up behind it: from the user's side, the
+     * app just stopped responding to the disconnect toggle. The stop itself is
+     * bounded now (stopTunnelBounded); the [DISCONNECT_FORCE_TIMEOUT_MS]
+     * watchdog below stays as the net for anything else that ever jams the
+     * executor - see forceDisconnect().
      */
     private fun disconnect() {
         val forceRunnable = Runnable { forceDisconnect() }
@@ -745,11 +778,7 @@ class PhantomVpnService : VpnService() {
             unregisterNetworkCallback()
             activeConfigId = null
             activeConfigYaml = null
-            try {
-                tunnel?.stop()
-            } catch (e: Throwable) {
-                FileLog.e("tunnel stop error", e)
-            }
+            stopTunnelBounded(tunnel, "disconnect")
             tunnel = null
             Mobile.setPingProtector(null)
 
@@ -773,13 +802,14 @@ class PhantomVpnService : VpnService() {
     /**
      * Escalation path for [disconnect]: fires only if the graceful teardown on
      * [executor] hasn't finished within [DISCONNECT_FORCE_TIMEOUT_MS], which means
-     * that thread is now permanently stuck inside tunnel.stop(). Runs on the main
+     * that thread is stuck - behind some earlier task, since its own tunnel stop
+     * is bounded well within that. Runs on the main
      * thread (this is a Handler(Looper.getMainLooper()) callback), so it doesn't
      * wait on the wedged executor at all: it closes the OS-level tun interface
      * directly - the part that actually matters to the user - resets visible
      * state, and swaps in a fresh executor so connect()/disconnect() work again
-     * immediately. The old executor thread, and whatever tunnel.stop() call it's
-     * stuck in, is simply abandoned.
+     * immediately. The old executor thread, and whatever it's stuck in, is
+     * simply abandoned.
      */
     private fun forceDisconnect() {
         FileLog.e("disconnect did not finish within ${DISCONNECT_FORCE_TIMEOUT_MS}ms - forcing it")

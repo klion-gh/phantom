@@ -42,6 +42,13 @@ const (
 	// to hit but the real-world difference is tiny).
 	betterRatio    = 2.0
 	betterMarginMs = 150
+
+	// ...and do it in this many probe rounds in a row (a minute and a half
+	// at probeInterval). One round proves nothing: a field log had the
+	// current config read 474ms against the other's 232ms once, after half
+	// an hour of the two being level - and the switch that followed tore
+	// down every connection on the device for a latency blip.
+	betterRounds = 3
 )
 
 // Candidate is one of the user's saved configs, as offered to the selector.
@@ -114,6 +121,11 @@ type Selector struct {
 	states     []*candidateState
 	currentID  string
 	lastSwitch time.Time
+
+	// The candidate that has beaten the current one by the switching
+	// thresholds, and in how many consecutive rounds - see betterRounds.
+	leaderID     string
+	leaderRounds int
 
 	probe    ProbeFunc
 	onSwitch func(Candidate)
@@ -295,6 +307,10 @@ func (s *Selector) Probe() {
 	}
 	previous := s.currentID
 	choice, changed := s.evaluateLocked()
+	lead := "none"
+	if s.leaderRounds > 0 {
+		lead = fmt.Sprintf("%s:%d/%d", shortID(s.leaderID), s.leaderRounds, betterRounds)
+	}
 	s.mu.Unlock()
 
 	// One line per round: which configs answered, how fast, and what the
@@ -304,7 +320,7 @@ func (s *Selector) Probe() {
 	diag.Event(diag.CatRoute, "probeRound",
 		"candidates", len(states), "alive", alive,
 		"current", shortID(previous), "switchTo", switchTarget(changed, choice),
-		"results", probeLog.String())
+		"lead", lead, "results", probeLog.String())
 
 	if changed && s.onSwitch != nil {
 		s.onSwitch(choice)
@@ -347,6 +363,7 @@ func (s *Selector) evaluateLocked() (Candidate, bool) {
 	// Current one is failing: move as soon as it's confirmed dead, ignoring
 	// the dwell time - the user has no working connection to protect.
 	if !current.alive {
+		s.leaderID, s.leaderRounds = "", 0
 		if current.fails >= failsBeforeDrop && best.ID != current.ID {
 			return s.selectLocked(best), true
 		}
@@ -354,19 +371,27 @@ func (s *Selector) evaluateLocked() (Candidate, bool) {
 	}
 
 	// Current one works. Only a big, sustained win moves us.
-	if best.ID == current.ID || s.now().Sub(s.lastSwitch) < minDwell {
+	if best.ID == current.ID || s.now().Sub(s.lastSwitch) < minDwell ||
+		float64(current.latencyMs) <= betterRatio*float64(best.latencyMs) ||
+		current.latencyMs-best.latencyMs < betterMarginMs {
+		s.leaderID, s.leaderRounds = "", 0
 		return Candidate{}, false
 	}
-	if float64(current.latencyMs) > betterRatio*float64(best.latencyMs) &&
-		current.latencyMs-best.latencyMs >= betterMarginMs {
-		return s.selectLocked(best), true
+	if s.leaderID == best.ID {
+		s.leaderRounds++
+	} else {
+		s.leaderID, s.leaderRounds = best.ID, 1
 	}
-	return Candidate{}, false
+	if s.leaderRounds < betterRounds {
+		return Candidate{}, false
+	}
+	return s.selectLocked(best), true
 }
 
 func (s *Selector) selectLocked(st *candidateState) Candidate {
 	s.currentID = st.ID
 	s.lastSwitch = s.now()
+	s.leaderID, s.leaderRounds = "", 0
 	return st.Candidate
 }
 

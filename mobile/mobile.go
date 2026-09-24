@@ -328,15 +328,20 @@ func (t *Tunnel) SetDirectDNS(servers string) {
 
 // Stop tears down the tunnel: the netstack, the Phantom session/pool, and
 // any in-flight splices.
+//
+// The pool is closed first. Closing the session first used to look to the
+// pool like its connection had died, so it dialed the server again - a
+// fresh TLS handshake in the middle of a disconnect, for a tunnel that was
+// going away.
 func (t *Tunnel) Stop() {
 	if t.cancel != nil {
 		t.cancel()
 	}
-	if t.inner != nil {
-		t.inner.Stop()
-	}
 	if t.pool != nil {
 		t.pool.Close()
+	}
+	if t.inner != nil {
+		t.inner.Stop()
 	}
 }
 

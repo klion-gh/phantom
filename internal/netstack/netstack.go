@@ -99,7 +99,32 @@ type Tunnel struct {
 	directDNS string
 	stopDiag  chan struct{}
 	stopOnce  sync.Once
+
+	// admitMu/stopping close the door on new flows before Stop tears the
+	// netstack down: a forwarder handler checks stopping and creates its
+	// endpoint under the read lock, so once Stop has set it (under the write
+	// lock) no endpoint can appear that Destroy's abort sweep would miss.
+	admitMu  sync.RWMutex
+	stopping bool
 }
+
+// admit creates a new flow's endpoint - unless the tunnel is stopping, in
+// which case it reports false and the flow is refused. See admitMu.
+func (t *Tunnel) admit(create func() bool) bool {
+	t.admitMu.RLock()
+	defer t.admitMu.RUnlock()
+	if t.stopping {
+		return false
+	}
+	return create()
+}
+
+// stopAbandonAfter bounds how long Stop waits for the netstack to finish
+// tearing down. Past it the stack is left to finish (or not) on its own:
+// a few leaked goroutines are a far smaller cost than a stop that never
+// returns, which keeps the device's VPN interface up in front of a stack
+// that can no longer carry anything.
+var stopAbandonAfter = 2 * time.Second
 
 // SetRouting installs the destination-based routing decision and the direct
 // dialer it needs - see RouterFunc and DirectDialer. Passing a nil router
@@ -257,8 +282,13 @@ func (t *Tunnel) handleTCP(r *tcp.ForwarderRequest) {
 	}
 
 	var wq waiter.Queue
-	ep, err := r.CreateEndpoint(&wq)
-	if err != nil {
+	var ep tcpip.Endpoint
+	admitted := t.admit(func() bool {
+		var err tcpip.Error
+		ep, err = r.CreateEndpoint(&wq)
+		return err == nil
+	})
+	if !admitted {
 		r.Complete(true)
 		return
 	}
@@ -297,8 +327,12 @@ func (t *Tunnel) handleUDP(r *udp.ForwarderRequest) bool {
 	}
 
 	var wq waiter.Queue
-	ep, err := r.CreateEndpoint(&wq)
-	if err != nil {
+	var ep tcpip.Endpoint
+	if !t.admit(func() bool {
+		var err tcpip.Error
+		ep, err = r.CreateEndpoint(&wq)
+		return err == nil
+	}) {
 		return false
 	}
 	local := gonet.NewUDPConn(&wq, ep)
@@ -501,12 +535,19 @@ func addressString(a tcpip.Address) string {
 // it - that's the caller's responsibility (closing a TUN device, restoring
 // routing tables, etc).
 //
-// The session is closed *before* the netstack is destroyed. Destroy waits for
-// packet processing to finish, and anything in it still waiting on the
-// session - the way handleUDP once waited on a silent server, which hung Stop
-// in the field - is released by the close rather than left holding Destroy up.
-// handleUDP no longer waits on the network at all; this order keeps any path
-// that ever does again from wedging Stop with it.
+// New flows are refused first (see admitMu), then the session is closed, then
+// the netstack destroyed. Destroy aborts the connections that exist when it
+// starts and then waits for every connection to finish closing; one accepted
+// after that sweep - the device keeps opening them the whole time - was
+// closed gracefully by a stack whose TCP processing had already shut down,
+// never finished closing, and hung Stop forever. That is what took the whole
+// device offline on a config switch in the field, and what
+// TestStopReturnsWhileTheDeviceKeepsOpeningConnections reproduces.
+//
+// The session is closed before Destroy so anything still waiting on it is
+// released rather than left holding Destroy up. And Destroy gets
+// stopAbandonAfter at most: if some other path ever wedges it again, Stop
+// still returns and the caller can take the interface down.
 func (t *Tunnel) Stop() {
 	start := time.Now()
 	t.stopOnce.Do(func() {
@@ -514,6 +555,9 @@ func (t *Tunnel) Stop() {
 			close(t.stopDiag)
 		}
 	})
+	t.admitMu.Lock()
+	t.stopping = true
+	t.admitMu.Unlock()
 	t.sessionMu.Lock()
 	session := t.session
 	// No redialing a replacement for a tunnel that is going away: a flow
@@ -525,13 +569,19 @@ func (t *Tunnel) Stop() {
 		session.Close()
 	}
 	if t.netstack != nil {
-		// Should be quick now; if it ever isn't, the log says so and when,
-		// rather than the stop just silently never finishing.
-		slow := time.AfterFunc(3*time.Second, func() {
-			diag.Event(diag.CatTunnel, "netstackStopSlow", "waitingMs", time.Since(start))
-		})
-		t.netstack.Destroy()
-		slow.Stop()
+		// No more packets in: nothing still arriving can reach a handler,
+		// and Destroy isn't racing a device that keeps sending.
+		t.netstack.DisableNIC(tunNICID)
+		destroyed := make(chan struct{})
+		go func() {
+			t.netstack.Destroy()
+			close(destroyed)
+		}()
+		select {
+		case <-destroyed:
+		case <-time.After(stopAbandonAfter):
+			diag.Event(diag.CatTunnel, "netstackStopAbandoned", "waitingMs", time.Since(start))
+		}
 	}
 	if elapsed := time.Since(start); elapsed > time.Second {
 		diag.Event(diag.CatTunnel, "tunnelStopped", "ms", elapsed)

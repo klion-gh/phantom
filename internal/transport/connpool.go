@@ -30,6 +30,12 @@ type ConnPool struct {
 	dialFunc func(ctx context.Context) (net.Conn, *protocol.SessionCrypto, error)
 	maxConns int
 	closed   int32
+
+	// Cancelled by Close, so a replacement dial still in flight when the
+	// pool shuts down is abandoned rather than finished - and Close, which
+	// waits for mu, isn't held up behind it for the full dial timeout.
+	life       context.Context
+	cancelLife context.CancelFunc
 }
 
 type poolConn struct {
@@ -42,10 +48,13 @@ type poolConn struct {
 }
 
 func NewConnPool(maxConns int, dialFunc func(ctx context.Context) (net.Conn, *protocol.SessionCrypto, error)) *ConnPool {
+	life, cancelLife := context.WithCancel(context.Background())
 	return &ConnPool{
-		conns:    make([]*poolConn, 0, maxConns),
-		dialFunc: dialFunc,
-		maxConns: maxConns,
+		conns:      make([]*poolConn, 0, maxConns),
+		dialFunc:   dialFunc,
+		maxConns:   maxConns,
+		life:       life,
+		cancelLife: cancelLife,
 	}
 }
 
@@ -94,6 +103,12 @@ func (p *ConnPool) newConn(ctx context.Context) (*poolConn, error) {
 	if err != nil {
 		diag.Event(diag.CatTunnel, "dialFail", "conn", id, "ms", time.Since(start), "err", err)
 		return nil, err
+	}
+	if atomic.LoadInt32(&p.closed) == 1 {
+		// The pool shut down while this was dialing: nothing will ever use
+		// or close this connection, so don't keep it.
+		conn.Close()
+		return nil, ErrPoolClosed
 	}
 	diag.Event(diag.CatTunnel, "dialOk", "conn", id, "ms", time.Since(start), "remote", conn.RemoteAddr())
 
@@ -187,7 +202,7 @@ func (p *ConnPool) rotateConn(old *poolConn) {
 	}
 
 	if atomic.LoadInt32(&p.closed) == 0 {
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		ctx, cancel := context.WithTimeout(p.life, 10*time.Second)
 		defer cancel()
 
 		newPC, err := p.newConn(ctx)
@@ -220,6 +235,7 @@ func (p *ConnPool) Recycle() {
 
 func (p *ConnPool) Close() error {
 	atomic.StoreInt32(&p.closed, 1)
+	p.cancelLife()
 	p.mu.Lock()
 	defer p.mu.Unlock()
 

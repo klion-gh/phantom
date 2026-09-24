@@ -343,6 +343,12 @@ func (w *WinTunnel) Stop() {
 	if w.cancel != nil {
 		w.cancel()
 	}
+	// The pool before the session: closed the other way round, the pool
+	// took the session's closed connection for a dead one and dialed the
+	// server again mid-teardown.
+	if w.pool != nil {
+		w.pool.Close()
+	}
 	if w.inner != nil {
 		w.inner.Stop()
 	}
@@ -354,9 +360,6 @@ func (w *WinTunnel) Stop() {
 		// Windows drops routes bound to this interface's LUID automatically
 		// once the adapter disappears, so the 0.0.0.0/0 route needs no
 		// explicit cleanup here.
-	}
-	if w.pool != nil {
-		w.pool.Close()
 	}
 	// The bypass /32 routes are via the *physical* gateway, not tied to the
 	// tunnel interface's lifetime the way the 0.0.0.0/0 route is, so Windows

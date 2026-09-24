@@ -110,10 +110,42 @@ func TestSelectorSwitchesForLargeSustainedWin(t *testing.T) {
 	s.mu.Lock()
 	s.lastSwitch = time.Now().Add(-10 * minDwell)
 	s.mu.Unlock()
+	for round := 1; round < betterRounds; round++ {
+		s.Probe()
+		if s.Current() != "a" {
+			t.Fatalf("switched after %d round(s) of b leading; a win has to be sustained", round)
+		}
+	}
 	s.Probe()
 
 	if s.Current() != "b" {
 		t.Fatalf("expected a switch to the much faster config, still on %q", s.Current())
+	}
+}
+
+// The field case: after half an hour of two configs reading level, one round
+// has the current one at 474ms against 232ms - a blip, and no reason to tear
+// down every connection on the device. A lead that doesn't hold resets.
+func TestSelectorIgnoresOneRoundLatencyBlip(t *testing.T) {
+	s, fake, switches := newTestSelector(t, map[string]int64{"a": 220, "b": 230})
+	s.SetCandidates(candidates("a", "b"))
+	s.Probe()
+	s.mu.Lock()
+	s.lastSwitch = time.Now().Add(-10 * minDwell)
+	s.mu.Unlock()
+
+	for round := 0; round < 3*betterRounds; round++ {
+		if round%2 == 0 {
+			fake.set("a", 474) // the blip
+			fake.set("b", 232)
+		} else {
+			fake.set("a", 220) // level again
+			fake.set("b", 230)
+		}
+		s.Probe()
+	}
+	if s.Current() != "a" || len(*switches) != 1 {
+		t.Fatalf("expected to stay on a through the blips, got %q after %v", s.Current(), *switches)
 	}
 }
 

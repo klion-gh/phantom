@@ -581,8 +581,22 @@ The only thing that differs per platform is how raw IP packets get into and out 
   reads/writes the raw TUN file descriptor Android's `VpnService.Builder.establish()`
   handed over. `mobile.Start(configYAML, tunFD, mtu, protector)` parses the config,
   dials via `transport.Dial`, builds the `fdbased` endpoint, and calls
-  `netstack.New`. `mobile.Tunnel.Stop()`/`.Stats()`/`.IsAlive()` all just delegate to the
-  inner `netstack.Tunnel`.
+  `netstack.New`. `mobile.Tunnel.Stats()`/`.IsAlive()` delegate to the inner
+  `netstack.Tunnel`; `.Stop()` closes the connection pool first (closing the session first
+  looked to the pool like a dead connection, and it redialed the server mid-teardown), then
+  stops the inner tunnel.
+
+`netstack.Tunnel.Stop` refuses new flows first (a forwarder handler creates its endpoint
+under a read lock and checks a `stopping` flag Stop sets under the write lock), disables the
+NIC, closes the session, then destroys the stack - and waits for that at most 2s. The order
+matters: gVisor's `Destroy` aborts the connections that exist when it starts and then waits
+for every connection to finish closing, so one the device opened after that sweep was closed
+gracefully by a stack whose TCP processing had already stopped, never finished, and hung
+`Stop` forever (`TestStopReturnsWhileTheDeviceKeepsOpeningConnections`). On Android a
+config switch then kept the VPN interface up in front of a dead stack - the whole device
+offline. The Android service also bounds each stop on its own thread
+(`stopTunnelBounded`, 2.5s) before closing the interface, on switches as well as
+disconnects.
 - **Windows** (`windows/wintun.go`): no raw fd exists on Windows, so
   `gvisor.dev/gvisor/pkg/tcpip/link/channel.New` is used instead — a queue-based
   endpoint with no OS handle requirement. Two goroutines pump packets between it and a
@@ -759,8 +773,10 @@ between the two is what the platform layer does with the selection; the selectio
 itself doesn't know which one is asking. It probes every candidate with a real Phantom
 handshake (`internal/pingcheck`, never a bare TCP connect, which a blocked-but-listening
 port would pass) every 30s, and is deliberately biased against switching: a currently
-*working* config needs a sustained 2x-latency-and-150ms lead before a switch is considered
-worth the connections it kills, and a fresh switch has a 90s minimum dwell before another
+*working* config needs a 2x-latency-and-150ms lead held for 3 probe rounds in a row before
+a switch is considered worth the connections it kills (a single round's lead is a blip: a
+field log had one tear down every connection on the device over one slow probe), and a
+fresh switch has a 90s minimum dwell before another
 "merely better" switch is allowed - only a config that's actually confirmed dead (two
 failed probes in a row) skips that dwell. `mobile/autoselect.go` (`AutoSelector`) is the
 gomobile-safe wrapper Android binds to; Windows (`windows/routing.go`) drives the identical
