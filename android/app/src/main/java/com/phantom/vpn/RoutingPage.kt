@@ -3,6 +3,7 @@ package com.phantom.vpn
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.tween
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -19,6 +20,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
@@ -51,6 +53,7 @@ fun RoutingPage(
     onToggleSmart: (Boolean) -> Unit,
     onAddSite: (String) -> Unit,
     onRemoveSite: (String) -> Unit,
+    onRemoveResource: (PopularResource) -> Unit,
     onToggleConfig: (String) -> Unit,
     onOpenPopular: () -> Unit,
     onApplySites: () -> Unit,
@@ -95,6 +98,7 @@ fun RoutingPage(
                             connected = connected,
                             onAddSite = onAddSite,
                             onRemoveSite = onRemoveSite,
+                            onRemoveResource = onRemoveResource,
                             onApplySites = onApplySites,
                         )
                         ConfigPickerSection(
@@ -220,6 +224,7 @@ private fun SitesSection(
     connected: Boolean,
     onAddSite: (String) -> Unit,
     onRemoveSite: (String) -> Unit,
+    onRemoveResource: (PopularResource) -> Unit,
     onApplySites: () -> Unit,
 ) {
     var draft by remember { mutableStateOf("") }
@@ -288,12 +293,27 @@ private fun SitesSection(
             )
         } else {
             Spacer(Modifier.height(6.dp))
+            // A service from the Популярные ресурсы catalogue whose every domain
+            // and address is listed shows as one tile rather than a dozen rows
+            // (Telegram alone is fourteen address ranges) - worked out from the
+            // list itself on every render, so there is no second copy of the
+            // list to fall out of step with it, and services added before this
+            // existed group the same way. Anything not part of a complete
+            // service stays a plain row.
+            val groups = PopularCatalog.all.filter { RoutingStore.hasAll(it.domains) }
+            val grouped = groups.flatMap { r -> r.domains.map { it.lowercase() } }.toSet()
             // A plain Column, not a nested LazyColumn: this sits inside the
             // page's own LazyColumn, where a second lazy list would fight it
             // for scroll gestures and refuse to measure.
-            RoutingStore.sites.forEach { site ->
-                SiteRow(pattern = site.pattern, onRemove = { onRemoveSite(site.pattern) })
+            groups.forEach { resource ->
+                ResourceGroupTile(resource = resource, onRemove = { onRemoveResource(resource) })
+                Spacer(Modifier.height(8.dp))
             }
+            RoutingStore.sites
+                .filterNot { it.pattern.lowercase() in grouped }
+                .forEach { site ->
+                    SiteRow(pattern = site.pattern, onRemove = { onRemoveSite(site.pattern) })
+                }
         }
 
         // Only worth showing once there's both a live tunnel (nothing to
@@ -337,6 +357,72 @@ private fun SitesApplyRow(onApply: () -> Unit) {
                     .clickable(onClick = onApply)
                     .padding(horizontal = 10.dp, vertical = 6.dp),
             )
+        }
+    }
+}
+
+/**
+ * One catalogue service in the site list: its logo pinned to the left edge,
+ * its name centred, the same × as a plain row pinned to the right. Stands for
+ * every domain and address range the service needs - removing it removes all
+ * of them, exactly as untapping it in the picker does.
+ */
+@Composable
+private fun ResourceGroupTile(resource: PopularResource, onRemove: () -> Unit) {
+    var logo by remember(resource.icon) { mutableStateOf<ImageBitmap?>(null) }
+    LaunchedEffect(resource.icon) { logo = fetchLogo(resource.icon) }
+
+    Tile(
+        modifier = Modifier.fillMaxWidth().height(48.dp),
+        color = SurfaceHigh,
+        shape = RoundedCornerShape(14.dp),
+        borderColor = SurfaceOutline,
+    ) {
+        val bitmap = logo
+        Box(
+            modifier = Modifier
+                .align(Alignment.CenterStart)
+                .padding(start = 10.dp)
+                .size(28.dp)
+                .clip(RoundedCornerShape(7.dp)),
+            contentAlignment = Alignment.Center,
+        ) {
+            if (bitmap != null) {
+                Image(bitmap = bitmap, contentDescription = null, modifier = Modifier.fillMaxSize())
+            } else {
+                // The service's initial until the logo arrives (or if it never
+                // does) - same placeholder as the picker's tiles.
+                Box(
+                    modifier = Modifier.fillMaxSize().background(Surface),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text(resource.name.take(1).uppercase(), color = TextSecondary, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                }
+            }
+        }
+        Text(
+            resource.name,
+            color = TextPrimary,
+            fontSize = 14.5.sp,
+            fontWeight = FontWeight.Medium,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            textAlign = TextAlign.Center,
+            // Padded clear of the logo and the × so a long name ellipsizes
+            // before it runs under either.
+            modifier = Modifier
+                .align(Alignment.Center)
+                .fillMaxWidth()
+                .padding(horizontal = 48.dp),
+        )
+        IconButton(
+            onClick = onRemove,
+            modifier = Modifier
+                .align(Alignment.CenterEnd)
+                .padding(end = 4.dp)
+                .size(32.dp),
+        ) {
+            Text("×", color = TextSecondary, fontSize = 18.sp)
         }
     }
 }

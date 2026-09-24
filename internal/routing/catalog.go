@@ -28,7 +28,16 @@ type PopularResource struct {
 // wrongly later.
 func PopularResources() []PopularResource {
 	return []PopularResource{
-		res("Telegram", "telegram.org", "t.me", "telegram.me"),
+		// The Telegram apps don't resolve names for their own traffic - they
+		// connect to Telegram's data centres by addresses built into the app,
+		// so there's no DNS answer for the sniffer to learn from and the
+		// domains alone only ever covered the website and t.me links. These
+		// are Telegram's published ranges (core.telegram.org/resources/cidr.txt).
+		res("Telegram", "telegram.org", "t.me", "telegram.me",
+			"91.108.56.0/22", "91.108.4.0/22", "91.108.8.0/22", "91.108.16.0/22",
+			"91.108.12.0/22", "149.154.160.0/20", "91.105.192.0/23", "91.108.20.0/22",
+			"185.76.151.0/24", "2001:b28:f23d::/48", "2001:b28:f23f::/48",
+			"2001:67c:4e8::/48", "2001:b28:f23c::/48", "2a0a:f280::/32"),
 		res("RuTracker", "rutracker.org", "rutracker.net"),
 		res("Instagram", "instagram.com", "cdninstagram.com"),
 		res("Facebook", "facebook.com", "fbcdn.net"),
@@ -46,7 +55,14 @@ func PopularResources() []PopularResource {
 		// which would drag every Google service through the tunnel.
 		res("ChatGPT", "chatgpt.com", "openai.com", "oaistatic.com", "oaiusercontent.com"),
 		res("Gemini", "gemini.google.com", "bard.google.com", "aistudio.google.com", "generativelanguage.googleapis.com"),
-		res("YouTube", "youtube.com", "googlevideo.com", "ytimg.com", "youtu.be"),
+		// The Android app doesn't talk to www.youtube.com like the site does:
+		// its API is youtubei/youtube.googleapis.com and avatars come from
+		// ggpht.com. Missing those, the app's API went out directly while the
+		// video went through the tunnel - and video URLs are bound to the IP
+		// that requested them, so playback was refused. Only YouTube's own
+		// googleapis hosts, not googleapis.com, which is half of Google.
+		res("YouTube", "youtube.com", "googlevideo.com", "ytimg.com", "youtu.be",
+			"youtubei.googleapis.com", "youtube.googleapis.com", "ggpht.com"),
 		res("Netflix", "netflix.com", "nflxvideo.net", "nflximg.net", "nflxext.com"),
 		res("Spotify", "spotify.com", "scdn.co", "spotifycdn.com"),
 		res("Twitch", "twitch.tv", "ttvnw.net", "jtvnw.net"),

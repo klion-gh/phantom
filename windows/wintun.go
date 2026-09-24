@@ -181,14 +181,14 @@ func StartWindows(configYAML string, onNetworkChanged func()) (*WinTunnel, error
 
 	// Must be captured now, before any routing changes below - once the
 	// tunnel's 0.0.0.0/0 route exists, this would just return the tunnel's
-	// own interface instead of the real one split-tunneled apps need to dial
-	// out through. A failure here isn't fatal to the tunnel itself, just to
-	// split tunneling (excluded apps' connections will fall back to being
-	// tunneled - see openRemote in internal/netstack). The physical interface
-	// is the same for every endpoint, so the first resolved IP is enough.
+	// own interface instead of the real one smart mode's direct flows and
+	// config pings need to go out through (see directdial.go). A failure here
+	// isn't fatal to the tunnel itself: those just fall back to riding the
+	// tunnel. The physical interface is the same for every endpoint, so the
+	// first resolved IP is enough.
 	physicalIfIndex, physicalIfErr := bestInterfaceIndex(serverIPs[0])
 	if physicalIfErr != nil {
-		log.Printf("split tunneling unavailable: %v", physicalIfErr)
+		log.Printf("physical interface unknown - smart routing and direct pings unavailable: %v", physicalIfErr)
 	}
 
 	w := &WinTunnel{}
@@ -306,17 +306,12 @@ func StartWindows(configYAML string, onNetworkChanged func()) (*WinTunnel, error
 		}
 		return tunnel.NewSessionFromMux(freshMux), nil
 	})
-	// Per-app exclusions and per-site routing are mutually exclusive modes
-	// (see routing.go) - installing both would leave two rules arguing over
-	// the same flow.
-	if physicalIfErr == nil && loadRoutingMode() == RoutingModeApps {
-		inner.SetBypass(newSplitTunnelBypass(physicalIfIndex))
-	}
 	applyRoutingToEngine()
 	installRouting(inner, physicalIfIndex, physicalIfErr == nil)
 	// Config pings/probes go around this tunnel, not through it - see
 	// pingpath.go. Without a known physical interface they fall back to the
-	// default route (i.e. through the tunnel), same as split tunneling does.
+	// default route (i.e. through the tunnel), same as smart mode's direct
+	// flows do.
 	if physicalIfErr == nil {
 		setPingInterface(physicalIfIndex)
 	}

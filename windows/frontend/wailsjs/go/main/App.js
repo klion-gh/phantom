@@ -6,10 +6,6 @@ export function AddConfig(arg1) {
   return window['go']['main']['App']['AddConfig'](arg1);
 }
 
-export function AddExcludedApp(arg1, arg2) {
-  return window['go']['main']['App']['AddExcludedApp'](arg1, arg2);
-}
-
 export function AddResource(arg1, arg2) {
   return window['go']['main']['App']['AddResource'](arg1, arg2);
 }
@@ -28,10 +24,6 @@ export function Connect(arg1, arg2) {
 
 export function DeleteConfig(arg1) {
   return window['go']['main']['App']['DeleteConfig'](arg1);
-}
-
-export function DeleteExcludedApp(arg1) {
-  return window['go']['main']['App']['DeleteExcludedApp'](arg1);
 }
 
 export function DeleteResource(arg1) {
@@ -66,20 +58,12 @@ export function ListConfigs() {
   return window['go']['main']['App']['ListConfigs']();
 }
 
-export function ListExcludedApps() {
-  return window['go']['main']['App']['ListExcludedApps']();
-}
-
 export function ListResources() {
   return window['go']['main']['App']['ListResources']();
 }
 
 export function LookupCountry(arg1) {
   return window['go']['main']['App']['LookupCountry'](arg1);
-}
-
-export function PickExcludedAppExe() {
-  return window['go']['main']['App']['PickExcludedAppExe']();
 }
 
 export function Ping(arg1) {
@@ -110,14 +94,6 @@ export function SetAppearance(arg1, arg2) {
   return window['go']['main']['App']['SetAppearance'](arg1, arg2);
 }
 
-export function SetAppsEnabled(arg1) {
-  return window['go']['main']['App']['SetAppsEnabled'](arg1);
-}
-
-export function SetAppsInclude(arg1) {
-  return window['go']['main']['App']['SetAppsInclude'](arg1);
-}
-
 export function SetAutoConfigs(arg1) {
   return window['go']['main']['App']['SetAutoConfigs'](arg1);
 }
@@ -136,10 +112,6 @@ export function SetConfigGeo(arg1, arg2, arg3, arg4) {
 
 export function SetLanguage(arg1) {
   return window['go']['main']['App']['SetLanguage'](arg1);
-}
-
-export function SetRoutingMode(arg1) {
-  return window['go']['main']['App']['SetRoutingMode'](arg1);
 }
 
 export function SetShowProxySettings(arg1) {

@@ -62,16 +62,8 @@ func (t *Tunnel) currentDNSSplit() (DNSRouterFunc, DirectDialer, func(io.ReadWri
 }
 
 // serveSplitDNS handles one UDP DNS flow from the device, query by query.
-func (t *Tunnel) serveSplitDNS(local *gonet.UDPConn, localPort uint16, target string, route DNSRouterFunc, direct DirectDialer, dnsWrap func(io.ReadWriteCloser) io.ReadWriteCloser, directUpstream string) {
+func (t *Tunnel) serveSplitDNS(local *gonet.UDPConn, target string, route DNSRouterFunc, direct DirectDialer, dnsWrap func(io.ReadWriteCloser) io.ReadWriteCloser, directUpstream string) {
 	defer local.Close()
-
-	if bypass := t.currentBypass(); bypass != nil {
-		if conn := bypass("udp", localPort, target); conn != nil {
-			t.stats.bypass.Add(1)
-			t.spliceUDP(local, conn)
-			return
-		}
-	}
 
 	directTarget := target
 	if directUpstream != "" {

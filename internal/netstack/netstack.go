@@ -44,15 +44,6 @@ const udpIdleTimeout = 60 * time.Second
 // its own redial attempt against a server that's still unreachable.
 const sessionRefreshCooldown = 3 * time.Second
 
-// BypassFunc decides whether a new connection should bypass the Phantom
-// tunnel entirely, given the *originating* app's local port on this machine
-// (network is "tcp" or "udp", target is the real internet destination the
-// app is trying to reach). Returning nil tunnels the connection normally
-// through session.Open/OpenUDP; returning a non-nil connection splices it
-// directly instead. Used by the Windows client for per-app split tunneling -
-// nil on Android, which has no equivalent per-app concept at this layer.
-type BypassFunc func(network string, localPort uint16, target string) io.ReadWriteCloser
-
 // RouteDecision is what a RouterFunc says about one new flow.
 type RouteDecision int
 
@@ -68,9 +59,8 @@ const (
 // RouterFunc decides where a new flow should go, based only on its
 // destination (network is "tcp" or "udp", target is "ip:port").
 //
-// This is the "smart VPN" axis: unlike BypassFunc, which asks *who* opened
-// the connection (per-app split tunneling), this asks *where it's going* - so
-// a user can say "route these sites through the VPN and leave everything else
+// This is the "smart VPN" axis: it asks *where a connection is going* - so a
+// user can say "route these sites through the VPN and leave everything else
 // alone". Installing one inverts the client's default posture from "tunnel
 // everything" to "tunnel what this says to".
 //
@@ -94,7 +84,6 @@ type Tunnel struct {
 	startTime time.Time
 	bytesUp   int64
 	bytesDown int64
-	bypass    BypassFunc
 	router    RouterFunc
 	direct    DirectDialer
 	dnsWrap   func(io.ReadWriteCloser) io.ReadWriteCloser
@@ -110,26 +99,6 @@ type Tunnel struct {
 	directDNS string
 	stopDiag  chan struct{}
 	stopOnce  sync.Once
-}
-
-// SetBypass installs an optional per-connection bypass hook - see BypassFunc.
-// Safe to call any time after New; takes effect for connections forwarded
-// afterwards. A nil Tunnel receiver check isn't needed since callers always
-// have a valid *Tunnel from a successful New.
-func (t *Tunnel) SetBypass(fn BypassFunc) {
-	t.sessionMu.Lock()
-	t.bypass = fn
-	t.sessionMu.Unlock()
-}
-
-// currentBypass reads the hook under the same lock that guards writing it.
-// Both this and the refresher used to be written unlocked while other goroutines
-// read them, which is a data race however benign it looks in practice - the
-// writes happen once at startup, but "once at startup" is not a memory model.
-func (t *Tunnel) currentBypass() BypassFunc {
-	t.sessionMu.Lock()
-	defer t.sessionMu.Unlock()
-	return t.bypass
 }
 
 // SetRouting installs the destination-based routing decision and the direct
@@ -293,7 +262,7 @@ func (t *Tunnel) handleTCP(r *tcp.ForwarderRequest) {
 
 	local := gonet.NewTCPConn(&wq, ep)
 
-	remote := t.openRemote("tcp", id.RemotePort, target)
+	remote := t.openRemote("tcp", target)
 	if remote == nil {
 		local.Close()
 		return
@@ -315,12 +284,12 @@ func (t *Tunnel) handleUDP(r *udp.ForwarderRequest) bool {
 
 	if isDNSTarget(target) {
 		if route, direct, dnsWrap, directDNS := t.currentDNSSplit(); route != nil {
-			go t.serveSplitDNS(local, id.RemotePort, t.dnsUpstream(target), route, direct, dnsWrap, directDNS)
+			go t.serveSplitDNS(local, t.dnsUpstream(target), route, direct, dnsWrap, directDNS)
 			return true
 		}
 	}
 
-	remote := t.openRemote("udp", id.RemotePort, target)
+	remote := t.openRemote("udp", target)
 	if remote == nil {
 		local.Close()
 		return false
@@ -330,26 +299,17 @@ func (t *Tunnel) handleUDP(r *udp.ForwarderRequest) bool {
 	return true
 }
 
-// openRemote decides how one new flow reaches the internet, in three steps:
+// openRemote decides how one new flow reaches the internet:
 //
-//  1. The per-app bypass hook (BypassFunc) gets first refusal - it answers
-//     "this app was excluded from the VPN entirely", which outranks anything
-//     about the destination.
-//  2. The router (RouterFunc) decides based on the destination - this is what
+//  1. The router (RouterFunc) decides based on the destination - this is what
 //     implements smart-VPN mode, where only listed sites are tunnelled.
-//  3. Otherwise the flow is tunnelled, which is also the fallback whenever a
-//     direct dial was chosen but failed: an excluded app losing its route is
+//  2. Otherwise the flow is tunnelled, which is also the fallback whenever a
+//     direct dial was chosen but failed: a flow losing its direct route is
 //     better served by the tunnel than by no connectivity at all.
-func (t *Tunnel) openRemote(network string, localPort uint16, target string) io.ReadWriteCloser {
+func (t *Tunnel) openRemote(network string, target string) io.ReadWriteCloser {
 	dns := network == "udp" && isDNSTarget(target)
 	if dns {
 		target = t.dnsUpstream(target)
-	}
-	if bypass := t.currentBypass(); bypass != nil {
-		if conn := bypass(network, localPort, target); conn != nil {
-			t.stats.bypass.Add(1)
-			return conn
-		}
 	}
 
 	router, direct, dnsWrap := t.currentRouting()

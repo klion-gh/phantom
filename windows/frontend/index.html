@@ -65,49 +65,7 @@
               <div class="panel-title" data-i18n="routing">Маршрутизация</div>
             </div>
             <div class="routing-scroll">
-              <!-- Mode picker: per-app exclusion and per-site inclusion answer
-                   opposite questions, so only one can be in force at a time. -->
-              <div class="routing-tile routing-tile-row">
-                <div class="routing-tile-title" data-i18n="routing_mode">Режим</div>
-                <div class="lang-options routing-mode-options">
-                  <button id="btn-mode-smart" class="lang-tile" data-i18n="routing_mode_smart">Умный VPN</button>
-                  <button id="btn-mode-apps" class="lang-tile" data-i18n="routing_mode_apps">По приложениям</button>
-                </div>
-              </div>
-
-              <!-- Mirrors the smart-VPN block's shape: one switch for whether
-                   the mode does anything, then its own settings underneath. -->
-              <div id="mode-apps-block" class="routing-block hidden">
-                <div class="routing-tile routing-tile-row">
-                  <div class="routing-tile-text">
-                    <div class="routing-tile-title" data-i18n="split_tunnel">Раздельное туннелирование</div>
-                    <div id="apps-hint" class="routing-tile-hint" data-i18n="split_tunnel_hint">Эти приложения будут работать напрямую, в обход VPN, даже при активном подключении.</div>
-                  </div>
-                  <button id="apps-toggle" class="toggle-switch"><span class="toggle-switch-thumb"></span></button>
-                </div>
-
-                <div id="apps-details" class="routing-block">
-                  <div class="routing-tile routing-tile-row">
-                    <div class="routing-tile-text">
-                      <div class="routing-tile-title" data-i18n="apps_direction">Включить / Исключить</div>
-                      <div id="apps-direction-hint" class="routing-tile-hint"></div>
-                    </div>
-                    <button id="apps-include-toggle" class="toggle-switch"><span class="toggle-switch-thumb"></span></button>
-                  </div>
-
-                  <div class="routing-tile">
-                    <div class="routing-tile-header">
-                      <div class="routing-tile-title" data-i18n="apps">Приложения</div>
-                      <button id="btn-open-split-tunnel" class="routing-link-btn">
-                        <span data-i18n="apps_manage">Настроить</span>
-                        <span class="routing-link-chevron">&#8250;</span>
-                      </button>
-                    </div>
-                  </div>
-                </div>
-              </div>
-
-              <div id="mode-smart-block" class="routing-block">
+              <div class="routing-block">
                 <div id="smart-toggle-row" class="routing-tile routing-tile-row">
                   <div class="routing-tile-text">
                     <div class="routing-tile-title" data-i18n="smart_vpn">Умный VPN</div>
@@ -117,18 +75,16 @@
                 </div>
 
                 <div id="smart-details" class="routing-block">
-                  <!-- The catalogue button lives inside the list it fills,
-                       rather than floating above as its own tile: picking from
-                       it and typing a domain by hand are two ways to do the
-                       same thing, so they belong together. -->
+                  <!-- Its own tile above the list, the same as the Android
+                       client's: picking from the catalogue is how most people
+                       will fill the list in, typing a domain is the fallback. -->
+                  <button id="btn-popular" class="routing-tile routing-nav-tile">
+                    <span class="routing-tile-title" data-i18n="popular_resources">Популярные ресурсы</span>
+                    <span class="routing-link-chevron">&#8250;</span>
+                  </button>
+
                   <div class="routing-tile">
-                    <div class="routing-tile-header">
-                      <div class="routing-tile-title" data-i18n="smart_vpn_sites">Ресурсы под обход:</div>
-                      <button id="btn-popular" class="routing-link-btn">
-                        <span data-i18n="popular_resources">Популярные ресурсы</span>
-                        <span class="routing-link-chevron">&#8250;</span>
-                      </button>
-                    </div>
+                    <div class="routing-tile-title" data-i18n="smart_vpn_sites">Ресурсы под обход:</div>
                     <div class="site-add-row">
                       <input id="site-input" class="text-input site-input" type="text" data-i18n-placeholder="smart_vpn_site_ph" placeholder="например, youtube.com" />
                       <button id="btn-add-site" class="icon-btn">&#43;</button>
@@ -273,29 +229,6 @@
       </div>
 
       <!-- Split tunneling screen -->
-      <div id="screen-split-tunnel" class="screen hidden">
-        <div class="header">
-          <button id="btn-back-split-tunnel" class="icon-btn">&#8592;</button>
-          <div class="title" data-i18n="split_tunnel">Раздельное туннелирование</div>
-        </div>
-        <div class="content">
-          <div class="panel-header">
-            <div class="panel-title" data-i18n="apps">Приложения</div>
-            <button id="btn-add-excluded-app" class="icon-btn" data-i18n-title="add_app" title="Добавить приложение">&#43;</button>
-          </div>
-          <div class="settings-hint" data-i18n="split_tunnel_hint">
-            Эти приложения будут работать напрямую, в обход VPN, даже при активном подключении.
-          </div>
-          <div id="excluded-app-list" class="resource-list"></div>
-          <div id="excluded-app-empty" class="empty-state hidden">
-            <div class="empty-state-circle">
-              <svg viewBox="0 0 24 24" class="empty-icon"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/></svg>
-            </div>
-            <div class="empty-title" data-i18n="empty_list">Список пуст</div>
-            <div class="empty-hint" data-i18n="empty_apps_hint">Нажмите + чтобы выбрать .exe</div>
-          </div>
-        </div>
-      </div>
 
       <!-- Delete confirmation overlay -->
       <div id="delete-confirm" class="overlay hidden">

@@ -3,8 +3,6 @@
 
 export function AddConfig(arg1:string):Promise<string>;
 
-export function AddExcludedApp(arg1:string,arg2:string):Promise<string>;
-
 export function AddResource(arg1:string,arg2:string):Promise<string>;
 
 export function ApplyUpdate():Promise<string>;
@@ -14,8 +12,6 @@ export function ClearConfigCountry(arg1:string):Promise<string>;
 export function Connect(arg1:string,arg2:string):Promise<string>;
 
 export function DeleteConfig(arg1:string):Promise<string>;
-
-export function DeleteExcludedApp(arg1:string):Promise<string>;
 
 export function DeleteResource(arg1:string):Promise<string>;
 
@@ -33,13 +29,9 @@ export function GetShowProxySettings():Promise<boolean>;
 
 export function ListConfigs():Promise<string>;
 
-export function ListExcludedApps():Promise<string>;
-
 export function ListResources():Promise<string>;
 
 export function LookupCountry(arg1:string):Promise<string>;
-
-export function PickExcludedAppExe():Promise<string>;
 
 export function Ping(arg1:string):Promise<string>;
 
@@ -55,10 +47,6 @@ export function RoutingHealth():Promise<string>;
 
 export function SetAppearance(arg1:string,arg2:string):Promise<void>;
 
-export function SetAppsEnabled(arg1:boolean):Promise<void>;
-
-export function SetAppsInclude(arg1:boolean):Promise<void>;
-
 export function SetAutoConfigs(arg1:string):Promise<void>;
 
 export function SetAutoEnabled(arg1:boolean):Promise<void>;
@@ -68,8 +56,6 @@ export function SetBetaUpdates(arg1:boolean):Promise<void>;
 export function SetConfigGeo(arg1:string,arg2:string,arg3:string,arg4:string):Promise<string>;
 
 export function SetLanguage(arg1:string):Promise<void>;
-
-export function SetRoutingMode(arg1:string):Promise<void>;
 
 export function SetShowProxySettings(arg1:boolean):Promise<void>;
 

@@ -46,6 +46,7 @@ func (a *App) startup(ctx context.Context) {
 	// than reaching into the tunnel itself. Without this hook the selector
 	// picks a server and nothing ever acts on it.
 	onSelectorSwitch = func(configID string) { a.switchToConfig(configID) }
+	removeSplitTunnelLeftovers()
 	applyRoutingToEngine()
 	syncSelector()
 
@@ -162,7 +163,6 @@ func (a *App) Connect(configID string, configYAML string) string {
 		"configID", configID,
 		"smartEnabled", loadSmartEnabled(),
 		"autoEnabled", loadAutoEnabled(),
-		"routingMode", loadRoutingMode(),
 	)
 	tun, err := StartWindows(configYAML, func() {
 		log.Println("underlying network changed, reconnecting")
@@ -435,55 +435,6 @@ func (a *App) DeleteResource(id string) string {
 	return ""
 }
 
-// ListExcludedApps returns the split-tunneling exclusion list as a JSON array
-// of {"id","name","exePath"} - apps on this list bypass the tunnel entirely
-// (see windows/splittunnel.go).
-func (a *App) ListExcludedApps() string {
-	apps, err := loadExcludedApps()
-	if err != nil {
-		return "[]"
-	}
-	data, err := json.Marshal(apps)
-	if err != nil {
-		return "[]"
-	}
-	return string(data)
-}
-
-// PickExcludedAppExe opens a native file-open dialog for the user to browse
-// to an .exe, returning its path (or "" if cancelled/failed) - the frontend
-// follows this up with AddExcludedApp using the picked path.
-func (a *App) PickExcludedAppExe() string {
-	lang := getTrayLang()
-	path, err := runtime.OpenFileDialog(a.ctx, runtime.OpenDialogOptions{
-		Title: trayT(lang, "pick_app_title"),
-		Filters: []runtime.FileFilter{
-			{DisplayName: trayT(lang, "programs_filter"), Pattern: "*.exe"},
-		},
-	})
-	if err != nil || path == "" {
-		return ""
-	}
-	return path
-}
-
-// AddExcludedApp adds exePath to the split-tunneling exclusion list under the
-// given display name. Returns "" on success or an error message.
-func (a *App) AddExcludedApp(name string, exePath string) string {
-	if _, err := addExcludedApp(name, exePath); err != nil {
-		return err.Error()
-	}
-	return ""
-}
-
-// DeleteExcludedApp removes an app from the split-tunneling exclusion list.
-func (a *App) DeleteExcludedApp(id string) string {
-	if err := deleteExcludedApp(id); err != nil {
-		return err.Error()
-	}
-	return ""
-}
-
 type proxyStatusResponse struct {
 	Running bool   `json:"running"`
 	Port    int    `json:"port"`
@@ -571,32 +522,19 @@ func (a *App) SetLanguage(lang string) {
 // UI seeing a half-updated mix of old and new values.
 func (a *App) GetRoutingState() string {
 	data, _ := json.Marshal(struct {
-		Mode          string   `json:"mode"`
-		SmartEnabled  bool     `json:"smartEnabled"`
-		Sites         []string `json:"sites"`
-		SmartConfigs  []string `json:"smartConfigs"`
-		AutoEnabled   bool     `json:"autoEnabled"`
-		AutoConfigs   []string `json:"autoConfigs"`
-		AppsEnabled   bool     `json:"appsEnabled"`
-		AppsInclude   bool     `json:"appsInclude"`
+		SmartEnabled bool     `json:"smartEnabled"`
+		Sites        []string `json:"sites"`
+		SmartConfigs []string `json:"smartConfigs"`
+		AutoEnabled  bool     `json:"autoEnabled"`
+		AutoConfigs  []string `json:"autoConfigs"`
 	}{
-		Mode:         loadRoutingMode(),
 		SmartEnabled: loadSmartEnabled(),
 		Sites:        loadSmartSites(),
 		SmartConfigs: loadSmartConfigs(),
 		AutoEnabled:  loadAutoEnabled(),
 		AutoConfigs:  loadAutoConfigs(),
-		AppsEnabled:  loadAppsEnabled(),
-		AppsInclude:  loadAppsInclude(),
 	})
 	return string(data)
-}
-
-// SetRoutingMode switches between per-app exclusion and per-site inclusion.
-func (a *App) SetRoutingMode(mode string) {
-	saveRoutingMode(mode)
-	applyRoutingToEngine()
-	syncSelector()
 }
 
 // SetSmartEnabled turns smart routing on or off.
@@ -639,17 +577,6 @@ func (a *App) SetAutoConfigs(idsJSON string) {
 	}
 	saveAutoConfigs(ids)
 	syncSelector()
-}
-
-// SetAppsEnabled turns per-app routing on or off.
-func (a *App) SetAppsEnabled(enabled bool) {
-	saveAppsEnabled(enabled)
-	applyRoutingToEngine()
-}
-
-// SetAppsInclude picks which way the app list is read - see loadAppsInclude.
-func (a *App) SetAppsInclude(include bool) {
-	saveAppsInclude(include)
 }
 
 // RoutingHealth returns per-config health from the smart selector for the UI's

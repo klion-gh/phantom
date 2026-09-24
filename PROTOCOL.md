@@ -611,8 +611,8 @@ handshake and the DNS lookup alike:
   (`mobile/pingpath.go`). Without it the app's sockets follow its own VpnService's
   0.0.0.0/0 route like any other app's.
 - **Windows**: an `IP_UNICAST_IF` bind to the physical interface captured before the
-  tunnel's default route existed - the same index and mechanism split tunneling uses
-  (`windows/pingpath.go`, §11). Only the *current* server's IPs have /32 bypass routes,
+  tunnel's default route existed - the same index and mechanism smart mode's direct
+  flows use (`windows/pingpath.go`, `windows/directdial.go`, §11). Only the *current* server's IPs have /32 bypass routes,
   so without it a ping to any other config went through the tunnel.
 
 With the socket protected, the system resolver would still point into the tunnel
@@ -986,8 +986,8 @@ order:
    the interface's own metric is also pinned low, not just the route's.
 6. Bridge the Wintun device into `internal/netstack.New` via a gVisor `channel.Endpoint`
    (§9), start the TCP/UDP forwarders, and hand the shared `internal/routing.Engine`
-   (§9.3) to it (`installRouting`, `windows/routing.go`) so smart-VPN/split-tunneling
-   decisions apply from the first packet.
+   (§9.3) to it (`installRouting`, `windows/routing.go`) so smart-VPN decisions apply
+   from the first packet.
 
 `Stop()` tears down in reverse, and explicitly `route delete`s the step-2 bypass host
 route — it isn't tied to the tunnel interface's lifetime the way the `0.0.0.0/0` route
@@ -1040,23 +1040,22 @@ matching the active toggle switch and the update-progress bar) rather than the f
 `.btn-primary` used elsewhere, specifically to read as *the* primary action in a popup that
 otherwise looks identical to a generic dialog.
 
-### 11.4 Routing UI: Умный VPN, "Выбирать лучшую", and split tunneling (`routing.go`)
+### 11.4 Routing UI: Умный VPN and "Выбирать лучшую" (`routing.go`)
 
-The Settings screen has a "Режим" switch between two **mutually exclusive** ways of
-splitting traffic - they answer opposite questions ("which sites should use the VPN" vs
-"which apps should skip it"), so running both at once would mean two rules fighting over
-the same flow:
+The Маршрутизация section is the same as Android's Routing page: the Умный VPN toggle,
+a "Популярные ресурсы" tile opening the §9.3 catalogue picker, the site list, and the
+configs to route through. A catalogue service whose every domain and address range is
+listed shows in the site list as one tile (logo, name, ×) instead of a row per entry
+(`renderSiteList`), removing all of them at once.
 
-- **Умный VPN** (`RoutingModeSmart`) - the site-list UI over §9.3's `Engine`/`DomainSet`,
-  identical in behaviour to Android's Routing page: add sites (with the same
-  §9.3 popular-resources picker), only those go through the tunnel.
-- **Раздельное туннелирование** (`RoutingModeApps`) - per-**app** exclusion instead of
-  per-site inclusion: pick specific `.exe`s (`PickExcludedAppExe`, a native file dialog)
-  that skip the VPN entirely, everything else tunnelled. This has no Android
-  equivalent - Android has no comparable notion of excluding one app from its VPN's
-  capture at the OS level, only per-site inclusion (§11.7).
+It used to also offer per-app split tunneling (a "Режим" switch between Умный VPN and
+"По приложениям", which excluded or included chosen `.exe`s by looking up each flow's
+owning process). That was removed to match Android, which never had it; the physical-
+interface binding it was built on survives in `directdial.go`, since smart mode's direct
+flows and config pings (§9.1) use the same mechanism. Its leftover settings files are
+deleted on startup (`removeSplitTunnelLeftovers`).
 
-Independent of that switch, "Выбирать лучшую" (`Автоматически`, `App.SetAutoEnabled`) is
+"Выбирать лучшую" (`Автоматически`, `App.SetAutoEnabled`) is
 the same whole-device auto-select as Android's toggle of the same name, over the identical
 shared `Selector` (§9.3) - Windows drives it directly rather than through a
 gomobile-wrapped `AutoSelector`, since both sides of that call are already Go here. As on
@@ -1129,15 +1128,10 @@ byte-for-byte by both apps, called from Kotlin via `mobile.aar`/gomobile on Andr
 directly, same binary, on Windows. The UI intentionally mirrors itself as closely as
 possible on top of that (same palettes, same tile layout, same three-section
 Configs/Routing/Resources structure, same glass-effect toggle, same popup-with-blurred-
-backdrop pattern for "add" dialogs). What's left, genuinely different, comes down to five
+backdrop pattern for "add" dialogs). What's left, genuinely different, comes down to four
 things, each traceable to a real platform constraint rather than an oversight:
 
-1. **Split tunneling is Windows-only.** Раздельное туннелирование (exclude specific
-   `.exe`s from the VPN, §11.4) has no Android equivalent - `VpnService` doesn't expose a
-   comparable "let this other app's traffic bypass my capture" primitive the way Windows'
-   routing table does. Android's only traffic-selection axis is Умный VPN's per-site
-   inclusion.
-2. **The VPN adapter's DNS server is a different address on each platform, for a
+1. **The VPN adapter's DNS server is a different address on each platform, for a
    platform-specific reason.** Android advertises an address (10.10.0.1) nothing real
    listens on and rewrites queries to it onto a real upstream over the tunnel
    (`mobile.go`'s `fakeDNSServer`, wired via `netstack.Tunnel.SetDNSUpstream`) -
@@ -1148,17 +1142,17 @@ things, each traceable to a real platform constraint rather than an oversight:
    Windows has no equivalent automatic-upgrade behaviour by default, so the same
    placeholder trick there was pure cost (a real, measured connect-time and post-connect
    slowdown) for zero protective benefit.
-3. **Self-update behaviour.** `phantom.exe` downloads and silently applies its own
+2. **Self-update behaviour.** `phantom.exe` downloads and silently applies its own
    updates from GitHub Releases. The Android app *checks* the same releases feed but can
    only ever offer a download - Android gives no app the ability to replace its own APK
    unattended, so installing the update is always a manual, user-confirmed step (§10's
    Main screen update button).
-4. **Whole-app-alive UI**: Windows minimizes to a system tray icon on window close and
+3. **Whole-app-alive UI**: Windows minimizes to a system tray icon on window close and
    keeps running until "Выход" is chosen explicitly (§11.5); Android has no equivalent
    concept of "the app but no window" - backgrounding it just backgrounds the Activity,
    and the running tunnel is represented by the persistent notification (§10.2) instead
    of a tray icon.
-5. **Country flag rendering.** Android draws the ISO code as a regional-indicator emoji
+4. **Country flag rendering.** Android draws the ISO code as a regional-indicator emoji
    pair, built locally, nothing downloaded or bundled (§10's Main screen bullet). Windows
    bundles the `flag-icons` SVG set instead (§11.3) - Segoe UI Emoji has no flag glyphs on
    Windows, a deliberate long-standing Microsoft choice rather than a WebView2 bug.

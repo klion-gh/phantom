@@ -170,3 +170,29 @@ func TestTunnelDNSQueryFollowsTheSiteList(t *testing.T) {
 		t.Fatal("smart mode with an empty list tunnels everything, DNS included")
 	}
 }
+
+// Every catalogue entry must be something the site list actually matches on:
+// Telegram's address ranges in particular only work if each one parses as a
+// CIDR, since its app never looks a name up for them to be learned from.
+func TestCatalogueEntriesAreAllMatchable(t *testing.T) {
+	for _, r := range PopularResources() {
+		for _, entry := range r.Domains {
+			set := NewDomainSet()
+			set.Set([]string{entry})
+			if set.Empty() {
+				t.Errorf("%s: entry %q was dropped as unparseable", r.Name, entry)
+			}
+		}
+	}
+	set := NewDomainSet()
+	for _, r := range PopularResources() {
+		if r.Name == "Telegram" {
+			set.Set(r.Domains)
+		}
+	}
+	for _, ip := range []string{"149.154.167.51", "91.108.56.130", "2001:67c:4e8:f004::a"} {
+		if !set.Match(ip) {
+			t.Errorf("Telegram data-centre address %s is not routed", ip)
+		}
+	}
+}

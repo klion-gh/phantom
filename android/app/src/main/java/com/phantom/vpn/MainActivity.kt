@@ -528,6 +528,18 @@ private fun PhantomApp(
                     PhantomVpnService.applyRoutingToActiveTunnel()
                     RoutingStore.markSitesDirty()
                 },
+                onRemoveResource = { resource ->
+                    // Only when the whole service is listed does the tile
+                    // exist, so togglePopular here always removes - every
+                    // domain and range at once, the same as untapping it in
+                    // the picker, with one routing re-apply instead of one
+                    // per entry.
+                    if (RoutingStore.hasAll(resource.domains)) {
+                        RoutingStore.togglePopular(context, resource.domains)
+                        PhantomVpnService.applyRoutingToActiveTunnel()
+                        RoutingStore.markSitesDirty()
+                    }
+                },
                 onRemoveSite = { pattern ->
                     RoutingStore.removeSite(context, pattern)
                     PhantomVpnService.applyRoutingToActiveTunnel()
@@ -654,6 +666,7 @@ private fun MainScreen(
     onToggleSmart: (Boolean) -> Unit,
     onAddSite: (String) -> Unit,
     onRemoveSite: (String) -> Unit,
+    onRemoveResource: (PopularResource) -> Unit,
     onToggleSmartConfig: (String) -> Unit,
     onOpenPopular: () -> Unit,
     onApplySites: () -> Unit,
@@ -797,6 +810,7 @@ private fun MainScreen(
                     onToggleSmart = onToggleSmart,
                     onAddSite = onAddSite,
                     onRemoveSite = onRemoveSite,
+                    onRemoveResource = onRemoveResource,
                     onToggleConfig = onToggleSmartConfig,
                     onOpenPopular = onOpenPopular,
                     onApplySites = onApplySites,

@@ -29,19 +29,25 @@ const (
 	smartConfigsFileName = "smart_vpn_configs"
 	autoEnabledFileName  = "auto_config_enabled"
 	autoConfigsFileName  = "auto_config_configs"
-	routingModeFileName  = "routing_mode"
-	appsEnabledFileName  = "apps_mode_enabled"
-	appsIncludeFileName  = "apps_mode_include"
 )
 
-// RoutingMode picks which of the two mutually exclusive ways of splitting
-// traffic the user wants. They answer opposite questions - "which apps should
-// skip the VPN" vs "which sites should use it" - so running both at once would
-// mean two rules fighting over the same flow.
-const (
-	RoutingModeApps  = "apps"  // per-app exclusions (the original Windows behaviour)
-	RoutingModeSmart = "smart" // per-site inclusion
-)
+// Files the removed per-app split tunneling kept - its mode switch ("по
+// приложениям" vs Умный VPN), its own on/off and include/exclude switches, and
+// the app list. Nothing reads them any more; removeSplitTunnelLeftovers
+// deletes them so they don't linger in the config dir.
+var splitTunnelLeftovers = []string{"routing_mode", "apps_mode_enabled", "apps_mode_include", "split_tunnel.json"}
+
+// removeSplitTunnelLeftovers deletes splitTunnelLeftovers. Idempotent - after
+// the first start on a build without split tunneling there's nothing left.
+func removeSplitTunnelLeftovers() {
+	dir, err := configDir()
+	if err != nil {
+		return
+	}
+	for _, name := range splitTunnelLeftovers {
+		os.Remove(filepath.Join(dir, name))
+	}
+}
 
 // engine is the live routing state the running tunnel consults. Shared rather
 // than per-tunnel so the UI can edit it while disconnected and have it apply
@@ -57,14 +63,6 @@ var (
 
 // --- persistence -----------------------------------------------------------
 
-func loadRoutingMode() string {
-	return loadSetting(routingModeFileName, RoutingModeSmart, RoutingModeApps, RoutingModeSmart)
-}
-
-func saveRoutingMode(mode string) {
-	saveSetting(routingModeFileName, mode, RoutingModeSmart, RoutingModeApps, RoutingModeSmart)
-}
-
 func loadSmartEnabled() bool { return loadSetting(smartEnabledFileName, "0", "1", "0") == "1" }
 
 func saveSmartEnabled(on bool) {
@@ -72,19 +70,6 @@ func saveSmartEnabled(on bool) {
 }
 
 func loadAutoEnabled() bool { return loadSetting(autoEnabledFileName, "0", "1", "0") == "1" }
-
-// Per-app routing has the same two-step shape as smart mode: one switch for
-// "is this mode doing anything", and one for what it does.
-func loadAppsEnabled() bool { return loadSetting(appsEnabledFileName, "0", "1", "0") == "1" }
-
-func saveAppsEnabled(on bool) { saveSetting(appsEnabledFileName, boolToSetting(on), "0", "1", "0") }
-
-// false (the default) = the listed apps bypass the VPN and everything else is
-// tunnelled - the original behaviour. true = the inverse: only the listed apps
-// are tunnelled, which is the per-app equivalent of smart mode.
-func loadAppsInclude() bool { return loadSetting(appsIncludeFileName, "0", "1", "0") == "1" }
-
-func saveAppsInclude(on bool) { saveSetting(appsIncludeFileName, boolToSetting(on), "0", "1", "0") }
 
 func saveAutoEnabled(on bool) {
 	saveSetting(autoEnabledFileName, boolToSetting(on), "0", "1", "0")
@@ -175,7 +160,7 @@ func saveAutoConfigs(ids []string) { saveStringList(autoConfigsFileName, ids) }
 // quietly contradict that.
 func applyRoutingToEngine() {
 	engine.SetSites(loadSmartSites())
-	if loadSmartEnabled() && !loadAutoEnabled() && loadRoutingMode() == RoutingModeSmart {
+	if loadSmartEnabled() && !loadAutoEnabled() {
 		engine.SetMode(routing.ModeSmart)
 	} else {
 		engine.SetMode(routing.ModeAll)
@@ -184,8 +169,8 @@ func applyRoutingToEngine() {
 
 // installRouting hooks the shared engine into a freshly built tunnel.
 // physicalIfIndex is the real interface captured before the tunnel's default
-// route existed - the same one per-app split tunneling binds to, and the only
-// way a direct dial escapes the tunnel we just created.
+// route existed - the only way a direct dial escapes the tunnel we just
+// created (see directdial.go).
 func installRouting(inner *netstack.Tunnel, physicalIfIndex uint32, haveIfIndex bool) {
 	// No SetDNSUpstream call here, unlike mobile.go's Android setup - Windows
 	// hands out real DNS servers (see wintun.go's configureInterface), so

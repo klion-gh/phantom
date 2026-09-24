@@ -32,7 +32,7 @@ const (
 )
 
 type flowStats struct {
-	tcpTunnel, tcpDirect, udpTunnel, udpDirect, bypass atomic.Int64
+	tcpTunnel, tcpDirect, udpTunnel, udpDirect atomic.Int64
 
 	directFail     atomic.Int64 // direct dial failed; the flow fell back to the tunnel
 	tunnelOpenFail atomic.Int64 // opening a stream in the tunnel failed; the flow was dropped
@@ -246,7 +246,7 @@ func (t *Tunnel) runSummaries(stop <-chan struct{}) {
 		case now := <-ticker.C:
 			s := &t.stats
 			tcpT, tcpD := swap(&s.tcpTunnel), swap(&s.tcpDirect)
-			udpT, udpD, byp := swap(&s.udpTunnel), swap(&s.udpDirect), swap(&s.bypass)
+			udpT, udpD := swap(&s.udpTunnel), swap(&s.udpDirect)
 			dirFail, openFail, noSess := swap(&s.directFail), swap(&s.tunnelOpenFail), swap(&s.noSession)
 			dnsQ, dnsA, dnsU := swap(&s.dnsQueries), swap(&s.dnsAnswers), swap(&s.dnsUnanswered)
 			dnsDir, dnsTun, dnsFb := swap(&s.dnsViaDirect), swap(&s.dnsViaTunnel), swap(&s.dnsDirectFallback)
@@ -256,7 +256,7 @@ func (t *Tunnel) runSummaries(stop <-chan struct{}) {
 			dirSum, dirCnt := swap(&s.directTTFBSumMs), swap(&s.directTTFBCount)
 
 			up, down := atomic.LoadInt64(&t.bytesUp), atomic.LoadInt64(&t.bytesDown)
-			active := tcpT+tcpD+udpT+udpD+byp+dnsQ > 0
+			active := tcpT+tcpD+udpT+udpD+dnsQ > 0
 			troubled := dirFail+openFail+noSess+dnsU+tunU+dirU > 0
 			if !active && !troubled && now.Sub(lastWritten) < heartbeatEvery {
 				continue
@@ -270,7 +270,7 @@ func (t *Tunnel) runSummaries(stop <-chan struct{}) {
 			fields := []any{
 				"smartRouter", router != nil,
 				"tcpTunnel", tcpT, "tcpDirect", tcpD,
-				"udpTunnel", udpT, "udpDirect", udpD, "bypass", byp,
+				"udpTunnel", udpT, "udpDirect", udpD,
 				"dnsQ", dnsQ, "dnsAns", dnsA, "dnsUnanswered", dnsU,
 				"dnsDirect", dnsDir, "dnsTunnel", dnsTun, "dnsFallback", dnsFb,
 				"dnsAvgMs", avg(dnsSum, dnsCnt), "dnsMaxMs", dnsMax,

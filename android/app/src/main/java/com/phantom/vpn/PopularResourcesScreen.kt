@@ -39,9 +39,15 @@ import java.net.URL
 data class PopularResource(val name: String, val icon: String, val domains: List<String>)
 
 /**
- * Reads the catalogue once. It lives on the Go side so the Windows client
- * shows exactly the same list - see internal/routing/catalog.go.
+ * The catalogue, read once per process. It lives on the Go side so the Windows
+ * client shows exactly the same list - see internal/routing/catalog.go. Shared
+ * by the picker and the Маршрутизация site list, which groups a fully-added
+ * service into one tile (see RoutingPage's ResourceGroupTile).
  */
+object PopularCatalog {
+    val all: List<PopularResource> by lazy { loadCatalogue() }
+}
+
 private fun loadCatalogue(): List<PopularResource> = runCatching {
     val arr = JSONArray(Mobile.popularResourcesJSON())
     (0 until arr.length()).map { i ->
@@ -69,7 +75,7 @@ fun PopularResourcesScreen(
     onBack: () -> Unit,
     onToggle: (PopularResource) -> Unit,
 ) {
-    val catalogue = remember { loadCatalogue() }
+    val catalogue = PopularCatalog.all
 
     Column(modifier = Modifier.fillMaxSize()) {
         Row(
@@ -192,7 +198,7 @@ private fun ResourceTile(resource: PopularResource, selected: Boolean, onClick: 
  */
 private val logoCache = mutableMapOf<String, ImageBitmap?>()
 
-private suspend fun fetchLogo(domain: String): ImageBitmap? = withContext(Dispatchers.IO) {
+internal suspend fun fetchLogo(domain: String): ImageBitmap? = withContext(Dispatchers.IO) {
     synchronized(logoCache) { if (logoCache.containsKey(domain)) return@withContext logoCache[domain] }
     val bitmap = runCatching {
         val conn = URL("https://www.google.com/s2/favicons?domain=$domain&sz=64").openConnection() as HttpURLConnection

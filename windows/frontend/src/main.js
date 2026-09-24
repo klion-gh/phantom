@@ -8,7 +8,7 @@ import './style.css';
 // install ever shows, so the app's own footprint grows by the whole set
 // (~2.4MB) once, not per flag shown.
 import 'flag-icons/css/flag-icons.min.css';
-import { Connect, Disconnect, Status, ReadLog, ListConfigs, AddConfig, UpdateConfig, DeleteConfig, SetConfigGeo, ClearConfigCountry, Ping, ListResources, AddResource, DeleteResource, ListExcludedApps, PickExcludedAppExe, AddExcludedApp, DeleteExcludedApp, ApplyUpdate, StartProxy, StopProxy, GetLanguage, SetLanguage, Version, LookupCountry, GetAppearance, SetAppearance, GetShowProxySettings, SetShowProxySettings, GetBetaUpdates, SetBetaUpdates, ReadFullLog, GetRoutingState, SetRoutingMode, SetSmartEnabled, SetSmartSites, SetSmartConfigs, SetAutoEnabled, SetAutoConfigs, SetAppsEnabled, SetAppsInclude, ReconnectActive, RoutingHealth, PopularResources } from '../wailsjs/go/main/App';
+import { Connect, Disconnect, Status, ReadLog, ListConfigs, AddConfig, UpdateConfig, DeleteConfig, SetConfigGeo, ClearConfigCountry, Ping, ListResources, AddResource, DeleteResource, ApplyUpdate, StartProxy, StopProxy, GetLanguage, SetLanguage, Version, LookupCountry, GetAppearance, SetAppearance, GetShowProxySettings, SetShowProxySettings, GetBetaUpdates, SetBetaUpdates, ReadFullLog, GetRoutingState, SetSmartEnabled, SetSmartSites, SetSmartConfigs, SetAutoEnabled, SetAutoConfigs, ReconnectActive, RoutingHealth, PopularResources } from '../wailsjs/go/main/App';
 import { t, getLang, setLang, applyStaticTranslations } from './i18n.js';
 import { BACKGROUNDS, initBackground, initMiniBackground } from './background.js';
 import { PALETTES } from './palettes.js';
@@ -30,7 +30,6 @@ const screens = {
   main: document.getElementById('screen-main'),
   settings: document.getElementById('screen-settings'),
   log: document.getElementById('screen-log'),
-  splitTunnel: document.getElementById('screen-split-tunnel'),
   popular: document.getElementById('screen-popular'),
 };
 
@@ -82,8 +81,6 @@ const btnUpdate = document.getElementById('btn-update');
 const addResourceOverlay = document.getElementById('add-resource-overlay');
 const resourceNameInput = document.getElementById('resource-name-input');
 const resourceUrlInput = document.getElementById('resource-url-input');
-const excludedAppList = document.getElementById('excluded-app-list');
-const excludedAppEmpty = document.getElementById('excluded-app-empty');
 
 let configs = [];
 let editingId = null;
@@ -96,8 +93,6 @@ const pingTimers = new Map(); // id -> interval handle
 
 let resources = [];
 const resourceTimers = new Map(); // id -> interval handle
-
-let excludedApps = [];
 
 // Independent per-config SOCKS5 proxy toggle state - id -> {running, port}.
 // Unrelated to currentStatus/the full-tunnel VPN: a config can have this on,
@@ -387,39 +382,6 @@ async function reloadResources() {
     resources = [];
   }
   renderResourceList();
-}
-
-// Split-tunneling exclusion list - no polling loop here (unlike configs/
-// resources), this is just a static list the Go side consults per-connection
-// (see windows/splittunnel.go), so rendering is a plain one-shot refresh.
-function renderExcludedAppList() {
-  excludedAppList.innerHTML = '';
-  excludedAppEmpty.classList.toggle('hidden', excludedApps.length > 0);
-
-  for (const app of excludedApps) {
-    const card = document.createElement('div');
-    card.className = 'resource-card';
-    card.dataset.id = app.id;
-    card.innerHTML = `
-      <button class="resource-remove-btn" title="${t('remove')}">&times;</button>
-      <div class="resource-name">${escapeHtml(app.name)}</div>
-      <div class="excluded-app-path">${escapeHtml(app.exePath)}</div>
-    `;
-    card.querySelector('.resource-remove-btn').addEventListener('click', async () => {
-      await DeleteExcludedApp(app.id);
-      await reloadExcludedApps();
-    });
-    excludedAppList.appendChild(card);
-  }
-}
-
-async function reloadExcludedApps() {
-  try {
-    excludedApps = JSON.parse(await ListExcludedApps());
-  } catch (e) {
-    excludedApps = [];
-  }
-  renderExcludedAppList();
 }
 
 function renderConfigList() {
@@ -751,7 +713,6 @@ function applyLanguage(lang) {
   applyStaticTranslations();
   renderConfigList();
   renderResourceList();
-  renderExcludedAppList();
   retranslateAppearanceLabels();
   refreshTileStatuses();
   configScreenTitle.textContent = editingId ? t('edit_config_title') : t('add_config');
@@ -922,8 +883,6 @@ document.getElementById('btn-view-log').addEventListener('click', async () => {
 });
 document.getElementById('btn-back-log').addEventListener('click', () => showScreen('settings'));
 
-document.getElementById('btn-open-split-tunnel').addEventListener('click', () => showScreen('splitTunnel'));
-document.getElementById('btn-back-split-tunnel').addEventListener('click', () => showScreen('settings'));
 // Copies the whole retained log (the last day), not just the tail the viewer
 // shows - a bug report needs the full window. The tile briefly takes its
 // "selected" look as confirmation, since nothing else on screen changes.
@@ -960,15 +919,6 @@ document.getElementById('btn-resource-save').addEventListener('click', async () 
   await AddResource(name, url);
   hideOverlay(addResourceOverlay);
   await reloadResources();
-});
-
-document.getElementById('btn-add-excluded-app').addEventListener('click', async () => {
-  const path = await PickExcludedAppExe();
-  if (!path) return;
-  const fileName = path.split(/[\\/]/).pop() || path;
-  const name = fileName.replace(/\.exe$/i, '');
-  await AddExcludedApp(name, path);
-  await reloadExcludedApps();
 });
 
 btnUpdate.addEventListener('click', async () => {
@@ -1070,7 +1020,6 @@ setInterval(refreshStatus, 4000);
   await reloadConfigs();
   await refreshStatus();
   await reloadResources();
-  await reloadExcludedApps();
 
   // Backfill on launch. Anything the config spells out is applied first (free,
   // cannot fail, and repairs entries stored by a build that dropped the label
@@ -1103,7 +1052,7 @@ setInterval(refreshStatus, 4000);
 
 const SECTIONS = ['configs', 'routing', 'resources'];
 let routingState = {
-  mode: 'smart', smartEnabled: false, sites: [],
+  smartEnabled: false, sites: [],
   smartConfigs: [], autoEnabled: false, autoConfigs: [],
 };
 let popularCatalogue = [];
@@ -1134,27 +1083,25 @@ async function reloadRoutingState() {
     // render is enough to take out everything downstream of it, so the shape
     // is normalised once, at the boundary.
     routingState = {
-      mode: parsed.mode || 'smart',
       smartEnabled: !!parsed.smartEnabled,
       autoEnabled: !!parsed.autoEnabled,
       sites: Array.isArray(parsed.sites) ? parsed.sites : [],
       smartConfigs: Array.isArray(parsed.smartConfigs) ? parsed.smartConfigs : [],
       autoConfigs: Array.isArray(parsed.autoConfigs) ? parsed.autoConfigs : [],
-      appsEnabled: !!parsed.appsEnabled,
-      appsInclude: !!parsed.appsInclude,
     };
   } catch (e) {
     console.error(e);
     try { window.go.main.App.UILog('routing state load failed: ' + e.message); } catch (_) {}
   }
+  await ensurePopularCatalogue();
   renderRouting();
 }
 
 // Renders every part of the Routing section from routingState. Cheap enough to
 // re-run wholesale after any edit, which keeps "what's on screen" in one place
 // instead of spread across each individual handler.
-// Whole-device automatic routing outranks either per-flow mode - both blocks
-// ask this rather than each re-deriving it.
+// Whole-device automatic routing outranks Умный VPN - asked here rather than
+// re-derived at every call site.
 function overriddenByAuto() {
   return routingState.autoEnabled;
 }
@@ -1216,24 +1163,6 @@ function refreshModeAvailability() {
 }
 
 function renderRouting() {
-  const smartMode = routingState.mode === 'smart';
-  document.getElementById('mode-smart-block').classList.toggle('hidden', !smartMode);
-  document.getElementById('mode-apps-block').classList.toggle('hidden', smartMode);
-
-  // Per-app routing has the same two-step shape as smart mode: enable it, then
-  // choose what the list means.
-  const appsToggle = document.getElementById('apps-toggle');
-  appsToggle.classList.toggle('active', routingState.appsEnabled && !overriddenByAuto());
-  appsToggle.disabled = overriddenByAuto();
-  document.getElementById('apps-details')
-    .classList.toggle('inactive', !routingState.appsEnabled || overriddenByAuto());
-  document.getElementById('apps-include-toggle')
-    .classList.toggle('active', routingState.appsInclude);
-  document.getElementById('apps-direction-hint').textContent =
-    routingState.appsInclude ? t('apps_direction_include') : t('apps_direction_exclude');
-  document.getElementById('btn-mode-smart').classList.toggle('active', smartMode);
-  document.getElementById('btn-mode-apps').classList.toggle('active', !smartMode);
-
   refreshModeAvailability();
 
   document.getElementById('auto-tile').classList.toggle('hidden', configs.length === 0);
@@ -1273,19 +1202,52 @@ function renderSitesApplyRow() {
   row.classList.toggle('hidden', !sitesDirty || !currentStatus.connected);
 }
 
+// A service from the Популярные ресурсы catalogue whose every domain and
+// address range is listed shows as one tile - logo at the left edge, name
+// centred, × at the right - rather than a dozen rows (Telegram alone is
+// fourteen ranges). Worked out from the list on every render, so there's no
+// second copy of it to fall out of step, and services added before this
+// existed group the same way. Anything not part of a complete service stays a
+// plain row. Same as Android's ResourceGroupTile.
 function renderSiteList() {
   const el = document.getElementById('site-list');
   if (routingState.sites.length === 0) {
     el.innerHTML = '<div class="routing-empty">' + escapeHtml(t('smart_vpn_no_sites_hint')) + '</div>';
     return;
   }
-  el.innerHTML = routingState.sites.map((site) => `
+  const groups = popularCatalogue.filter((r) => hasAllDomains(r.domains));
+  const grouped = new Set(groups.flatMap((r) => r.domains.map((d) => d.toLowerCase())));
+  const loose = routingState.sites.filter((site) => !grouped.has(site.toLowerCase()));
+
+  el.innerHTML = groups.map((r) => `
+    <div class="site-group-tile">
+      <img class="site-group-logo" alt=""
+           src="https://www.google.com/s2/favicons?domain=${encodeURIComponent(r.icon)}&sz=64"
+           onerror="this.style.visibility='hidden'" />
+      <div class="site-group-name">${escapeHtml(r.name)}</div>
+      <button class="site-remove-btn site-group-remove" data-resource="${escapeHtml(r.name)}" title="${t('remove')}">&times;</button>
+    </div>
+  `).join('') + loose.map((site) => `
     <div class="site-row">
       <div class="site-row-name">${escapeHtml(site)}</div>
       <button class="site-remove-btn" data-site="${escapeHtml(site)}" title="${t('remove')}">&times;</button>
     </div>
   `).join('');
-  for (const btn of el.querySelectorAll('.site-remove-btn')) {
+
+  // Removing a service tile removes every domain and range it stands for,
+  // exactly as untapping it in the picker does.
+  for (const btn of el.querySelectorAll('.site-group-remove')) {
+    btn.addEventListener('click', async () => {
+      const resource = popularCatalogue.find((r) => r.name === btn.dataset.resource);
+      if (!resource) return;
+      const drop = resource.domains.map((d) => d.toLowerCase());
+      routingState.sites = routingState.sites.filter((s) => !drop.includes(s.toLowerCase()));
+      await SetSmartSites(routingState.sites.join('\n'));
+      sitesDirty = true;
+      renderRouting();
+    });
+  }
+  for (const btn of el.querySelectorAll('.site-remove-btn:not(.site-group-remove)')) {
     btn.addEventListener('click', async () => {
       routingState.sites = routingState.sites.filter((s) => s !== btn.dataset.site);
       await SetSmartSites(routingState.sites.join('\n'));
@@ -1369,30 +1331,6 @@ setInterval(() => {
   }
 }, 2500);
 
-document.getElementById('btn-mode-smart').addEventListener('click', async () => {
-  routingState.mode = 'smart';
-  await SetRoutingMode('smart');
-  renderRouting();
-});
-document.getElementById('btn-mode-apps').addEventListener('click', async () => {
-  routingState.mode = 'apps';
-  await SetRoutingMode('apps');
-  renderRouting();
-});
-
-document.getElementById('apps-toggle').addEventListener('click', async () => {
-  if (overriddenByAuto()) return;
-  routingState.appsEnabled = !routingState.appsEnabled;
-  await SetAppsEnabled(routingState.appsEnabled);
-  renderRouting();
-});
-
-document.getElementById('apps-include-toggle').addEventListener('click', async () => {
-  routingState.appsInclude = !routingState.appsInclude;
-  await SetAppsInclude(routingState.appsInclude);
-  renderRouting();
-});
-
 document.getElementById('smart-toggle').addEventListener('click', async () => {
   if (routingState.autoEnabled || blockedByManualConfig()) return;
   routingState.smartEnabled = !routingState.smartEnabled;
@@ -1474,19 +1412,23 @@ document.getElementById('btn-apply-sites').addEventListener('click', async (e) =
 
 // --- Popular resources picker ----------------------------------------------
 
-// Delegated off the routing section rather than bound to the button itself:
-// the block this button lives in is shown/hidden and re-rendered as the mode
-// changes, so a handler bound to one specific element is easy to lose track
-// of. The section element is always present, which makes this robust.
-async function openPopularScreen() {
-  if (popularCatalogue.length === 0) {
-    try {
-      popularCatalogue = JSON.parse(await PopularResources());
-    } catch (e) {
-      console.error('popular resources unavailable', e);
-      popularCatalogue = [];
-    }
+// Delegated off the routing section rather than bound to the button itself, so
+// it survives anything re-rendering the block around it. The section element
+// is always present.
+// Loaded once, on the routing section's first load rather than the picker's
+// first open: the site list needs it too, to group a fully-added service.
+async function ensurePopularCatalogue() {
+  if (popularCatalogue.length > 0) return;
+  try {
+    popularCatalogue = JSON.parse(await PopularResources());
+  } catch (e) {
+    console.error('popular resources unavailable', e);
+    popularCatalogue = [];
   }
+}
+
+async function openPopularScreen() {
+  await ensurePopularCatalogue();
   renderPopularGrid();
   showScreen('popular');
 }

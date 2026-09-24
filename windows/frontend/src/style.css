@@ -501,8 +501,7 @@ html, body {
     display: flex;
     flex-direction: column;
     gap: 8px;
-    /* See .config-list's own comment - same reserved-gutter reasoning,
-       shared by the excluded-app list on the split-tunnel screen too. */
+    /* See .config-list's own comment - same reserved-gutter reasoning. */
     padding: 0 14px 0 0;
 }
 
@@ -613,16 +612,6 @@ html, body {
     font-size: 12.5px;
 }
 
-.excluded-app-path {
-    font-size: 11px;
-    color: var(--text-secondary);
-    font-family: "Consolas", "Cascadia Code", monospace;
-    margin-top: 4px;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    padding-right: 20px;
-}
 
 .label {
     font-size: 13px;
@@ -1150,31 +1139,8 @@ textarea::placeholder { color: var(--text-muted); }
 .routing-tile-title { font-size: 15.5px; font-weight: 600; color: var(--text-primary); }
 .routing-tile-hint { font-size: 13px; color: var(--text-secondary); line-height: 1.45; }
 
-.routing-mode-options { margin-top: 4px; }
 .routing-inline-btn { margin-top: 4px; }
 
-.routing-tile-header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 12px;
-}
-.routing-link-btn {
-    display: flex;
-    align-items: center;
-    gap: 4px;
-    background: transparent;
-    border: none;
-    cursor: pointer;
-    padding: 6px 10px;
-    border-radius: 12px;
-    font-family: inherit;
-    font-size: 13.5px;
-    font-weight: 600;
-    color: var(--primary);
-    flex-shrink: 0;
-}
-.routing-link-btn:hover { background: var(--surface-high); }
 .routing-link-chevron { font-size: 17px; font-weight: 700; line-height: 1; }
 
 .site-add-row { display: flex; align-items: center; gap: 8px; }
@@ -1230,6 +1196,60 @@ textarea::placeholder { color: var(--text-muted); }
     font-weight: 600;
 }
 .site-remove-btn:hover { background: var(--surface-high); color: var(--danger); }
+
+/* A catalogue service in the site list (see renderSiteList): logo pinned to
+   the left edge, name centred across the whole tile, the same × as a plain row
+   pinned to the right - absolutely placed so the name centres on the tile
+   rather than on whatever space the logo and × leave between them. */
+.site-group-tile {
+    position: relative;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    height: 48px;
+    margin: 4px 0;
+    padding: 0 48px;
+    background: var(--surface-high);
+    border: 1px solid var(--surface-outline);
+    border-radius: 14px;
+}
+.site-group-logo {
+    position: absolute;
+    left: 10px;
+    top: 50%;
+    transform: translateY(-50%);
+    width: 28px;
+    height: 28px;
+    border-radius: 7px;
+}
+.site-group-name {
+    min-width: 0;
+    font-size: 14.5px;
+    font-weight: 500;
+    color: var(--text-primary);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.site-group-tile .site-group-remove {
+    position: absolute;
+    right: 6px;
+    top: 50%;
+    transform: translateY(-50%);
+}
+
+/* "Популярные ресурсы" as its own tile above the site list, like the Android
+   client's: title on the left, chevron on the right, the whole tile the
+   button. */
+.routing-nav-tile {
+    flex-direction: row;
+    align-items: center;
+    justify-content: space-between;
+    cursor: pointer;
+    font: inherit;
+    color: var(--text-secondary);
+}
+.routing-nav-tile:hover { background: var(--surface-high); }
 
 .routing-config-list { display: flex; flex-direction: column; gap: 8px; margin-top: 4px; }
 .routing-config-row {
@@ -1431,13 +1451,6 @@ textarea::placeholder { color: var(--text-muted); }
     pointer-events: none;
 }
 
-/* The mode picker reads as one line: label on the left, the two choices on the
-   right, rather than a heading with a row stranded underneath it. */
-.routing-mode-options {
-    margin-top: 0;
-    margin-left: auto;
-    flex-wrap: nowrap;
-}
 
 /* A mode's settings stay on screen when its switch is off, dimmed and inert -
    so it's visible what turning it on would control, instead of the section
