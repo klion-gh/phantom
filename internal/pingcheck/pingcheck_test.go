@@ -5,6 +5,8 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+
+	"phantom/internal/transport"
 )
 
 // fixtureYAML is a syntactically valid client config pointed at addr. The
@@ -83,10 +85,10 @@ func TestPingWithRefusesWhenProtectFails(t *testing.T) {
 
 // A server named by IP must not go near any resolver: the literal is used as-is.
 func TestProtectedResolverPassesLiteralIPThrough(t *testing.T) {
-	r := &protectedResolver{protect: func(int) bool {
+	r := transport.NewProtectedResolver(func(int) bool {
 		t.Fatal("a literal IP should not open any socket")
 		return false
-	}}
+	})
 	ips, err := r.LookupIP(t.Context(), "ip4", "203.0.113.7")
 	if err != nil || len(ips) != 1 || ips[0].String() != "203.0.113.7" {
 		t.Fatalf("got %v, %v", ips, err)

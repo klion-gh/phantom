@@ -180,3 +180,23 @@ func TestAnsweredDirectQueryDoesNotFallBack(t *testing.T) {
 		t.Fatalf("expected the answer to reach the device, got %d replies", len(*replies))
 	}
 }
+
+// The placeholder DNS address answers on 53 (rewritten to the real resolver)
+// and is refused at once on anything else - Android's Private DNS probe on
+// 853 used to hang for the full dial timeout every time the tunnel came up.
+func TestPlaceholderDNSRefusedExceptOnPort53(t *testing.T) {
+	tun := &Tunnel{}
+	if tun.refuseFakeDNS("10.10.0.1:853") {
+		t.Fatal("nothing should be refused before a placeholder is configured")
+	}
+	tun.SetDNSUpstream("10.10.0.1", "1.1.1.1:53")
+	if !tun.refuseFakeDNS("10.10.0.1:853") {
+		t.Fatal("the DoT probe to the placeholder should be refused")
+	}
+	if tun.refuseFakeDNS("10.10.0.1:53") {
+		t.Fatal("plain DNS to the placeholder must go through")
+	}
+	if tun.refuseFakeDNS("1.1.1.1:853") {
+		t.Fatal("only the placeholder address is refused")
+	}
+}

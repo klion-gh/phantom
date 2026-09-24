@@ -31,6 +31,12 @@ type TLSClientConfig struct {
 	// explicitly "protected" to bypass the VPN. Unused on desktop clients.
 	ProtectFD func(fd int) bool
 
+	// Resolver, if set, resolves a server given by hostname - see resolve.go
+	// for why a platform whose own VPN captures the system resolver wants a
+	// protected one here. Nil uses the system resolver. Either way a failed
+	// lookup falls back to the last address that host was dialed on.
+	Resolver IPLookuper
+
 	// rootCAs overrides the system trust store. Tests only (unexported): it
 	// lets them run the real Dial path - fingerprint, handshake pacing, TLS
 	// 1.3, the disguised handshake - against a throwaway certificate.
@@ -117,9 +123,26 @@ func dialAddr(ctx context.Context, cfg *TLSClientConfig, addr string) (net.Conn,
 		}
 	}
 
-	conn, err := dialer.DialContext(ctx, "tcp", addr)
+	// Resolved here rather than by the dialer, so the lookup can go through
+	// cfg.Resolver and fall back to the last good address - see resolve.go.
+	targets, err := resolveServer(ctx, cfg.Resolver, addr)
 	if err != nil {
 		return nil, nil, fmt.Errorf("tcp dial: %w", err)
+	}
+	var conn net.Conn
+	for _, target := range targets {
+		conn, err = dialer.DialContext(ctx, "tcp", target)
+		if err == nil {
+			break
+		}
+	}
+	if err != nil {
+		return nil, nil, fmt.Errorf("tcp dial: %w", err)
+	}
+	if host, _, splitErr := net.SplitHostPort(addr); splitErr == nil && net.ParseIP(host) == nil {
+		if tcpAddr, ok := conn.RemoteAddr().(*net.TCPAddr); ok {
+			rememberGoodIP(host, tcpAddr.IP.String())
+		}
 	}
 
 	utlsCfg := &utls.Config{

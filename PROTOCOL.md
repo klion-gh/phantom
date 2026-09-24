@@ -854,26 +854,36 @@ launch — without it the notification silently never appears, since the manifes
 the service and the Compose UI; `VpnState` carries `status`/`message`/`activeConfigId`
 (the last reset to `null` whenever `status` goes back to `IDLE`).
 
-A `ConnectivityManager.NetworkCallback` (filtered to `NET_CAPABILITY_NOT_VPN`, so it never
-fires on the tunnel's own interface and loops) rebuilds the tunnel from scratch on a
-physical network change (Wi-Fi↔cellular, etc.), retrying up to 4 times, 3s apart, before
-giving up - a single failed attempt (e.g. one slow TLS handshake right as the network
-settles) used to tear the tunnel down for good with no retry at all.
+**Network changes move the tunnel; they don't rebuild it.** The service remembers the
+physical network the tunnel runs over (`boundNetwork`, picked at connect from the physical
+networks directly - validated beats unvalidated, then ethernet > Wi-Fi > cellular - never
+`cm.activeNetwork`, which mid-reconnect returned the app's own previous VPN). A
+`ConnectivityManager.NetworkCallback` (filtered to `NET_CAPABILITY_NOT_VPN`) only schedules
+`evaluateNetwork` (debounced 1.5s): if the best physical network is still `boundNetwork`,
+nothing happens; otherwise the service declares the new one via `setUnderlyingNetworks` and
+calls `Tunnel.NetworkChanged`, which recycles the connection pool (the netstack's session
+refresh redials on the next flow) and repoints split DNS at the new network's resolver.
+The TUN interface and netstack stay as they are. With no usable network at all the tunnel
+simply waits for the next one. A storm guard (4+ switches in a minute) delays each further
+evaluation 10s, 20s, 40s, up to 60s.
+
+This replaced rebuilding the whole VPN on *any* physical network event, which a field log
+showed going badly wrong on a phone that keeps mobile data up alongside Wi-Fi: every new VPN
+interface made the system raise a mobile network for ~5s, whose loss read as another
+network change - a full rebuild every ~7s (199 in four hours), each one dropping every
+connection on the device, which in smart mode is every connection the device has.
+
+The server's own hostname is resolved around the VPN (`transport.NewProtectedResolver`),
+with the last address it was reached on as the fallback: mid-reconnect the system resolver
+pointed at the app's own not-yet-up VPN and the lookup failed ("no such host"). And the
+placeholder DNS address is refused at once on every port but 53 (`refuseFakeDNS`) - Android
+probes it on 853 for Private DNS, which otherwise hung for the full 10s dial timeout.
 
 ### 10.3 Theming (`Theme.kt`, `AnimatedBackground.kt`)
 
-Three independent choices, all persisted in the same plain `SharedPreferences` file the
+Two independent choices, both persisted in the same plain `SharedPreferences` file the
 language toggle uses (none is sensitive):
 
-- **Glass effect** (`Appearance.glassEffect`, off by default) — makes `Surface`/
-  `SurfaceHigh`, the two colours every tile/input/the bottom nav bar already read for
-  their fill, translucent (alpha 0.62/0.72) instead of solid, so `AnimatedBackground`
-  shows through everywhere those colours are used at once - no per-screen plumbing needed
-  since they were already computed properties (below). Popups (`ConfigDialog`,
-  `AddResourceDialog`, the delete-confirmation `AlertDialog`) deliberately read a third,
-  always-opaque `DialogSurface` instead: they already get their own animated
-  backdrop-blur treatment when opened, and stacking that with a translucent fill read as
-  muddy rather than "glass".
 - **Palette** — one of six complete dark palettes (`MIDNIGHT`, `EMERALD`, `SUNSET`,
   `OCEAN`, `GRAPHITE`, `SAKURA`; midnight is the original/default), each fixing every
   colour role at once (background/surface/outline, primary/primary-deep/accent, three text
@@ -1083,21 +1093,11 @@ tunnel) keeps running in the tray until "Выход" is chosen explicitly.
 
 ### 11.6 Theming (`style.css`, `background.js`, `App.GetAppearance`/`SetAppearance`)
 
-The same three choices as Android (§10.3) — a glass-effect toggle, one of six complete
-palettes, and one of eight animated backdrops — with the same defaults, so an untouched
+The same choices as Android (§10.3) — one of six complete palettes and one of eight
+animated backdrops — with the same defaults, so an untouched
 app looks exactly as it did before either existed. No light theme here either, for the
 same reason.
 
-Glass effect (`App.GetGlassEffect`/`SetGlassEffect`, persisted the same way as the other
-two below) works the same way as Android's: `--surface`/`--surface-high` stay the raw,
-fully-opaque palette colours, and two *derived* variables - `--surface-glass`/
-`--surface-high-glass`, `color-mix(in srgb, var(--surface) var(--surface-alpha),
-transparent)` - are what every tile, input and the bottom nav bar actually reads for their
-fill. `html.glass-effect` overrides `--surface-alpha`/`--surface-high-alpha` from 100% down
-to 46%/60%, and because it's the same element `data-palette`/`data-background` already
-toggle on, every one of those consumers turns translucent at once with no other plumbing.
-`.dialog` (delete-confirmation, add-resource, add-config) deliberately keeps reading the
-raw, always-opaque `--surface-high` instead - same reasoning as Android's `DialogSurface`.
 
 The palette is implemented entirely in CSS: `:root[data-palette="…"]` overrides a fixed
 set of variables (`--bg`, `--surface`, `--surface-high`, `--surface-outline`, `--primary`,
@@ -1127,7 +1127,7 @@ the popular-sites catalogue, the config auto-selector) is one Go implementation 
 byte-for-byte by both apps, called from Kotlin via `mobile.aar`/gomobile on Android and
 directly, same binary, on Windows. The UI intentionally mirrors itself as closely as
 possible on top of that (same palettes, same tile layout, same three-section
-Configs/Routing/Resources structure, same glass-effect toggle, same popup-with-blurred-
+Configs/Routing/Resources structure, same popup-with-blurred-
 backdrop pattern for "add" dialogs). What's left, genuinely different, comes down to four
 things, each traceable to a real platform constraint rather than an oversight:
 

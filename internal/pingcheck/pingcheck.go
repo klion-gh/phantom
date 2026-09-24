@@ -6,10 +6,8 @@ package pingcheck
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"net"
-	"syscall"
 	"time"
 
 	"phantom/internal/config"
@@ -39,13 +37,6 @@ type Options struct {
 	// the current server's round trip on top.
 	ProtectFD func(fd int) bool
 }
-
-// Public resolvers a protected lookup goes to. Needed only while a tunnel is
-// up: the system resolver then points into the tunnel (10.10.0.1 on Android,
-// the Wintun adapter's DNS on Windows), so the lookup itself would leak into
-// it even with the handshake socket protected. Two, so one being filtered on
-// a given network doesn't take the ping down with it.
-var directDNSServers = []string{"1.1.1.1:53", "8.8.8.8:53"}
 
 // Ping resolves configYAML's server address and performs one full disguised
 // handshake (TCP connect + uTLS ClientHello + the WS-upgrade auth exchange -
@@ -126,68 +117,12 @@ func PingWith(configYAML string, opts Options) (Result, error) {
 	return Result{}, lastErr
 }
 
-// ipLookuper is the one resolver method a ping needs, so the system resolver
-// and protectedResolver can stand in for each other.
-type ipLookuper interface {
-	LookupIP(ctx context.Context, network, host string) ([]net.IP, error)
-}
-
 // resolverFor returns the resolver a ping should use: the system one when
 // nothing needs protecting, otherwise one whose sockets go through protect to
-// a public server (see directDNSServers).
-func resolverFor(protect func(fd int) bool) ipLookuper {
+// a public server (transport.NewProtectedResolver).
+func resolverFor(protect func(fd int) bool) transport.IPLookuper {
 	if protect == nil {
 		return net.DefaultResolver
 	}
-	return &protectedResolver{protect: protect}
-}
-
-type protectedResolver struct {
-	protect func(fd int) bool
-}
-
-func (r *protectedResolver) LookupIP(ctx context.Context, network, host string) ([]net.IP, error) {
-	// A literal address needs no lookup at all - the common case, since most
-	// configs name their server by IP.
-	if ip := net.ParseIP(host); ip != nil {
-		return []net.IP{ip}, nil
-	}
-	direct := &net.Resolver{
-		PreferGo: true,
-		Dial: func(ctx context.Context, network, _ string) (net.Conn, error) {
-			d := net.Dialer{Timeout: 2 * time.Second, Control: protectControl(r.protect)}
-			var lastErr error
-			for _, server := range directDNSServers {
-				conn, err := d.DialContext(ctx, network, server)
-				if err == nil {
-					return conn, nil
-				}
-				lastErr = err
-			}
-			return nil, lastErr
-		},
-	}
-	ips, err := direct.LookupIP(ctx, network, host)
-	if err == nil && len(ips) > 0 {
-		return ips, nil
-	}
-	// A network that blocks outside DNS outright would otherwise make every
-	// ping fail while the tunnel is up. Falling back gives up directness for
-	// the lookup only - the handshake that is actually timed stays protected.
-	return net.DefaultResolver.LookupIP(ctx, network, host)
-}
-
-// protectControl adapts a ProtectFD callback to net.Dialer.Control.
-func protectControl(protect func(fd int) bool) func(string, string, syscall.RawConn) error {
-	return func(_, _ string, c syscall.RawConn) error {
-		var protectErr error
-		if err := c.Control(func(fd uintptr) {
-			if !protect(int(fd)) {
-				protectErr = errors.New("failed to take the DNS socket out of the VPN")
-			}
-		}); err != nil {
-			return err
-		}
-		return protectErr
-	}
+	return transport.NewProtectedResolver(protect)
 }

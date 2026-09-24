@@ -168,6 +168,10 @@ func Start(configYAML string, tunFD int, mtu int, protector Protector) (*Tunnel,
 	}
 	if protector != nil {
 		tlsCfg.ProtectFD = protector.Protect
+		// The system resolver points into this very VPN once it's up - and
+		// at nothing while it's being replaced - so the server's own name is
+		// resolved around it. See transport/resolve.go.
+		tlsCfg.Resolver = transport.NewProtectedResolver(protector.Protect)
 	}
 
 	poolSize := cfg.PoolSize
@@ -265,6 +269,26 @@ func Start(configYAML string, tunFD int, mtu int, protector Protector) (*Tunnel,
 		"dnsUpstream", upstreamDNSAddr)
 
 	return &Tunnel{pool: pool, cancel: cancel, inner: inner, engine: engine}, nil
+}
+
+// NetworkChanged moves a running tunnel onto a new physical network without
+// rebuilding it: the TUN device and the netstack stay exactly as they are,
+// only the connection to the server is dropped (the next flow, or the UI's
+// liveness poll, redials it on the new network - see netstack's session
+// refresh) and split DNS is pointed at the new network's resolver.
+//
+// This replaces tearing the whole VPN down and establishing a new one on
+// every network change. Besides killing every connection on the device each
+// time, that was self-perpetuating on some phones: each new VPN interface made
+// the system briefly bring up a mobile-data network, whose disappearance
+// seconds later read as another network change - a reconnect every ~7s, with
+// the internet effectively down for as long as it lasted.
+func (t *Tunnel) NetworkChanged(dnsServers string) {
+	if t.pool != nil {
+		t.pool.Recycle()
+	}
+	t.SetDirectDNS(dnsServers)
+	diag.Event(diag.CatVPN, "networkChanged")
 }
 
 // SetDirectDNS tells the tunnel which resolver answers directly-resolved
@@ -441,6 +465,7 @@ func StartProxy(configYAML string, requestedPort int, protector Protector) (*Pro
 	}
 	if protector != nil {
 		tlsCfg.ProtectFD = protector.Protect
+		tlsCfg.Resolver = transport.NewProtectedResolver(protector.Protect)
 	}
 
 	poolSize := cfg.PoolSize

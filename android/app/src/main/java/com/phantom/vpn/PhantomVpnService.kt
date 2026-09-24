@@ -49,13 +49,15 @@ class PhantomVpnService : VpnService() {
         // How long disconnect() waits for the graceful tunnel.stop() path before
         // forcing the interface down itself - see forceDisconnect().
         private const val DISCONNECT_FORCE_TIMEOUT_MS = 3000L
-        // How many times a network-change reconnect retries before finally
-        // giving up - see attemptReconnect.
-        private const val MAX_NETWORK_CHANGE_RETRIES = 4
-        // Gap between retry attempts, on top of however long the failed dial
-        // itself took (its own timeout is mobile.Start's 15s dial context) -
-        // just enough that a truly-still-settling network isn't hammered.
-        private const val RECONNECT_RETRY_DELAY_MS = 3000L
+        // How long network events settle before the tunnel acts on them - a
+        // real Wi-Fi<->cellular handover fires a burst of them.
+        private const val NETWORK_SETTLE_MS = 1500L
+        // Storm guard (see stormBackoffMs): this many network switches within
+        // a minute means something is flapping, and each further evaluation
+        // waits longer before acting.
+        private const val STORM_SWITCHES_PER_MINUTE = 4
+        private const val STORM_BACKOFF_BASE_MS = 10_000L
+        private const val STORM_BACKOFF_MAX_MS = 60_000L
 
         @Volatile
         private var activeInstance: PhantomVpnService? = null
@@ -148,11 +150,20 @@ class PhantomVpnService : VpnService() {
     // own tunnel, so every event it fires is an actual signal worth reacting to.
     private var connectivityManager: ConnectivityManager? = null
     private var networkCallback: ConnectivityManager.NetworkCallback? = null
-    private var watchRegisteredAtMs: Long = 0
     private var activeConfigId: String? = null
     private var activeConfigYaml: String? = null
     private val reconnectHandler = Handler(Looper.getMainLooper())
-    private var pendingReconnect: Runnable? = null
+
+    // The physical network the tunnel is running over right now - the one its
+    // connection to the server and every direct flow go out on. Network events
+    // are judged against it (see evaluateNetwork): only losing it, or a better
+    // one appearing, moves the tunnel. Anything else - notably a Samsung phone
+    // bringing a mobile-data network up and down in the background while on
+    // Wi-Fi - is none of the tunnel's business.
+    @Volatile private var boundNetwork: Network? = null
+    private val networkEvaluationPending = java.util.concurrent.atomic.AtomicBoolean(false)
+    // When the tunnel last switched networks, for the storm guard.
+    private val recentSwitches = ArrayDeque<Long>()
 
     // A separate, lightweight physical-network watch for the independent proxy,
     // active only while a proxy is running. The VPN's own watch above rebuilds
@@ -271,19 +282,15 @@ class PhantomVpnService : VpnService() {
         Diag.log(Diag.Cat.VPN, "notificationDisconnect", "modeTurnedOff" to released)
     }
 
-    // onResult, when given, means a caller has its own retry plan and is
-    // taking responsibility for what happens next - see attemptReconnect. In
-    // that case failure gets a light cleanup (just release the TUN fd) rather
-    // than the full disconnect()/stopSelf() teardown below, since stopping
-    // the service here would kill it before the retry it's about to schedule
-    // ever gets to run.
-    private fun connect(configId: String, configYaml: String, onResult: ((Boolean) -> Unit)? = null) {
+    // Builds the tunnel from scratch - for an explicit connect or a config
+    // switch. A network change doesn't come through here any more: that moves
+    // the running tunnel instead (see evaluateNetwork).
+    private fun connect(configId: String, configYaml: String) {
         FileLog.i("connect: establishing tunnel")
         val connectStartedAt = System.currentTimeMillis()
         Diag.log(
             Diag.Cat.VPN, "connectStart",
             "configId" to configId,
-            "isRetry" to (onResult != null),
             "smartEnabled" to RoutingStore.smartEnabled,
             "autoEnabled" to RoutingStore.autoEnabled,
         )
@@ -315,7 +322,13 @@ class PhantomVpnService : VpnService() {
 
             try {
                 val cm = getSystemService(ConnectivityManager::class.java)
-                val underlyingNetwork = cm?.activeNetwork
+                // Picked from the physical networks directly, not
+                // cm.activeNetwork: mid-reconnect that returned this app's own
+                // previous VPN (it isn't excluded from itself), which then got
+                // declared as the new VPN's underlying network and left split
+                // DNS with no resolver to use.
+                val underlyingNetwork = pickPhysicalNetwork(cm)
+                boundNetwork = underlyingNetwork
                 logNetwork("underlyingNetwork", cm, underlyingNetwork)
 
                 val builder = Builder()
@@ -344,12 +357,8 @@ class PhantomVpnService : VpnService() {
                     FileLog.e("VpnService.Builder.establish() returned null (permission not granted)")
                     VpnStateHolder.update(ConnectionStatus.ERROR, "VPN permission not granted")
                     showPersistentNotification(ConnectionStatus.ERROR)
-                    if (onResult != null) {
-                        onResult(false)
-                    } else {
-                        stopForeground(STOP_FOREGROUND_DETACH)
-                        stopSelf()
-                    }
+                    stopForeground(STOP_FOREGROUND_DETACH)
+                    stopSelf()
                     return@execute
                 }
                 tunInterface = pfd
@@ -403,7 +412,6 @@ class PhantomVpnService : VpnService() {
                 VpnStateHolder.update(ConnectionStatus.CONNECTED, "Connected", configId)
                 showPersistentNotification(ConnectionStatus.CONNECTED)
                 registerNetworkCallback(cm)
-                onResult?.invoke(true)
             } catch (e: Throwable) {
                 FileLog.e("connect failed", e)
                 Diag.log(
@@ -413,32 +421,20 @@ class PhantomVpnService : VpnService() {
                     "error" to (e.message ?: e::class.java.simpleName),
                 )
                 VpnStateHolder.update(ConnectionStatus.ERROR, e.message ?: "connection failed", configId)
-                if (onResult != null) {
-                    try {
-                        tunInterface?.close()
-                    } catch (closeErr: Throwable) {
-                        FileLog.e("tun close error (retry pending)", closeErr)
-                    }
-                    tunInterface = null
-                    onResult(false)
-                } else {
-                    disconnect()
-                }
+                disconnect()
             }
         }
     }
 
-    // Watches for the underlying *physical* network changing (Wi-Fi <-> cellular,
-    // Wi-Fi disappearing entirely, a different Wi-Fi network taking over, etc.)
-    // and reconnects from scratch when it does - a live TCP/TLS socket doesn't
-    // migrate itself to a new interface, it just dies, so without this the
-    // tunnel would silently stop passing any traffic until the user noticed and
-    // reconnected manually. NOT_VPN excludes our own tunnel from ever
-    // triggering this itself - see the field comment above for why that matters.
+    // Watches the physical networks (NOT_VPN - never our own tunnel, see the
+    // field comment above) so the tunnel can follow the one it runs over: a
+    // live TCP/TLS socket doesn't migrate to a new interface, it just dies.
+    // Every event only schedules evaluateNetwork, which decides whether
+    // anything actually needs to move - including the burst of onAvailable
+    // replays registering fires for networks that already exist.
     private fun registerNetworkCallback(cm: ConnectivityManager?) {
         if (cm == null) return
         connectivityManager = cm
-        watchRegisteredAtMs = System.currentTimeMillis()
 
         val request = NetworkRequest.Builder()
             .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
@@ -448,11 +444,22 @@ class PhantomVpnService : VpnService() {
         val callback = object : ConnectivityManager.NetworkCallback() {
             override fun onAvailable(network: Network) {
                 logNetwork("netAvailable", cm, network)
-                onPhysicalNetworkEvent()
+                scheduleNetworkEvaluation()
             }
             override fun onLost(network: Network) {
-                Diag.log(Diag.Cat.VPN, "netLost", "network" to network.toString())
-                onPhysicalNetworkEvent()
+                Diag.log(
+                    Diag.Cat.VPN, "netLost",
+                    "network" to network.toString(),
+                    "wasBound" to (network == boundNetwork),
+                )
+                scheduleNetworkEvaluation()
+            }
+            // Wi-Fi coming back usually arrives unvalidated and only becomes
+            // the better network once Android has checked it - this is where
+            // that shows up. Also fires for things like signal strength, which
+            // is fine: evaluation only acts when the best network changes.
+            override fun onCapabilitiesChanged(network: Network, caps: NetworkCapabilities) {
+                scheduleNetworkEvaluation()
             }
         }
         networkCallback = callback
@@ -480,12 +487,14 @@ class PhantomVpnService : VpnService() {
         }
         val caps = runCatching { cm.getNetworkCapabilities(network) }.getOrNull()
         val lp = runCatching { cm.getLinkProperties(network) }.getOrNull()
+        // VPN checked first: a VPN network also carries its underlying
+        // network's transport, so checked last it logged as "wifi".
         val transport = when {
             caps == null -> "unknown"
+            caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN) -> "vpn"
             caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) -> "wifi"
             caps.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) -> "cellular"
             caps.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET) -> "ethernet"
-            caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN) -> "vpn"
             else -> "other"
         }
         Diag.log(
@@ -502,17 +511,121 @@ class PhantomVpnService : VpnService() {
         )
     }
 
-    // registerNetworkCallback immediately replays onAvailable for every
-    // currently-qualifying physical network as soon as it's registered (i.e.
-    // whatever was already connected when we just dialed out on it) - a burst
-    // of events that reflects existing state, not a change, so it must not
-    // itself count as "the network changed". A short grace period is simpler
-    // and more robust here than trying to track exactly how many initial
-    // replay events to expect.
-    private fun onPhysicalNetworkEvent() {
-        if (System.currentTimeMillis() - watchRegisteredAtMs < 2000) return
-        FileLog.i("underlying network changed, scheduling reconnect")
-        scheduleReconnect()
+    /**
+     * The physical network the tunnel should run over: validated beats
+     * unvalidated, then ethernet > Wi-Fi > cellular. Stays on [boundNetwork]
+     * unless something is strictly better, so two equally good networks can't
+     * bounce the tunnel between them.
+     */
+    private fun pickPhysicalNetwork(cm: ConnectivityManager?): Network? {
+        if (cm == null) return null
+        @Suppress("DEPRECATION")
+        val all = runCatching { cm.allNetworks.toList() }.getOrDefault(emptyList())
+        val scored = all.mapNotNull { n ->
+            val caps = runCatching { cm.getNetworkCapabilities(n) }.getOrNull() ?: return@mapNotNull null
+            val physical = !caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN) &&
+                caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_VPN) &&
+                caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+            if (physical) n to networkScore(caps) else null
+        }
+        if (scored.isEmpty()) return null
+        val best = scored.maxBy { it.second }
+        val bound = boundNetwork
+        val boundScore = scored.firstOrNull { it.first == bound }?.second
+        return if (bound != null && boundScore != null && boundScore >= best.second) bound else best.first
+    }
+
+    private fun networkScore(caps: NetworkCapabilities): Int {
+        var score = 0
+        if (caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)) score += 100
+        score += when {
+            caps.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET) -> 20
+            caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) -> 10
+            caps.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) -> 5
+            else -> 0
+        }
+        return score
+    }
+
+    // Debounced and not reset by later events: a burst of events leads to one
+    // evaluation, and a steady trickle (onCapabilitiesChanged) can't postpone
+    // it forever.
+    private fun scheduleNetworkEvaluation() {
+        if (!networkEvaluationPending.compareAndSet(false, true)) return
+        reconnectHandler.postDelayed({
+            networkEvaluationPending.set(false)
+            evaluateNetwork()
+        }, NETWORK_SETTLE_MS + stormBackoffMs())
+    }
+
+    /**
+     * Moves the tunnel to the best physical network if that's no longer the
+     * one it's on - by telling Android the new underlying network and asking
+     * the core to redial the server on it (Tunnel.networkChanged). The VPN
+     * interface itself is left alone.
+     *
+     * This used to rebuild the whole VPN on *any* physical network event.
+     * Besides dropping every connection on the device each time, on some
+     * phones it fed itself: each new VPN interface made the system bring up a
+     * mobile-data network for a few seconds, whose disappearance was another
+     * "network change" - measured in the field as a full reconnect every ~7s,
+     * the internet effectively down for as long as it lasted.
+     */
+    private fun evaluateNetwork() {
+        val cm = connectivityManager ?: return
+        val live = tunnel ?: return
+        val bound = boundNetwork
+        val best = pickPhysicalNetwork(cm)
+        if (best == null) {
+            // Nothing usable right now. The tunnel stays as it is; the next
+            // network to appear is evaluated like any other change.
+            Diag.log(Diag.Cat.VPN, "noPhysicalNetwork", "bound" to bound?.toString())
+            return
+        }
+        if (best == bound) return
+
+        val switches = recordSwitch()
+        if (switches >= STORM_SWITCHES_PER_MINUTE) {
+            Diag.log(
+                Diag.Cat.VPN, "networkStorm",
+                "switchesLastMinute" to switches,
+                "nextEvaluationDelayMs" to NETWORK_SETTLE_MS + stormBackoffMs(),
+            )
+        }
+        boundNetwork = best
+        Diag.log(Diag.Cat.VPN, "networkSwitch", "from" to bound?.toString(), "to" to best.toString())
+        logNetwork("underlyingNetwork", cm, best)
+        runCatching { setUnderlyingNetworks(arrayOf(best)) }
+            .onFailure { FileLog.e("setUnderlyingNetworks failed", it) }
+        val dns = runCatching {
+            cm.getLinkProperties(best)?.dnsServers?.joinToString(",") { it.hostAddress ?: "" }
+        }.getOrNull().orEmpty()
+        executor.execute {
+            runCatching { live.networkChanged(dns) }
+                .onFailure { FileLog.e("networkChanged failed", it) }
+            // Whatever the selector last measured was measured from the old
+            // network - re-probe rather than wait out a full tick.
+            RoutingController.probeNow()
+        }
+    }
+
+    /** Records a switch now and returns how many happened in the last minute. */
+    private fun recordSwitch(): Int = synchronized(recentSwitches) {
+        val now = System.currentTimeMillis()
+        recentSwitches.addLast(now)
+        while (recentSwitches.isNotEmpty() && now - recentSwitches.first() > 60_000) recentSwitches.removeFirst()
+        recentSwitches.size
+    }
+
+    /** Extra delay before acting on network events while they're flapping:
+     *  0 normally, then 10s, 20s, 40s... capped at a minute. A flapping
+     *  network still gets followed, just not on every single flap. */
+    private fun stormBackoffMs(): Long = synchronized(recentSwitches) {
+        val now = System.currentTimeMillis()
+        val recent = recentSwitches.count { now - it <= 60_000 }
+        if (recent < STORM_SWITCHES_PER_MINUTE) return 0L
+        val steps = (recent - STORM_SWITCHES_PER_MINUTE).coerceAtMost(3)
+        (STORM_BACKOFF_BASE_MS shl steps).coerceAtMost(STORM_BACKOFF_MAX_MS)
     }
 
     private fun unregisterNetworkCallback() {
@@ -525,8 +638,6 @@ class PhantomVpnService : VpnService() {
         }
         networkCallback = null
         connectivityManager = null
-        pendingReconnect?.let { reconnectHandler.removeCallbacks(it) }
-        pendingReconnect = null
     }
 
     // Registers the proxy's physical-network watch when at least one proxy is
@@ -561,10 +672,10 @@ class PhantomVpnService : VpnService() {
         }
     }
 
-    // Same initial-replay grace + debounce reasoning as onPhysicalNetworkEvent/
-    // scheduleReconnect above; here the action is just "redial the proxy pools"
-    // (cheap) rather than "rebuild the tunnel", and it runs on the executor
-    // since ProxyManager.reconnectAll closes sockets.
+    // Initial-replay grace + debounce: registering replays onAvailable for
+    // networks that already exist, and a real handover fires a burst of
+    // events. The action is just "redial the proxy pools" (cheap), run on the
+    // executor since ProxyManager.reconnectAll closes sockets.
     private fun onProxyPhysicalNetworkEvent() {
         if (System.currentTimeMillis() - proxyWatchRegisteredAtMs < 2000) return
         pendingProxyReconnect?.let { proxyReconnectHandler.removeCallbacks(it) }
@@ -588,62 +699,6 @@ class PhantomVpnService : VpnService() {
         proxyConnectivityManager = null
         pendingProxyReconnect?.let { proxyReconnectHandler.removeCallbacks(it) }
         pendingProxyReconnect = null
-    }
-
-    // Debounced rather than immediate - a real Wi-Fi<->cellular handover fires
-    // several rapid onAvailable/onLost events while things settle, and dialing
-    // a fresh tunnel on every single one of them would just race itself.
-    private fun scheduleReconnect() {
-        pendingReconnect?.let { reconnectHandler.removeCallbacks(it) }
-        val runnable = Runnable {
-            // The network just changed under us, so whatever the smart
-            // selector last measured is stale - re-probe now rather than
-            // letting the tunnel come back up on a config that is no longer
-            // reachable from this network and waiting out a full tick.
-            executor.execute { RoutingController.probeNow() }
-
-            val id = activeConfigId
-            val yaml = activeConfigYaml
-            if (id != null && yaml != null) {
-                attemptReconnect(id, yaml, attempt = 1)
-            }
-        }
-        pendingReconnect = runnable
-        reconnectHandler.postDelayed(runnable, 1500)
-    }
-
-    /**
-     * Connects, retrying with a short backoff if it doesn't land, up to
-     * [MAX_NETWORK_CHANGE_RETRIES] times before finally tearing the tunnel
-     * down for real.
-     *
-     * A single slow or failed TLS handshake right after a network handover is
-     * far more often transient - the network is still settling, a DNS server
-     * hasn't updated yet - than it is terminal. Without this, connect()'s own
-     * failure path (disconnect(), which stops the service) fires on the very
-     * first miss and nothing ever tries again: the user is left thinking the
-     * VPN is on when it silently isn't, until they notice and reconnect by
-     * hand. Every intermediate attempt passes connect() a completion callback
-     * so its failure path does a light cleanup instead of stopping the
-     * service out from under the retry that's about to be scheduled - only
-     * the final attempt lets connect() tear down for good.
-     */
-    private fun attemptReconnect(id: String, yaml: String, attempt: Int) {
-        FileLog.i("reconnecting after network change (attempt $attempt/$MAX_NETWORK_CHANGE_RETRIES)")
-        val isLastAttempt = attempt >= MAX_NETWORK_CHANGE_RETRIES
-        connect(
-            id,
-            yaml,
-            onResult = if (isLastAttempt) null else { success ->
-                if (!success) {
-                    FileLog.i("reconnect attempt $attempt failed, retrying in ${RECONNECT_RETRY_DELAY_MS}ms")
-                    reconnectHandler.postDelayed(
-                        { attemptReconnect(id, yaml, attempt + 1) },
-                        RECONNECT_RETRY_DELAY_MS,
-                    )
-                }
-            },
-        )
     }
 
     // The notification's "Подключить Proxy" - no Activity involved, so config choice

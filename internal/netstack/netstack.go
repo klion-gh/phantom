@@ -251,6 +251,10 @@ func New(session *tunnel.Session, linkEndpoint stack.LinkEndpoint, mtu int) (*Tu
 func (t *Tunnel) handleTCP(r *tcp.ForwarderRequest) {
 	id := r.ID()
 	target := endpointTarget(id)
+	if t.refuseFakeDNS(target) {
+		r.Complete(true) // RST: an instant, unambiguous "nothing here"
+		return
+	}
 
 	var wq waiter.Queue
 	ep, err := r.CreateEndpoint(&wq)
@@ -274,6 +278,9 @@ func (t *Tunnel) handleTCP(r *tcp.ForwarderRequest) {
 func (t *Tunnel) handleUDP(r *udp.ForwarderRequest) bool {
 	id := r.ID()
 	target := endpointTarget(id)
+	if t.refuseFakeDNS(target) {
+		return false
+	}
 
 	var wq waiter.Queue
 	ep, err := r.CreateEndpoint(&wq)
@@ -356,6 +363,21 @@ func (t *Tunnel) openRemote(network string, target string) io.ReadWriteCloser {
 	}
 	t.countFlow(network, true)
 	return t.meterFlow(network, target, true, false, stream)
+}
+
+// refuseFakeDNS reports whether target is the placeholder DNS address (see
+// SetDNSUpstream) on any port but 53 - which nothing can ever answer. Android
+// probes it on 853 to see whether "Private DNS" can be upgraded to DNS-over-
+// TLS; left alone, that probe was routed out like any other flow and hung for
+// the full 10s dial timeout, every time the tunnel came up. Refusing it
+// straight away gives the system its answer ("no") at once.
+func (t *Tunnel) refuseFakeDNS(target string) bool {
+	fake, _ := t.currentDNSUpstream()
+	if fake == "" {
+		return false
+	}
+	host, port, err := net.SplitHostPort(target)
+	return err == nil && host == fake && port != "53"
 }
 
 // dnsUpstream applies SetDNSUpstream's rewrite: a query addressed to the
