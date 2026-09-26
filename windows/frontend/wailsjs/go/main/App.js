@@ -10,6 +10,10 @@ export function AddResource(arg1, arg2) {
   return window['go']['main']['App']['AddResource'](arg1, arg2);
 }
 
+export function AnswerBrowserPairing(arg1, arg2) {
+  return window['go']['main']['App']['AnswerBrowserPairing'](arg1, arg2);
+}
+
 export function ApplyUpdate() {
   return window['go']['main']['App']['ApplyUpdate']();
 }
@@ -40,6 +44,10 @@ export function GetAppearance() {
 
 export function GetBetaUpdates() {
   return window['go']['main']['App']['GetBetaUpdates']();
+}
+
+export function GetBrowserBridge() {
+  return window['go']['main']['App']['GetBrowserBridge']();
 }
 
 export function GetLanguage() {
@@ -86,6 +94,10 @@ export function ReconnectActive() {
   return window['go']['main']['App']['ReconnectActive']();
 }
 
+export function RevokeBrowserClients() {
+  return window['go']['main']['App']['RevokeBrowserClients']();
+}
+
 export function RoutingHealth() {
   return window['go']['main']['App']['RoutingHealth']();
 }
@@ -104,6 +116,10 @@ export function SetAutoEnabled(arg1) {
 
 export function SetBetaUpdates(arg1) {
   return window['go']['main']['App']['SetBetaUpdates'](arg1);
+}
+
+export function SetBrowserBridgeEnabled(arg1) {
+  return window['go']['main']['App']['SetBrowserBridgeEnabled'](arg1);
 }
 
 export function SetConfigGeo(arg1, arg2, arg3, arg4) {

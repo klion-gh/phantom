@@ -188,6 +188,20 @@
             </div>
             <div class="settings-hint settings-hint-inline" data-i18n="beta_updates_hint">Предлагать обновления до тестовых сборок. Они выходят чаще, но могут содержать ошибки.</div>
           </div>
+          <!-- The Phantom browser extension's link to this app - see
+               browserbridge.go. -->
+          <div class="toggle-row-group">
+            <div class="lang-row">
+              <div class="lang-label" data-i18n="browser_bridge">Браузерное расширение</div>
+              <button id="browser-bridge-toggle" class="toggle-switch"><span class="toggle-switch-thumb"></span></button>
+            </div>
+            <div id="browser-bridge-hint" class="settings-hint settings-hint-inline"></div>
+            <div id="browser-bridge-clients" class="bridge-clients hidden">
+              <span id="browser-bridge-count"></span>
+              <button id="btn-bridge-revoke" class="bridge-link" data-i18n="bridge_revoke">Отключить все</button>
+            </div>
+            <button id="btn-bridge-get" class="bridge-link" data-i18n="bridge_get">Где взять расширение</button>
+          </div>
           <div class="settings-section">
             <div class="settings-section-title" data-i18n="language">Язык</div>
             <div class="lang-options">
@@ -238,6 +252,22 @@
           <div class="dialog-row">
             <button id="btn-delete-cancel" class="btn btn-outline" data-i18n="cancel">Отмена</button>
             <button id="btn-delete-confirm" class="btn btn-danger" data-i18n="delete">Удалить</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Browser extension pairing: shown when the extension asks for
+           access (see browserbridge.go). The same code is on the
+           extension's side, which is what makes approving safe. -->
+      <div id="bridge-pair-overlay" class="overlay hidden">
+        <div class="dialog">
+          <div class="dialog-title" data-i18n="bridge_pair_title">Подключить браузер?</div>
+          <div id="bridge-pair-text" class="dialog-text"></div>
+          <div id="bridge-pair-code" class="bridge-pair-code"></div>
+          <div class="dialog-text bridge-pair-note" data-i18n="bridge_pair_note">Разрешайте, только если расширение показывает этот же код.</div>
+          <div class="dialog-row">
+            <button id="btn-bridge-deny" class="btn btn-outline" data-i18n="bridge_deny">Отклонить</button>
+            <button id="btn-bridge-allow" class="btn btn-primary" data-i18n="bridge_allow">Разрешить</button>
           </div>
         </div>
       </div>

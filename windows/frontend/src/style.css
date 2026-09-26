@@ -825,6 +825,38 @@ textarea::placeholder { color: var(--text-muted); }
 
 .lang-options { display: flex; gap: 10px; }
 
+/* Browser extension block (Settings): quiet text buttons, not tiles - they
+   are secondary to the toggle above them. */
+.bridge-clients {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    font-size: 13px;
+    color: var(--text-secondary);
+}
+.bridge-link {
+    align-self: flex-start;
+    background: none;
+    border: none;
+    padding: 0;
+    font: inherit;
+    font-size: 13px;
+    color: var(--primary);
+    cursor: pointer;
+}
+.bridge-link:hover { text-decoration: underline; }
+.bridge-pair-code {
+    align-self: center;
+    margin: 6px 0;
+    font-size: 34px;
+    font-weight: 700;
+    letter-spacing: 10px;
+    padding-left: 10px; /* balances the trailing letter-spacing */
+    color: var(--text-primary);
+    font-variant-numeric: tabular-nums;
+}
+.bridge-pair-note { font-size: 13px; }
+
 /* Same tile language as .palette-card (18px rounded, animated border) so the
    language switcher reads as part of the same design system rather than a
    leftover plain button pair. Sized to its own label, not stretched - the

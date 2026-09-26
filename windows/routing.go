@@ -158,13 +158,40 @@ func saveAutoConfigs(ids []string) { saveStringList(autoConfigsFileName, ids) }
 // Smart routing is off whenever "Автоматически" is on: whole-device routing
 // means everything is tunnelled, and leaving a site filter underneath it would
 // quietly contradict that.
-func applyRoutingToEngine() {
-	engine.SetSites(loadSmartSites())
+//
+// The returned channel closes once the new list's DNS pre-seeding is done -
+// see applySiteList, which waits on it.
+func applyRoutingToEngine() <-chan struct{} {
+	seeded := engine.SetSites(loadSmartSites())
 	if loadSmartEnabled() && !loadAutoEnabled() {
 		engine.SetMode(routing.ModeSmart)
 	} else {
 		engine.SetMode(routing.ModeAll)
 	}
+	return seeded
+}
+
+// seedWaitLimit bounds how long applySiteList waits for the new list's
+// addresses before resetting flows anyway: a name that doesn't resolve
+// shouldn't hold up the ones that did.
+const seedWaitLimit = 4 * time.Second
+
+// applySiteList saves a new smart-VPN site list and puts it into effect -
+// including for connections that are already open. Routing is decided when a
+// connection opens, so without the reset a browser tab already on a newly
+// added site kept going direct over its warm connections; once the new
+// entries' addresses are known, those connections are closed and the browser
+// reopens them through the tunnel (see netstack.Tunnel.ResetMisroutedFlows).
+func applySiteList(a *App, sites []string) {
+	saveSmartSites(sites)
+	seeded := applyRoutingToEngine()
+	go func() {
+		select {
+		case <-seeded:
+		case <-time.After(seedWaitLimit):
+		}
+		a.resetMisroutedFlows()
+	}()
 }
 
 // installRouting hooks the shared engine into a freshly built tunnel.

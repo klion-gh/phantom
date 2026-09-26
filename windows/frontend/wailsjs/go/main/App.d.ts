@@ -5,6 +5,8 @@ export function AddConfig(arg1:string):Promise<string>;
 
 export function AddResource(arg1:string,arg2:string):Promise<string>;
 
+export function AnswerBrowserPairing(arg1:string,arg2:boolean):Promise<void>;
+
 export function ApplyUpdate():Promise<string>;
 
 export function ClearConfigCountry(arg1:string):Promise<string>;
@@ -20,6 +22,8 @@ export function Disconnect():Promise<void>;
 export function GetAppearance():Promise<string>;
 
 export function GetBetaUpdates():Promise<boolean>;
+
+export function GetBrowserBridge():Promise<string>;
 
 export function GetLanguage():Promise<string>;
 
@@ -43,6 +47,8 @@ export function ReadLog():Promise<string>;
 
 export function ReconnectActive():Promise<string>;
 
+export function RevokeBrowserClients():Promise<void>;
+
 export function RoutingHealth():Promise<string>;
 
 export function SetAppearance(arg1:string,arg2:string):Promise<void>;
@@ -52,6 +58,8 @@ export function SetAutoConfigs(arg1:string):Promise<void>;
 export function SetAutoEnabled(arg1:boolean):Promise<void>;
 
 export function SetBetaUpdates(arg1:boolean):Promise<void>;
+
+export function SetBrowserBridgeEnabled(arg1:boolean):Promise<void>;
 
 export function SetConfigGeo(arg1:string,arg2:string,arg3:string,arg4:string):Promise<string>;
 

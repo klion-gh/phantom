@@ -8,7 +8,7 @@ import './style.css';
 // install ever shows, so the app's own footprint grows by the whole set
 // (~2.4MB) once, not per flag shown.
 import 'flag-icons/css/flag-icons.min.css';
-import { Connect, Disconnect, Status, ReadLog, ListConfigs, AddConfig, UpdateConfig, DeleteConfig, SetConfigGeo, ClearConfigCountry, Ping, ListResources, AddResource, DeleteResource, ApplyUpdate, StartProxy, StopProxy, GetLanguage, SetLanguage, Version, LookupCountry, GetAppearance, SetAppearance, GetShowProxySettings, SetShowProxySettings, GetBetaUpdates, SetBetaUpdates, ReadFullLog, GetRoutingState, SetSmartEnabled, SetSmartSites, SetSmartConfigs, SetAutoEnabled, SetAutoConfigs, ReconnectActive, RoutingHealth, PopularResources } from '../wailsjs/go/main/App';
+import { Connect, Disconnect, Status, ReadLog, ListConfigs, AddConfig, UpdateConfig, DeleteConfig, SetConfigGeo, ClearConfigCountry, Ping, ListResources, AddResource, DeleteResource, ApplyUpdate, StartProxy, StopProxy, GetLanguage, SetLanguage, Version, LookupCountry, GetAppearance, SetAppearance, GetShowProxySettings, SetShowProxySettings, GetBetaUpdates, SetBetaUpdates, ReadFullLog, GetRoutingState, SetSmartEnabled, SetSmartSites, SetSmartConfigs, SetAutoEnabled, SetAutoConfigs, ReconnectActive, RoutingHealth, PopularResources, GetBrowserBridge, SetBrowserBridgeEnabled, RevokeBrowserClients, AnswerBrowserPairing } from '../wailsjs/go/main/App';
 import { t, getLang, setLang, applyStaticTranslations } from './i18n.js';
 import { BACKGROUNDS, initBackground, initMiniBackground } from './background.js';
 import { PALETTES } from './palettes.js';
@@ -701,7 +701,10 @@ document.getElementById('btn-delete-confirm').addEventListener('click', async ()
   hideOverlay(configOverlay);
 });
 
-document.getElementById('btn-gear').addEventListener('click', () => showScreen('settings'));
+document.getElementById('btn-gear').addEventListener('click', () => {
+  refreshBridgeSettings();
+  showScreen('settings');
+});
 document.getElementById('btn-back-settings').addEventListener('click', () => showScreen('main'));
 
 // applyLanguage re-labels everything for the given language: the static markup
@@ -745,6 +748,78 @@ document.getElementById('beta-updates-toggle').addEventListener('click', async (
   // next app start - the "update:available" event does the rest.
   await SetBetaUpdates(betaUpdates);
 });
+
+// --- Browser extension (browserbridge.go) ----------------------------------
+
+async function refreshBridgeSettings() {
+  let state = { enabled: false, running: false, clients: 0 };
+  try {
+    state = JSON.parse(await GetBrowserBridge());
+  } catch (e) {
+    console.error(e);
+  }
+  document.getElementById('browser-bridge-toggle').classList.toggle('active', state.enabled);
+  document.getElementById('browser-bridge-hint').textContent = !state.enabled
+    ? t('browser_bridge_off')
+    : state.running ? t('browser_bridge_hint') : t('browser_bridge_no_port');
+  document.getElementById('browser-bridge-clients').classList.toggle('hidden', !state.enabled || state.clients === 0);
+  document.getElementById('browser-bridge-count').textContent = t('bridge_clients', { n: state.clients });
+}
+
+document.getElementById('browser-bridge-toggle').addEventListener('click', async (e) => {
+  const on = !e.currentTarget.classList.contains('active');
+  diag(Cat.UI, 'setBrowserBridge', { enabled: on });
+  await SetBrowserBridgeEnabled(on);
+  refreshBridgeSettings();
+});
+document.getElementById('btn-bridge-revoke').addEventListener('click', async () => {
+  await RevokeBrowserClients();
+  refreshBridgeSettings();
+});
+document.getElementById('btn-bridge-get').addEventListener('click', () => {
+  window.runtime.BrowserOpenURL('https://github.com/klion-gh/phantom/releases/latest');
+});
+
+// The pairing request currently on screen, if any.
+let bridgePairId = '';
+const bridgePairOverlay = document.getElementById('bridge-pair-overlay');
+
+async function answerBridgePairing(approve) {
+  const id = bridgePairId;
+  bridgePairId = '';
+  hideOverlay(bridgePairOverlay);
+  if (id) await AnswerBrowserPairing(id, approve);
+  refreshBridgeSettings();
+}
+document.getElementById('btn-bridge-allow').addEventListener('click', () => answerBridgePairing(true));
+document.getElementById('btn-bridge-deny').addEventListener('click', () => answerBridgePairing(false));
+
+if (window.runtime) {
+  window.runtime.EventsOn('bridge:pair', (req) => {
+    bridgePairId = req.id;
+    document.getElementById('bridge-pair-text').textContent =
+      t('bridge_pair_text', { client: req.client || 'browser' });
+    document.getElementById('bridge-pair-code').textContent = req.code;
+    showOverlay(bridgePairOverlay);
+  });
+  // Expired, or replaced by a newer request: the dialog no longer answers
+  // anything.
+  window.runtime.EventsOn('bridge:pairClosed', (id) => {
+    if (id === bridgePairId) {
+      bridgePairId = '';
+      hideOverlay(bridgePairOverlay);
+    }
+  });
+  // The extension changed the site list: show it.
+  window.runtime.EventsOn('routing:changed', () => reloadRoutingState());
+  // The extension asked to turn Умный VPN on or off: exactly what the toggle
+  // does, including its refusal while another mode holds the tunnel.
+  window.runtime.EventsOn('bridge:smart', (enabled) => {
+    if (routingState.smartEnabled !== enabled) {
+      document.getElementById('smart-toggle').click();
+    }
+  });
+}
 
 // --- Appearance -------------------------------------------------------------
 //

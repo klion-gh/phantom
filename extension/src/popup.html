@@ -1,0 +1,110 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="color-scheme" content="dark" />
+    <title>Phantom</title>
+    <link rel="stylesheet" href="popup.css" />
+  </head>
+  <body>
+    <header class="top">
+      <img class="logo" src="icons/icon48.png" alt="" />
+      <div class="brand">Phantom</div>
+      <div id="mode-pill" class="pill hidden"></div>
+    </header>
+
+    <!-- Allow talking to the app (Firefox asks for host access separately). -->
+    <section id="view-perm" class="view hidden">
+      <div class="title" data-i18n="permTitle"></div>
+      <div class="text" data-i18n="permText"></div>
+      <button id="btn-perm" class="btn primary" data-i18n="permButton"></button>
+    </section>
+
+    <!-- The app isn't running, or its bridge is off. -->
+    <section id="view-noapp" class="view hidden">
+      <div class="title" data-i18n="noAppTitle"></div>
+      <div class="text" data-i18n="noAppText"></div>
+      <button id="btn-retry" class="btn outline" data-i18n="retry"></button>
+    </section>
+
+    <!-- Not paired yet. -->
+    <section id="view-pair" class="view hidden">
+      <div class="title" data-i18n="pairTitle"></div>
+      <div class="text" data-i18n="pairText"></div>
+      <div id="pair-error" class="text error hidden"></div>
+      <button id="btn-pair" class="btn primary" data-i18n="pairButton"></button>
+    </section>
+
+    <!-- Waiting for the user to approve in the app. -->
+    <section id="view-pairing" class="view hidden">
+      <div class="title" data-i18n="pairingTitle"></div>
+      <div class="text" data-i18n="pairingText"></div>
+      <div id="pair-code" class="code"></div>
+      <div class="waiting"><span class="spinner"></span><span data-i18n="pairingWaiting"></span></div>
+      <button id="btn-pair-cancel" class="btn outline" data-i18n="cancel"></button>
+    </section>
+
+    <!-- The tab isn't a website (settings page, new tab, file). -->
+    <section id="view-nosite" class="view hidden">
+      <div class="text" data-i18n="noSiteText"></div>
+    </section>
+
+    <!-- Something unexpected. -->
+    <section id="view-error" class="view hidden">
+      <div class="title" data-i18n="errorTitle"></div>
+      <div id="error-text" class="text"></div>
+      <button id="btn-error-retry" class="btn outline" data-i18n="retry"></button>
+    </section>
+
+    <!-- The site in this tab. -->
+    <section id="view-site" class="view hidden">
+      <div class="site-card">
+        <div class="site-head">
+          <div class="favicon">
+            <img id="site-favicon" class="hidden" alt="" />
+            <span id="site-letter"></span>
+          </div>
+          <div class="site-host-wrap">
+            <div id="site-host" class="site-host"></div>
+            <div id="site-state" class="site-state"></div>
+          </div>
+        </div>
+        <div id="site-service" class="note hidden"></div>
+        <div id="site-options" class="options hidden">
+          <div class="options-label" data-i18n="addAs"></div>
+          <div id="site-option-chips" class="chips"></div>
+        </div>
+        <button id="btn-add" class="btn primary hidden" data-i18n="addButton"></button>
+        <button id="btn-remove" class="btn outline hidden" data-i18n="removeButton"></button>
+        <div id="site-after" class="after hidden">
+          <span data-i18n="afterAdd"></span>
+          <button id="btn-reload" class="link" data-i18n="reloadPage"></button>
+        </div>
+      </div>
+
+      <div id="mode-note" class="mode-note hidden">
+        <span id="mode-note-text"></span>
+        <button id="btn-enable-smart" class="link hidden" data-i18n="enableSmart"></button>
+      </div>
+
+      <div class="failed">
+        <div class="section-title" data-i18n="failedTitle"></div>
+        <div id="failed-off" class="hidden">
+          <div class="text small" data-i18n="failedOffText"></div>
+          <button id="btn-failed-enable" class="link" data-i18n="failedEnable"></button>
+        </div>
+        <div id="failed-empty" class="text small hidden" data-i18n="failedEmpty"></div>
+        <div id="failed-list" class="failed-list hidden"></div>
+        <button id="btn-failed-add" class="btn outline hidden" data-i18n="failedAdd"></button>
+      </div>
+    </section>
+
+    <footer id="footer" class="bottom hidden">
+      <button id="btn-open-app" class="link" data-i18n="openApp"></button>
+      <button id="btn-unpair" class="link muted" data-i18n="unpair"></button>
+    </footer>
+
+    <script src="bridge.js"></script>
+    <script src="popup.js"></script>
+  </body>
+</html>

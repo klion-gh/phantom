@@ -49,6 +49,7 @@ func (a *App) startup(ctx context.Context) {
 	removeSplitTunnelLeftovers()
 	applyRoutingToEngine()
 	syncSelector()
+	startBrowserBridgeIfEnabled(a)
 
 	go checkAndSelfUpdate(ctx)
 }
@@ -128,6 +129,7 @@ func (a *App) ReconnectActive() string {
 func (a *App) shutdown(ctx context.Context) {
 	a.Disconnect()
 	stopAllConfigProxies()
+	bridge.stop()
 }
 
 // beforeClose runs when the user clicks the window's close button. Returning
@@ -547,8 +549,18 @@ func (a *App) SetSmartEnabled(enabled bool) {
 // SetSmartSites replaces the routed-site list. sites is newline-separated,
 // matching the textarea the UI edits it in.
 func (a *App) SetSmartSites(sites string) {
-	saveSmartSites(splitSiteLines(sites))
-	applyRoutingToEngine()
+	applySiteList(a, splitSiteLines(sites))
+}
+
+// resetMisroutedFlows closes the live tunnel's direct connections that the
+// current routing would now tunnel - see applySiteList.
+func (a *App) resetMisroutedFlows() {
+	a.mu.Lock()
+	w := a.tunnel
+	a.mu.Unlock()
+	if w != nil && w.inner != nil {
+		w.inner.ResetMisroutedFlows()
+	}
 }
 
 // SetSmartConfigs replaces the configs smart mode may choose between.

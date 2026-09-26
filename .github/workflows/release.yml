@@ -134,6 +134,32 @@ jobs:
           path: windows/build/bin/phantom.exe
           retention-days: 1
 
+  # The browser extension (extension/), zipped once per browser family. Plain
+  # file copies - no dependencies to install.
+  extension:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Build and zip the extension
+        working-directory: extension
+        run: |
+          node build.mjs
+          for target in chromium firefox; do
+            (cd "dist/$target" && zip -qr "../../phantom-extension-$target.zip" .)
+          done
+          ls -la *.zip
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: extension
+          path: extension/phantom-extension-*.zip
+          retention-days: 1
+
   # Publishes a DRAFT. Android's signing key deliberately never enters CI - it
   # cannot be rotated without stranding every existing install, so it stays on the
   # operator's machine and the APK keeps being built there, as it always has been.
@@ -144,7 +170,7 @@ jobs:
   # strands everyone - cannot occur: until the operator attaches phantom.apk and
   # presses Publish, no client sees anything at all.
   release:
-    needs: [versions, server, windows-client]
+    needs: [versions, server, windows-client, extension]
     if: startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
     steps:
@@ -157,7 +183,7 @@ jobs:
         run: |
           missing=0
           for f in phantom.exe phantom-server-linux-amd64 phantom-server-linux-arm64 \
-                   phantom-keygen-linux-amd64 phantom-keygen-linux-arm64; do
+                   phantom-keygen-linux-amd64 phantom-keygen-linux-arm64                    phantom-extension-chromium.zip phantom-extension-firefox.zip; do
             if [ ! -f "dist/$f" ]; then echo "::error::dist/$f is missing"; missing=1; fi
           done
           [ "$missing" = 0 ]

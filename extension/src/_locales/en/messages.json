@@ -1,0 +1,143 @@
+{
+  "extName": {
+    "message": "Phantom — Smart VPN"
+  },
+  "extDescription": {
+    "message": "Add the sites you open to the Phantom app's Smart VPN list in one click."
+  },
+  "actionTitle": {
+    "message": "Phantom: Smart VPN"
+  },
+  "menuAddPage": {
+    "message": "Add site to Smart VPN"
+  },
+  "menuAddLink": {
+    "message": "Add link's site to Smart VPN"
+  },
+  "permTitle": {
+    "message": "Allow talking to the app"
+  },
+  "permText": {
+    "message": "The extension needs access to 127.0.0.1, where the Phantom app on this computer listens for it. It talks to nothing else."
+  },
+  "permButton": {
+    "message": "Allow"
+  },
+  "noAppTitle": {
+    "message": "Phantom app not found"
+  },
+  "noAppText": {
+    "message": "Start Phantom on this computer. \"Browser extension\" must be on in its settings."
+  },
+  "retry": {
+    "message": "Check again"
+  },
+  "pairTitle": {
+    "message": "Connect this browser to Phantom"
+  },
+  "pairText": {
+    "message": "The app will ask you to confirm — so no website can do this on your behalf."
+  },
+  "pairButton": {
+    "message": "Connect"
+  },
+  "pairingTitle": {
+    "message": "Confirm in the app"
+  },
+  "pairingText": {
+    "message": "Phantom is showing a request. Allow it if it shows this same code:"
+  },
+  "pairingWaiting": {
+    "message": "Waiting for confirmation…"
+  },
+  "pairDenied": {
+    "message": "The app denied the connection."
+  },
+  "pairExpired": {
+    "message": "The request expired. Try again."
+  },
+  "cancel": {
+    "message": "Cancel"
+  },
+  "noSiteText": {
+    "message": "This tab isn't a website. Open a site and click the Phantom icon again."
+  },
+  "errorTitle": {
+    "message": "Something went wrong"
+  },
+  "errorText": {
+    "message": "The app returned an error: {error}"
+  },
+  "stateListed": {
+    "message": "Goes through Smart VPN"
+  },
+  "stateListedBy": {
+    "message": "Goes through Smart VPN (via {entry})"
+  },
+  "stateDirect": {
+    "message": "Opens directly, without VPN"
+  },
+  "serviceNote": {
+    "message": "This is {name}: all its domains ({n}) will be added, so video and images work too."
+  },
+  "serviceWord": {
+    "message": "service"
+  },
+  "addAs": {
+    "message": "Add as"
+  },
+  "addButton": {
+    "message": "Add to Smart VPN"
+  },
+  "removeButton": {
+    "message": "Remove from list"
+  },
+  "afterAdd": {
+    "message": "Done. Open connections will switch over in a couple of seconds."
+  },
+  "reloadPage": {
+    "message": "Reload page"
+  },
+  "noteSmartOff": {
+    "message": "Smart VPN is off — listed sites currently go direct."
+  },
+  "noteAuto": {
+    "message": "\"Pick the best\" is on: all traffic already goes through the VPN."
+  },
+  "enableSmart": {
+    "message": "Turn on Smart VPN"
+  },
+  "pillSmartOn": {
+    "message": "Smart VPN"
+  },
+  "pillSmartOff": {
+    "message": "Off"
+  },
+  "pillAuto": {
+    "message": "All traffic"
+  },
+  "failedTitle": {
+    "message": "Failed to load on this page"
+  },
+  "failedOffText": {
+    "message": "Site opened but without video or images? They usually live on another domain that is blocked too."
+  },
+  "failedEnable": {
+    "message": "Find those domains…"
+  },
+  "failedEmpty": {
+    "message": "No loading errors noticed."
+  },
+  "failedJustEnabled": {
+    "message": "Done. Reload the page and the domains that failed will show up here."
+  },
+  "failedAdd": {
+    "message": "Add selected"
+  },
+  "openApp": {
+    "message": "Open Phantom"
+  },
+  "unpair": {
+    "message": "Disconnect browser"
+  }
+}

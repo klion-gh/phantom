@@ -106,6 +106,77 @@ type Tunnel struct {
 	// lock) no endpoint can appear that Destroy's abort sweep would miss.
 	admitMu  sync.RWMutex
 	stopping bool
+
+	// Open direct (non-tunnelled) flows, so ResetMisroutedFlows can find the
+	// ones a routing change has made wrong.
+	directMu    sync.Mutex
+	directFlows map[*directFlow]struct{}
+}
+
+// directFlow is one open direct connection, registered for as long as it is
+// open - see ResetMisroutedFlows.
+type directFlow struct {
+	io.ReadWriteCloser
+	t       *Tunnel
+	network string
+	target  string
+	once    sync.Once
+}
+
+func (f *directFlow) Close() error {
+	f.once.Do(func() {
+		f.t.directMu.Lock()
+		delete(f.t.directFlows, f)
+		f.t.directMu.Unlock()
+	})
+	return f.ReadWriteCloser.Close()
+}
+
+func (t *Tunnel) trackDirect(network, target string, conn io.ReadWriteCloser) io.ReadWriteCloser {
+	f := &directFlow{ReadWriteCloser: conn, t: t, network: network, target: target}
+	t.directMu.Lock()
+	if t.directFlows == nil {
+		t.directFlows = map[*directFlow]struct{}{}
+	}
+	t.directFlows[f] = struct{}{}
+	t.directMu.Unlock()
+	return f
+}
+
+// ResetMisroutedFlows closes every open direct flow that the router would
+// now send through the tunnel, and reports how many it closed.
+//
+// Routing is decided once per flow, when it opens - so a site added to the
+// smart list kept going direct over whatever connections the browser already
+// had open to it (a browser keeps them for minutes), and adding a site looked
+// like it hadn't worked until the whole tunnel was reconnected. Closing just
+// those connections makes the app open fresh ones, which the router now
+// sends through the tunnel; nothing else is disturbed. (For UDP - QUIC - there
+// is nothing to signal, but the flow's next datagram opens a new one, which is
+// routed afresh the same way.)
+//
+// Call it after the router's view has changed, including after any DNS
+// pre-seeding for new entries has finished: a flow is matched by its address.
+func (t *Tunnel) ResetMisroutedFlows() int {
+	router, _, _ := t.currentRouting()
+	t.directMu.Lock()
+	flows := make([]*directFlow, 0, len(t.directFlows))
+	for f := range t.directFlows {
+		flows = append(flows, f)
+	}
+	t.directMu.Unlock()
+
+	reset := 0
+	for _, f := range flows {
+		if router == nil || router(f.network, f.target) == RouteTunnel {
+			f.Close()
+			reset++
+		}
+	}
+	if reset > 0 {
+		diag.Event(diag.CatNet, "misroutedReset", "flows", reset, "open", len(flows))
+	}
+	return reset
 }
 
 // admit creates a new flow's endpoint - unless the tunnel is stopping, in
@@ -375,6 +446,9 @@ func (t *Tunnel) openRemote(network string, target string) io.ReadWriteCloser {
 		conn, err := direct(network, target)
 		if err == nil {
 			t.countFlow(network, false)
+			if !dns {
+				conn = t.trackDirect(network, target, conn)
+			}
 			return t.meterFlow(network, target, false, dns, conn)
 		}
 		// Falls through to the tunnel below - which is also why a broken

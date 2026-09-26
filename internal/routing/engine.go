@@ -81,11 +81,15 @@ func (e *Engine) Mode() Mode {
 // away" actually true instead of "works once something happens to trigger a
 // fresh lookup through the tunnel". SniffDNS remains the live top-up for
 // names not in the list yet, or CDN addresses picked up after this resolves.
-func (e *Engine) SetSites(entries []string) {
+//
+// The returned channel closes once every lookup has finished (answered or
+// not) - for a caller that wants to act on the new list's addresses, such as
+// moving already-open connections to a newly listed site into the tunnel.
+func (e *Engine) SetSites(entries []string) <-chan struct{} {
 	e.domains.Set(entries)
 	e.sites.Store(int64(len(entries)))
 	diag.Event(diag.CatRoute, "sites", "count", len(entries), "mode", e.Mode(), "empty", e.domains.Empty())
-	seedDomainIPs(e.domains, entries)
+	return seedDomainIPs(e.domains, entries)
 }
 
 // DiagFields returns (and resets) the per-flow decision counts, plus the
@@ -128,8 +132,10 @@ func (e *Engine) TunnelDNSQuery(qname string) bool {
 
 // seedDomainIPs resolves each name-based entry once, immediately, and feeds
 // the answers into set. Literal IPs and CIDRs already match without any DNS
-// involved, so only names need this.
-func seedDomainIPs(set *DomainSet, entries []string) {
+// involved, so only names need this. The channel closes when all lookups are
+// done.
+func seedDomainIPs(set *DomainSet, entries []string) <-chan struct{} {
+	var wg sync.WaitGroup
 	for _, raw := range entries {
 		name := strings.ToLower(strings.TrimSpace(raw))
 		name = strings.TrimPrefix(name, "https://")
@@ -142,7 +148,9 @@ func seedDomainIPs(set *DomainSet, entries []string) {
 		if name == "" || net.ParseIP(name) != nil {
 			continue
 		}
+		wg.Add(1)
 		go func(host string) {
+			defer wg.Done()
 			ips, err := net.LookupIP(host)
 			if err != nil || len(ips) == 0 {
 				// A listed site's own name - the user typed it, so logging it
@@ -153,6 +161,12 @@ func seedDomainIPs(set *DomainSet, entries []string) {
 			set.Learn(host, ips)
 		}(name)
 	}
+	done := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(done)
+	}()
+	return done
 }
 
 // ShouldTunnel decides one flow. target is "ip:port" as seen by netstack.

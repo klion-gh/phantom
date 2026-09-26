@@ -1,0 +1,143 @@
+{
+  "extName": {
+    "message": "Phantom — Умный VPN"
+  },
+  "extDescription": {
+    "message": "Добавляйте открытые сайты в список Умного VPN приложения Phantom в один клик."
+  },
+  "actionTitle": {
+    "message": "Phantom: Умный VPN"
+  },
+  "menuAddPage": {
+    "message": "Добавить сайт в Умный VPN"
+  },
+  "menuAddLink": {
+    "message": "Добавить сайт ссылки в Умный VPN"
+  },
+  "permTitle": {
+    "message": "Разрешите связь с приложением"
+  },
+  "permText": {
+    "message": "Расширению нужен доступ к адресу 127.0.0.1 — там его ждёт приложение Phantom на этом компьютере. Больше никуда оно не обращается."
+  },
+  "permButton": {
+    "message": "Разрешить"
+  },
+  "noAppTitle": {
+    "message": "Приложение Phantom не найдено"
+  },
+  "noAppText": {
+    "message": "Запустите Phantom на этом компьютере. В его настройках должен быть включён пункт «Браузерное расширение»."
+  },
+  "retry": {
+    "message": "Проверить снова"
+  },
+  "pairTitle": {
+    "message": "Подключите браузер к Phantom"
+  },
+  "pairText": {
+    "message": "Приложение попросит подтвердить подключение — так никакой сайт не сможет сделать это вместо вас."
+  },
+  "pairButton": {
+    "message": "Подключить"
+  },
+  "pairingTitle": {
+    "message": "Подтвердите в приложении"
+  },
+  "pairingText": {
+    "message": "В окне Phantom появился запрос. Разрешите его, если там показан этот же код:"
+  },
+  "pairingWaiting": {
+    "message": "Ждём подтверждения…"
+  },
+  "pairDenied": {
+    "message": "Подключение отклонено в приложении."
+  },
+  "pairExpired": {
+    "message": "Запрос устарел. Попробуйте ещё раз."
+  },
+  "cancel": {
+    "message": "Отмена"
+  },
+  "noSiteText": {
+    "message": "В этой вкладке открыт не сайт. Откройте сайт и нажмите на значок Phantom снова."
+  },
+  "errorTitle": {
+    "message": "Что-то пошло не так"
+  },
+  "errorText": {
+    "message": "Приложение ответило ошибкой: {error}"
+  },
+  "stateListed": {
+    "message": "Идёт через Умный VPN"
+  },
+  "stateListedBy": {
+    "message": "Идёт через Умный VPN (по записи {entry})"
+  },
+  "stateDirect": {
+    "message": "Открывается напрямую, без VPN"
+  },
+  "serviceNote": {
+    "message": "Это {name}: добавятся все его домены ({n}), чтобы работали и видео, и картинки."
+  },
+  "serviceWord": {
+    "message": "сервис"
+  },
+  "addAs": {
+    "message": "Добавить как"
+  },
+  "addButton": {
+    "message": "Добавить в Умный VPN"
+  },
+  "removeButton": {
+    "message": "Убрать из списка"
+  },
+  "afterAdd": {
+    "message": "Готово. Открытые соединения переключатся за пару секунд."
+  },
+  "reloadPage": {
+    "message": "Обновить страницу"
+  },
+  "noteSmartOff": {
+    "message": "Умный VPN выключен — сайты из списка сейчас идут напрямую."
+  },
+  "noteAuto": {
+    "message": "Включён режим «Выбирать лучшую»: весь трафик и так идёт через VPN."
+  },
+  "enableSmart": {
+    "message": "Включить Умный VPN"
+  },
+  "pillSmartOn": {
+    "message": "Умный VPN"
+  },
+  "pillSmartOff": {
+    "message": "Выключен"
+  },
+  "pillAuto": {
+    "message": "Весь трафик"
+  },
+  "failedTitle": {
+    "message": "Не загрузилось на странице"
+  },
+  "failedOffText": {
+    "message": "Сайт открылся, но без видео или картинок? Обычно они лежат на другом домене, который тоже блокируется."
+  },
+  "failedEnable": {
+    "message": "Находить такие домены…"
+  },
+  "failedEmpty": {
+    "message": "Ошибок загрузки не замечено."
+  },
+  "failedJustEnabled": {
+    "message": "Готово. Обновите страницу, и здесь появятся домены, которые не загрузились."
+  },
+  "failedAdd": {
+    "message": "Добавить отмеченные"
+  },
+  "openApp": {
+    "message": "Открыть Phantom"
+  },
+  "unpair": {
+    "message": "Отключить браузер"
+  }
+}

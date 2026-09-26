@@ -90,6 +90,7 @@ phantom/
 │   │   ├── domains.go               DomainSet: literal domain/IP/CIDR matching
 │   │   ├── dns.go                   SniffDNS - learns domain->IP from answers crossing the tunnel
 │   │   ├── selector.go              Selector - probes candidate configs, picks/switches the best
+│   │   ├── sitepick.go              Browser host -> list entry (service / registrable domain)
 │   │   └── catalog.go               PopularResources() - the built-in "popular sites" picker list
 │   ├── geoip/                       Third-party IP->country lookup for tile metadata - see §9.2
 │   └── pingcheck/
@@ -100,6 +101,7 @@ phantom/
 │   └── autoselect.go        gomobile-safe wrapper around internal/routing.Selector - §9.3
 ├── android/                 Kotlin/Compose app (package com.phantom.vpn) using mobile.aar - §10
 ├── windows/                 Wails v2 app (Go + HTML/CSS/JS), phantom.exe - §11
+├── extension/               Browser extension (MV3) talking to phantom.exe - §11.4a
 ├── configs/                 Working client.yaml / server.yaml
 ├── scripts/install.sh       One-command server install/uninstall (curl | sh)
 └── Makefile
@@ -1102,6 +1104,51 @@ Android, whichever of {a manually-connected config, "Выбирать лучшу
 in charge of the tunnel right now is dimmed (`.inactive` - `opacity: 0.4`,
 `pointer-events: none`, `filter: grayscale(0.6)`) and explains why, rather than silently
 conflicting with whichever mode actually owns it.
+
+Every site-list change (`SetSmartSites`, and the browser extension below) goes through
+`applySiteList`: save, re-apply the engine, wait (up to 4s) for `Engine.SetSites`' DNS
+pre-seed to finish, then `netstack.Tunnel.ResetMisroutedFlows()`. Routing is decided when a
+flow opens, so a tab already on a site that was just added kept using its warm direct
+connections; the netstack now tracks open direct flows and closes those the router would now
+tunnel, and the browser reopens them through the tunnel. Only those flows are touched (for
+UDP/QUIC there is nothing to signal - the next datagram opens a new, correctly routed flow).
+
+#### 11.4a Browser extension bridge (`browserbridge.go`, `extension/`)
+
+A small HTTP API on `127.0.0.1:47815` (first free of 47815-47819) for the Phantom browser
+extension. Endpoints: `GET /v1/hello` (unauthenticated: `{app, version, api}`), `POST
+/v1/pair` + `GET /v1/pair/<id>` (pairing), and, with an `X-Phantom-Token` header, `GET
+/v1/status`, `POST /v1/site` (look up a host), `/v1/site/add`, `/v1/site/remove`,
+`/v1/smart` (asks the frontend to flip its own Умный VPN toggle, `bridge:smart` event),
+`/v1/show`.
+
+Security model: the Host header must be `127.0.0.1`/`localhost` (defeats DNS rebinding); any
+request naming a non-extension `Origin` is refused (a web page can't claim an extension's
+origin, and every POST a page makes carries its own, or `null`); no response carries CORS
+headers, so no page can read one; everything past pairing needs the token, which a page
+can't attach without a preflight. The token comes only from pairing: the extension POSTs
+`/v1/pair`, the app raises its window with a 4-digit code (`bridge:pair` event), the
+extension shows the same code, and the user approves only if they match. The token is
+handed out once, on the extension's first poll after approval; the app stores only its
+SHA-256 (`browser_clients`). Settings → «Браузерное расширение» turns the listener off
+(`browser_bridge`) and forgets every paired browser.
+
+Host → list entry is `internal/routing/sitepick.go`, shared and unit-tested: a host covered
+by a catalogue service (`PopularResources`) adds the whole service (so `gemini.google.com`
+adds Gemini's hosts, not all of `google.com`); otherwise the options are the registrable
+domain (`golang.org/x/net/publicsuffix`) down to the host itself, and `/v1/site/add` accepts
+only one of those. Removal drops the covering entry, and the whole service with it when the
+service is fully listed - matching how the site list shows it as one tile.
+
+The extension (`extension/src`, MV3, `node extension/build.mjs` → `dist/chromium` and
+`dist/firefox`, which differ only in the manifest's background section and add-on id):
+popup for the active tab (`activeTab`, no browsing-history permission), page/link context
+menu items, and - only with the optional `webRequest` + `<all_urls>` permissions the user
+grants from the popup - a per-tab record of failed requests (in `storage.session`) so a page
+that loads without its media can offer the failing domains too; the same permission lets
+the toolbar badge show whether the tab's site is listed. Chrome closes the popup when the
+app's window takes focus for approval, so a pairing in progress is kept in
+`storage.session` and resumed (token and all) when the popup is reopened.
 
 ### 11.5 System tray (`tray.go`)
 
