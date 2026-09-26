@@ -772,8 +772,131 @@ textarea::placeholder { color: var(--text-muted); }
     width: 100%;
     max-width: 460px;
     max-height: 88vh;
-    overflow-y: auto;
+    overflow: hidden;
 }
+/* The dialog's body scrolls, not the dialog: the header stays put, and the
+   body gets the same overlay scrollbar as Settings (scrollbar.js) - a thin
+   capsule in its own gutter inside the tile, instead of the OS scrollbar
+   along the tile's outer edge. The wrapper reaches into the dialog's right
+   padding so that gutter doesn't eat into the fields. */
+.dialog-scroll {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    padding-right: 14px;
+}
+.config-dialog .scrollbar-wrapper { margin-right: -12px; }
+
+/* --- "+" menu (configs header) --- */
+.add-menu {
+    position: fixed;
+    z-index: 40;
+    min-width: 300px;
+    padding: 6px;
+    border-radius: 20px;
+    background: var(--surface-high);
+    border: 1px solid var(--surface-outline);
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    box-shadow: 0 18px 40px rgba(0, 0, 0, 0.45);
+    opacity: 0;
+    transform: translateY(-6px) scale(0.98);
+    transform-origin: top right;
+    transition: opacity 160ms ease, transform 160ms ease;
+}
+.add-menu.visible { opacity: 1; transform: none; }
+.add-menu-item {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    padding: 12px 14px;
+    border: none;
+    border-radius: 14px;
+    background: transparent;
+    color: var(--text-primary);
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+}
+.add-menu-item:hover { background: var(--surface); }
+.add-menu-icon {
+    flex: none;
+    width: 42px;
+    height: 42px;
+    border-radius: 12px;
+    display: grid;
+    place-items: center;
+    background: var(--surface);
+    color: var(--primary);
+}
+.add-menu-text { display: flex; flex-direction: column; gap: 2px; }
+.add-menu-title { font-size: 15px; font-weight: 600; }
+.add-menu-sub { font-size: 12.5px; color: var(--text-secondary); }
+
+/* --- "Подключить свой сервер" --- */
+.server-form, .server-progress { gap: 16px; }
+.server-intro { font-size: 13.5px; line-height: 1.5; color: var(--text-secondary); }
+.field { display: flex; flex-direction: column; gap: 7px; min-width: 0; flex: 1; }
+.field .text-input { padding: 14px 16px; }
+.field-row { display: flex; gap: 12px; }
+.field-hint { font-size: 12px; line-height: 1.45; color: var(--text-muted); }
+.server-error {
+    font-size: 13.5px;
+    line-height: 1.5;
+    color: var(--danger);
+    background: color-mix(in srgb, var(--danger) 10%, transparent);
+    border-radius: 14px;
+    padding: 12px 14px;
+}
+.server-steps { display: flex; flex-direction: column; gap: 12px; }
+.server-step { display: flex; align-items: center; gap: 12px; font-size: 15px; color: var(--text-muted); }
+.server-step.active, .server-step.done { color: var(--text-primary); }
+.server-step.failed { color: var(--danger); }
+.step-icon {
+    flex: none;
+    width: 22px;
+    height: 22px;
+    border-radius: 50%;
+    border: 2px solid var(--surface-outline);
+    display: grid;
+    place-items: center;
+}
+.server-step.active .step-icon {
+    border-color: var(--surface-outline);
+    border-top-color: var(--primary);
+    animation: step-spin 0.9s linear infinite;
+}
+.server-step.done .step-icon { border-color: var(--success); background: var(--success); }
+.server-step.done .step-icon::after {
+    content: "";
+    width: 9px;
+    height: 5px;
+    border-left: 2px solid #fff;
+    border-bottom: 2px solid #fff;
+    transform: translateY(-1px) rotate(-45deg);
+}
+.server-step.failed .step-icon { border-color: var(--danger); background: var(--danger); }
+.server-step.failed .step-icon::after { content: "!"; color: #fff; font-size: 13px; font-weight: 700; }
+@keyframes step-spin { to { transform: rotate(360deg); } }
+.server-result { font-size: 14px; line-height: 1.5; border-radius: 14px; padding: 12px 14px; }
+.server-result.ok { color: var(--text-primary); background: color-mix(in srgb, var(--success) 12%, transparent); }
+.server-result.err { color: var(--danger); background: color-mix(in srgb, var(--danger) 10%, transparent); }
+.server-log {
+    flex: none;
+    height: 190px;
+    font-size: 11.5px;
+    line-height: 1.5;
+    padding: 12px 14px;
+    color: var(--text-secondary);
+}
+/* The log's own scrollbar is scrollbar.js's too; its wrapper keeps the
+   log's fixed height instead of growing like a page scroller. */
+.server-progress .scrollbar-wrapper { flex: none; }
+.server-log.scroll-area { padding-right: 18px; min-width: 0; width: 100%; }
+.server-actions { flex-wrap: wrap; justify-content: flex-end; }
+.server-actions .btn { flex: none; }
+.server-actions .btn-gradient { height: 46px; padding: 0 22px; }
 .config-dialog .header { padding: 0 0 4px; }
 .config-dialog .form-inner { max-width: none; }
 .config-dialog textarea { flex: none; height: 260px; }

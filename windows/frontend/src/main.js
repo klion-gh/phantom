@@ -8,7 +8,7 @@ import './style.css';
 // install ever shows, so the app's own footprint grows by the whole set
 // (~2.4MB) once, not per flag shown.
 import 'flag-icons/css/flag-icons.min.css';
-import { Connect, Disconnect, Status, ReadLog, ListConfigs, AddConfig, UpdateConfig, DeleteConfig, SetConfigGeo, ClearConfigCountry, Ping, ListResources, AddResource, DeleteResource, ApplyUpdate, StartProxy, StopProxy, GetLanguage, SetLanguage, Version, LookupCountry, GetAppearance, SetAppearance, GetShowProxySettings, SetShowProxySettings, GetBetaUpdates, SetBetaUpdates, ReadFullLog, GetRoutingState, SetSmartEnabled, SetSmartSites, SetSmartConfigs, SetAutoEnabled, SetAutoConfigs, ReconnectActive, RoutingHealth, PopularResources, GetBrowserBridge, SetBrowserBridgeEnabled, RevokeBrowserClients, AnswerBrowserPairing } from '../wailsjs/go/main/App';
+import { Connect, Disconnect, Status, ReadLog, ListConfigs, AddConfig, UpdateConfig, DeleteConfig, SetConfigGeo, ClearConfigCountry, Ping, ListResources, AddResource, DeleteResource, ApplyUpdate, StartProxy, StopProxy, GetLanguage, SetLanguage, Version, LookupCountry, GetAppearance, SetAppearance, GetShowProxySettings, SetShowProxySettings, GetBetaUpdates, SetBetaUpdates, ReadFullLog, GetRoutingState, SetSmartEnabled, SetSmartSites, SetSmartConfigs, SetAutoEnabled, SetAutoConfigs, ReconnectActive, RoutingHealth, PopularResources, GetBrowserBridge, SetBrowserBridgeEnabled, RevokeBrowserClients, AnswerBrowserPairing, ProvisionServer, CancelProvision, ForgetServerKey } from '../wailsjs/go/main/App';
 import { t, getLang, setLang, applyStaticTranslations } from './i18n.js';
 import { BACKGROUNDS, initBackground, initMiniBackground } from './background.js';
 import { PALETTES } from './palettes.js';
@@ -57,6 +57,7 @@ function showScreen(name) {
 // the way out) purely to give the CSS transition something to animate between.
 function showOverlay(el) {
   el.classList.remove('hidden');
+  relayoutScrollbars(el);
   requestAnimationFrame(() => el.classList.add('visible'));
 }
 function hideOverlay(el) {
@@ -660,14 +661,172 @@ function openEditScreen(config) {
   showOverlay(configOverlay);
 }
 
-document.getElementById('btn-add').addEventListener('click', () => {
+function openPasteConfig() {
   editingId = null;
   configTextarea.value = '';
   syncFingerprintTiles();
   configScreenTitle.textContent = t('add_config');
   btnDelete.classList.add('hidden');
   showOverlay(configOverlay);
+}
+
+// "+" opens a small menu: paste a config you have, or set up your own server.
+const addMenu = document.getElementById('add-menu');
+function closeAddMenu() {
+  if (addMenu.classList.contains('hidden')) return;
+  addMenu.classList.remove('visible');
+  setTimeout(() => addMenu.classList.add('hidden'), 160);
+}
+document.getElementById('btn-add').addEventListener('click', (e) => {
+  e.stopPropagation();
+  if (!addMenu.classList.contains('hidden')) { closeAddMenu(); return; }
+  const r = e.currentTarget.getBoundingClientRect();
+  addMenu.style.top = `${r.bottom + 6}px`;
+  addMenu.style.right = `${Math.max(12, window.innerWidth - r.right)}px`;
+  addMenu.classList.remove('hidden');
+  requestAnimationFrame(() => addMenu.classList.add('visible'));
 });
+document.addEventListener('click', (e) => { if (!addMenu.contains(e.target)) closeAddMenu(); });
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeAddMenu(); });
+document.getElementById('btn-add-paste').addEventListener('click', () => { closeAddMenu(); openPasteConfig(); });
+document.getElementById('btn-add-server').addEventListener('click', () => { closeAddMenu(); openServerSetup(); });
+
+// --- "Подключить свой сервер" (provision.go / internal/provision) ----------
+
+const serverOverlay = document.getElementById('server-overlay');
+const serverForm = document.getElementById('server-form');
+const serverProgress = document.getElementById('server-progress');
+const serverLog = document.getElementById('server-log');
+const serverResult = document.getElementById('server-result');
+const srv = (id) => document.getElementById(id);
+let serverRunning = false;
+let lastServerRequest = null;
+
+function openServerSetup() {
+  srv('srv-password').value = '';
+  srv('server-form-error').classList.add('hidden');
+  serverForm.classList.remove('hidden');
+  serverProgress.classList.add('hidden');
+  showOverlay(serverOverlay);
+  setTimeout(() => (srv('srv-host').value ? srv('srv-password') : srv('srv-host')).focus(), 60);
+}
+
+function serverRequestFromForm() {
+  const num = (v) => (v.trim() ? parseInt(v.trim(), 10) : 0);
+  return {
+    host: srv('srv-host').value.trim(),
+    user: srv('srv-user').value.trim(),
+    password: srv('srv-password').value,
+    domain: srv('srv-domain').value.trim(),
+    port: num(srv('srv-port').value),
+    sshPort: num(srv('srv-ssh-port').value),
+  };
+}
+
+function setServerActions(state) {
+  // state: running | ok | error | hostkey
+  srv('btn-server-cancel').classList.toggle('hidden', state !== 'running');
+  srv('btn-server-done').classList.toggle('hidden', state !== 'ok');
+  srv('btn-server-edit').classList.toggle('hidden', state === 'running' || state === 'ok');
+  srv('btn-server-retry').classList.toggle('hidden', state === 'running' || state === 'ok' || state === 'hostkey');
+  srv('btn-server-trust').classList.toggle('hidden', state !== 'hostkey');
+}
+
+function provisionErrorText(res, req) {
+  const fields = { host: t('server_host'), user: t('server_user'), password: t('server_password'), domain: t('server_domain'), port: t('server_port'), sshPort: t('server_ssh_port') };
+  const key = 'prov_err_' + res.code;
+  const text = t(key, { detail: res.detail || '', port: req.port || 8443, field: fields[res.detail] || res.detail || '' });
+  return text === key ? t('prov_err_failed') : text;
+}
+
+async function runServerSetup(req) {
+  lastServerRequest = req;
+  serverRunning = true;
+  serverForm.classList.add('hidden');
+  serverProgress.classList.remove('hidden');
+  serverResult.className = 'server-result hidden';
+  serverLog.textContent = '';
+  for (const s of serverProgress.querySelectorAll('.server-step')) s.className = 'server-step';
+  setServerActions('running');
+  relayoutScrollbars(serverOverlay);
+  diag(Cat.UI, 'provisionStart', {});
+
+  let res;
+  try {
+    res = JSON.parse(await ProvisionServer(JSON.stringify(req)));
+  } catch (e) {
+    res = { ok: false, code: 'failed', detail: String(e) };
+  }
+  serverRunning = false;
+  if (!serverOverlay.classList.contains('visible')) return;   // closed meanwhile
+
+  if (res.ok) {
+    const dup = configs.some((c) => c.yaml.trim() === res.yaml.trim());
+    if (!dup) {
+      const id = await AddConfig(res.yaml);
+      await reloadConfigs();
+      if (id) resolveConfigGeo(id, res.yaml);
+    }
+    serverResult.textContent = t(dup ? 'server_ok_dup' : (res.existing ? 'server_ok_existing' : 'server_ok_new'), { ms: res.latencyMs });
+    serverResult.className = 'server-result ok';
+    setServerActions('ok');
+  } else {
+    serverResult.textContent = provisionErrorText(res, req);
+    serverResult.className = 'server-result err';
+    setServerActions(res.code === 'host_key_changed' ? 'hostkey' : 'error');
+  }
+  relayoutScrollbars(serverOverlay);
+}
+
+srv('btn-server-start').addEventListener('click', () => {
+  const req = serverRequestFromForm();
+  const missing = [];
+  if (!req.host) missing.push(t('server_host'));
+  if (!req.password) missing.push(t('server_password'));
+  if (!req.domain) missing.push(t('server_domain'));
+  const err = srv('server-form-error');
+  if (missing.length) {
+    err.textContent = t('server_need', { fields: missing.join(', ') });
+    err.classList.remove('hidden');
+    return;
+  }
+  err.classList.add('hidden');
+  runServerSetup(req);
+});
+for (const id of ['srv-host', 'srv-user', 'srv-password', 'srv-domain', 'srv-port', 'srv-ssh-port']) {
+  srv(id).addEventListener('keydown', (e) => { if (e.key === 'Enter') srv('btn-server-start').click(); });
+}
+srv('btn-server-retry').addEventListener('click', () => { if (lastServerRequest) runServerSetup(lastServerRequest); });
+srv('btn-server-trust').addEventListener('click', async () => {
+  if (!lastServerRequest) return;
+  await ForgetServerKey(lastServerRequest.host, lastServerRequest.sshPort || 22);
+  runServerSetup(lastServerRequest);
+});
+srv('btn-server-edit').addEventListener('click', () => {
+  serverProgress.classList.add('hidden');
+  serverForm.classList.remove('hidden');
+  relayoutScrollbars(serverOverlay);
+});
+srv('btn-server-done').addEventListener('click', () => hideOverlay(serverOverlay));
+function closeServerSetup() {
+  if (serverRunning) CancelProvision();
+  hideOverlay(serverOverlay);
+}
+srv('btn-server-cancel').addEventListener('click', () => {
+  if (serverRunning) CancelProvision();
+});
+srv('btn-back-server').addEventListener('click', closeServerSetup);
+
+if (window.runtime) {
+  window.runtime.EventsOn('provision:step', ({ step, state }) => {
+    const row = serverProgress.querySelector(`.server-step[data-step="${step}"]`);
+    if (row) row.className = `server-step ${state}`;
+  });
+  window.runtime.EventsOn('provision:log', (line) => {
+    serverLog.textContent += (serverLog.textContent ? '\n' : '') + line;
+    serverLog.scrollTop = serverLog.scrollHeight;
+  });
+}
 
 document.getElementById('btn-back-config').addEventListener('click', () => hideOverlay(configOverlay));
 

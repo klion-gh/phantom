@@ -9,6 +9,8 @@ export function AnswerBrowserPairing(arg1:string,arg2:boolean):Promise<void>;
 
 export function ApplyUpdate():Promise<string>;
 
+export function CancelProvision():Promise<void>;
+
 export function ClearConfigCountry(arg1:string):Promise<string>;
 
 export function Connect(arg1:string,arg2:string):Promise<string>;
@@ -18,6 +20,8 @@ export function DeleteConfig(arg1:string):Promise<string>;
 export function DeleteResource(arg1:string):Promise<string>;
 
 export function Disconnect():Promise<void>;
+
+export function ForgetServerKey(arg1:string,arg2:number):Promise<void>;
 
 export function GetAppearance():Promise<string>;
 
@@ -40,6 +44,8 @@ export function LookupCountry(arg1:string):Promise<string>;
 export function Ping(arg1:string):Promise<string>;
 
 export function PopularResources():Promise<string>;
+
+export function ProvisionServer(arg1:string):Promise<string>;
 
 export function ReadFullLog():Promise<string>;
 

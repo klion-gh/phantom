@@ -225,7 +225,8 @@ private fun PhantomApp(
     // editingYaml being non-null, since "adding" (both null/empty) is a valid,
     // distinct open state too.
     var showConfigDialog by remember { mutableStateOf(false) }
-    val configDialogBlur by animateDpAsState(if (showConfigDialog) 20.dp else 0.dp, tween(300), label = "configDialogBlur")
+    var showServerSetup by remember { mutableStateOf(false) }
+    val configDialogBlur by animateDpAsState(if (showConfigDialog || showServerSetup) 20.dp else 0.dp, tween(300), label = "configDialogBlur")
     val state by VpnStateHolder.state.collectAsState()
     // Hoisted here rather than inside MainScreen: that composable is one branch
     // of the `when (screen)` below, so it gets torn down (and its remembered
@@ -584,6 +585,7 @@ private fun PhantomApp(
                     editingYaml = ""
                     showConfigDialog = true
                 },
+                onSetupServer = { showServerSetup = true },
                 onAddResource = { name, url ->
                     ResourceStore.add(context, name, url)
                     refreshResources()
@@ -593,6 +595,22 @@ private fun PhantomApp(
                     refreshResources()
                 },
                 onOpenSettings = { screen = Screen.SETTINGS },
+            )
+        }
+
+        if (showServerSetup) {
+            ServerSetupDialog(
+                onDismiss = { showServerSetup = false },
+                onConfig = { yaml ->
+                    if (configs.any { it.yaml.trim() == yaml.trim() }) {
+                        false
+                    } else {
+                        val added = ConfigStore.add(context, yaml)
+                        refreshConfigs()
+                        resolveGeoInBackground(added.id, yaml)
+                        true
+                    }
+                },
             )
         }
 
@@ -672,6 +690,7 @@ private fun MainScreen(
     onApplySites: () -> Unit,
     onEditConfig: (SavedConfig) -> Unit,
     onAddConfig: () -> Unit,
+    onSetupServer: () -> Unit,
     onAddResource: (String, String) -> Unit,
     onDeleteResource: (String) -> Unit,
     onOpenSettings: () -> Unit,
@@ -802,6 +821,7 @@ private fun MainScreen(
                     onToggle = onToggle,
                     onEditConfig = onEditConfig,
                     onAddConfig = onAddConfig,
+                    onSetupServer = onSetupServer,
                 )
                 1 -> RoutingPage(
                     configs = configs,
@@ -971,6 +991,7 @@ private fun ConfigsPage(
     onToggle: (SavedConfig) -> Unit,
     onEditConfig: (SavedConfig) -> Unit,
     onAddConfig: () -> Unit,
+    onSetupServer: () -> Unit,
 ) {
     // Умный VPN never makes a config the whole-device VPN - it only ever
     // carries the listed sites through whichever one it picked. Showing that
@@ -991,9 +1012,7 @@ private fun ConfigsPage(
                 fontWeight = FontWeight.SemiBold,
                 modifier = Modifier.weight(1f),
             )
-            IconButton(onClick = onAddConfig) {
-                Text("+", fontSize = 22.sp, color = TextSecondary)
-            }
+            AddConfigButton(onPaste = onAddConfig, onServer = onSetupServer)
         }
 
         // Shown only when the Keystore refused to initialise and configs - which

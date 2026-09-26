@@ -93,6 +93,7 @@ phantom/
 │   │   ├── sitepick.go              Browser host -> list entry (service / registrable domain)
 │   │   └── catalog.go               PopularResources() - the built-in "popular sites" picker list
 │   ├── geoip/                       Third-party IP->country lookup for tile metadata - see §9.2
+│   ├── provision/                   "Подключить свой сервер": install over SSH from IP+login+password - §9.4
 │   └── pingcheck/
 │       └── pingcheck.go           One real disguised handshake, timed, no tunnel built -
 │                                  backs both apps' "preview a saved server" UI feature
@@ -786,6 +787,39 @@ gomobile-safe wrapper Android binds to; Windows (`windows/routing.go`) drives th
 call.
 
 ---
+
+### 9.4 Setting up a server from the apps (`internal/provision`)
+
+"+" → "Подключить свой сервер" in both apps takes what a VPS host hands out - IP, login,
+password - plus a domain whose A record already points at the IP, and returns a finished
+client config. `provision.Run` (shared; `mobile.ProvisionServer` and
+`App.ProvisionServer` are thin wrappers streaming its progress as callbacks/Wails events):
+
+1. **connect** - SSH (`golang.org/x/crypto/ssh`) with the password, also answering
+   keyboard-interactive with it. The host key's SHA-256 fingerprint is remembered per
+   `host:port` by the app (trust on first use); a different key later is refused
+   (`host_key_changed`) until the user chooses "Доверять новому ключу".
+2. **checks** - `id -u`; a non-root user must pass `sudo -S` with the same password (the
+   password goes on stdin, never on a command line). An existing `/opt/phantom/server.yaml`
+   means Phantom is already there: its `client.yaml.example` is read back and nothing is
+   reinstalled, since a reinstall would replace the keys every other device uses.
+   Otherwise the domain must resolve to the server's IP (checked from the device), before
+   anything is installed.
+3. **install** - `scripts/install.sh`, embedded in the apps (`internal/provision/install.sh`;
+   `TestEmbeddedInstallerMatchesScript` keeps the copy identical, and CRLF from a Windows
+   checkout is stripped before upload), run as
+   `PHANTOM_APP=1 PHANTOM_DOMAIN=... PHANTOM_PORT=... sh`. With `PHANTOM_APP=1` the script
+   never prompts and prints `@@PHANTOM step|error <code>|client-begin|client-end` markers;
+   the app shows each error code as its own message (port 80 or the Phantom port taken, no
+   systemd, download failed, ...). A sudoers `requiretty` is handled by retrying on a PTY.
+4. **verify** - `pingcheck.PingWith` with the new config, retried for up to 90s: the server
+   requests its certificate on the first connection. A failure here (`verify_failed`)
+   usually means the port is closed in the hosting provider's own firewall, which nothing
+   on the server can open.
+
+The SSH connection, the DNS check and the verify ping all go around the app's own VPN
+(`provision.Around` with the same protect hook the pings use). Only the domain, port and
+fixed paths are interpolated into commands, and those are validated first.
 
 ## 10. Android app (`android/`, package `com.phantom.vpn`)
 

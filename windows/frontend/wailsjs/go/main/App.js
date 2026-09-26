@@ -18,6 +18,10 @@ export function ApplyUpdate() {
   return window['go']['main']['App']['ApplyUpdate']();
 }
 
+export function CancelProvision() {
+  return window['go']['main']['App']['CancelProvision']();
+}
+
 export function ClearConfigCountry(arg1) {
   return window['go']['main']['App']['ClearConfigCountry'](arg1);
 }
@@ -36,6 +40,10 @@ export function DeleteResource(arg1) {
 
 export function Disconnect() {
   return window['go']['main']['App']['Disconnect']();
+}
+
+export function ForgetServerKey(arg1, arg2) {
+  return window['go']['main']['App']['ForgetServerKey'](arg1, arg2);
 }
 
 export function GetAppearance() {
@@ -80,6 +88,10 @@ export function Ping(arg1) {
 
 export function PopularResources() {
   return window['go']['main']['App']['PopularResources']();
+}
+
+export function ProvisionServer(arg1) {
+  return window['go']['main']['App']['ProvisionServer'](arg1);
 }
 
 export function ReadFullLog() {
