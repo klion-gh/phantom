@@ -270,12 +270,6 @@ private fun PhantomApp(
         updateInfo = checkForUpdate(BuildConfig.VERSION_NAME, allowBeta = Appearance.betaUpdates)
     }
 
-    // Independent per-config SOCKS5 proxy toggle state - see ProxyManager. Entirely
-    // separate from state.activeConfigId/the full-tunnel VPN above. Maps id -> the
-    // actual bound port. Collected from ProxyManager (not kept as this composable's
-    // own copy) because the proxies outlive the Activity - see runningPorts's doc.
-    val proxyRunningPorts by ProxyManager.runningPorts.collectAsState()
-
     // Live health of the configs the smart selector is watching, for the
     // Маршрутизация page's own rows. Polled rather than pushed: the selector
     // already probes on its own schedule, and mirroring every probe into
@@ -309,54 +303,6 @@ private fun PhantomApp(
 
     fun refreshResources() {
         resources = ResourceStore.loadAll(context)
-    }
-
-    // Pokes the service to re-evaluate its own foreground state right after any
-    // ProxyManager change - see PhantomVpnService.ACTION_PROXY_STATE_CHANGED and the
-    // class doc on ProxyManager for why a proxy alone (no VPN connected) still needs
-    // this: without it, a backgrounded proxy becomes unreliable/high-latency once
-    // Android's background network throttling kicks in, then eventually stops working.
-    fun notifyProxyStateChanged() {
-        context.startService(Intent(context, PhantomVpnService::class.java).apply {
-            action = PhantomVpnService.ACTION_PROXY_STATE_CHANGED
-        })
-    }
-
-    // requestedPortText comes straight from the tile's own port field (empty = "any
-    // free port"); invalid/out-of-range input is rejected client-side with a Toast
-    // before ever calling into the Go core, same as the Windows app's port field.
-    fun toggleProxy(config: SavedConfig, requestedPortText: String) {
-        if (ProxyManager.isRunning(config.id)) {
-            ProxyManager.stop(config.id)
-            notifyProxyStateChanged()
-            return
-        }
-
-        val trimmed = requestedPortText.trim()
-        var requestedPort = 0
-        if (trimmed.isNotEmpty()) {
-            requestedPort = trimmed.toIntOrNull() ?: -1
-            if (requestedPort !in 1..65535) {
-                Toast.makeText(context, I18n.t("bad_port", trimmed), Toast.LENGTH_SHORT).show()
-                return
-            }
-        }
-
-        coroutineScope.launch {
-            ProxyManager.start(config.id, config.yaml, requestedPort, PhantomVpnService.lazyProtector)
-                .onSuccess { port ->
-                    ConfigStore.setProxyPort(context, config.id, port)
-                    refreshConfigs()
-                    notifyProxyStateChanged()
-                }
-                .onFailure { e ->
-                    Toast.makeText(
-                        context,
-                        I18n.t("proxy_failed", trimmed.ifEmpty { I18n.t("proxy_any") }, e.message ?: ""),
-                        Toast.LENGTH_LONG,
-                    ).show()
-                }
-        }
     }
 
     // Ids with an IP-resolution retry loop already running, so a config saved twice
@@ -479,7 +425,6 @@ private fun PhantomApp(
                 updateProgress = updateProgress,
                 isUpdating = isUpdating,
                 onUpdateClick = { applyUpdate() },
-                proxyRunningPorts = proxyRunningPorts,
                 configHealth = configHealth,
                 onToggleAuto = { enabled ->
                     if (enabled) {
@@ -567,7 +512,6 @@ private fun PhantomApp(
                         }
                     }
                 },
-                onToggleProxy = { config, portText -> toggleProxy(config, portText) },
                 onToggle = { config ->
                     when {
                         state.activeConfigId == config.id && state.status == ConnectionStatus.CONNECTED -> onDisconnect()
@@ -635,8 +579,6 @@ private fun PhantomApp(
                     val id = editingId
                     if (id != null) {
                         if (state.activeConfigId == id) onDisconnect()
-                        ProxyManager.stop(id)
-                        notifyProxyStateChanged()
                         ConfigStore.delete(context, id)
                         // Drop it from the routing selections too, or the
                         // selector would keep probing a config that no longer
@@ -676,9 +618,7 @@ private fun MainScreen(
     isUpdating: Boolean,
     updateProgress: Int?,
     onUpdateClick: () -> Unit,
-    proxyRunningPorts: Map<String, Int>,
     configHealth: Map<String, ConfigHealth>,
-    onToggleProxy: (SavedConfig, String) -> Unit,
     onToggle: (SavedConfig) -> Unit,
     onToggleAuto: (Boolean) -> Unit,
     onToggleSmart: (Boolean) -> Unit,
@@ -814,10 +754,8 @@ private fun MainScreen(
                     message = message,
                     activeConfigId = activeConfigId,
                     configs = configs,
-                    proxyRunningPorts = proxyRunningPorts,
                     autoEnabled = RoutingStore.autoEnabled,
                     onToggleAuto = onToggleAuto,
-                    onToggleProxy = onToggleProxy,
                     onToggle = onToggle,
                     onEditConfig = onEditConfig,
                     onAddConfig = onAddConfig,
@@ -984,10 +922,8 @@ private fun ConfigsPage(
     message: String,
     activeConfigId: String?,
     configs: List<SavedConfig>,
-    proxyRunningPorts: Map<String, Int>,
     autoEnabled: Boolean,
     onToggleAuto: (Boolean) -> Unit,
-    onToggleProxy: (SavedConfig, String) -> Unit,
     onToggle: (SavedConfig) -> Unit,
     onEditConfig: (SavedConfig) -> Unit,
     onAddConfig: () -> Unit,
@@ -1091,11 +1027,7 @@ private fun ConfigsPage(
                         ConfigInfoCard(
                             config = config,
                             status = cardStatus,
-                            proxyRunning = proxyRunningPorts.containsKey(config.id),
-                            proxyPort = proxyRunningPorts[config.id],
-                            showProxy = Appearance.showProxySettings,
                             onToggle = { onToggle(config) },
-                            onToggleProxy = { portText -> onToggleProxy(config, portText) },
                             onLongPress = { onEditConfig(config) },
                         )
                     }
@@ -1419,24 +1351,6 @@ private fun SettingsScreen(
                 .verticalScroll(rememberScrollState())
                 .padding(start = 20.dp, top = 8.dp, end = 20.dp, bottom = 32.dp),
         ) {
-            // Show/hide the per-config proxy controls (button + port field) -
-            // read by ConfigInfoCard below. Above the language selector since
-            // it's the setting most likely to be flipped once and forgotten.
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    I18n.t("show_proxy_settings"),
-                    color = TextPrimary,
-                    fontSize = 15.sp,
-                    fontWeight = FontWeight.Medium,
-                    modifier = Modifier.weight(1f),
-                )
-                GradientSwitch(
-                    checked = Appearance.showProxySettings,
-                    onCheckedChange = { setShowProxySettings(context, it) },
-                )
-            }
-            Spacer(Modifier.height(20.dp))
-
             // Opts into GitHub prereleases - see UpdateChecker.kt's two
             // endpoints. Flipping this re-runs the update check immediately on
             // the new channel (PhantomApp's LaunchedEffect is keyed on it), so
@@ -1669,18 +1583,6 @@ private fun LangTile(label: String, selected: Boolean, modifier: Modifier = Modi
 // Compose UI.
 private fun setAppLanguage(context: android.content.Context, lang: Lang) {
     I18n.set(context, lang)
-    context.startService(Intent(context, PhantomVpnService::class.java).apply {
-        action = PhantomVpnService.ACTION_SHOW_STATUS
-    })
-}
-
-// Same reasoning as setAppLanguage above: the persistent notification's text
-// and action buttons are built from Appearance.showProxySettings, but the
-// service only re-evaluates that when asked to - without this, the running
-// notification would keep showing/hiding the proxy line until something else
-// (opening the app, connecting, etc.) happened to re-post it.
-private fun setShowProxySettings(context: android.content.Context, show: Boolean) {
-    Appearance.setShowProxySettings(context, show)
     context.startService(Intent(context, PhantomVpnService::class.java).apply {
         action = PhantomVpnService.ACTION_SHOW_STATUS
     })

@@ -8,7 +8,7 @@ import './style.css';
 // install ever shows, so the app's own footprint grows by the whole set
 // (~2.4MB) once, not per flag shown.
 import 'flag-icons/css/flag-icons.min.css';
-import { Connect, Disconnect, Status, ReadLog, ListConfigs, AddConfig, UpdateConfig, DeleteConfig, SetConfigGeo, ClearConfigCountry, Ping, ListResources, AddResource, DeleteResource, ApplyUpdate, StartProxy, StopProxy, GetLanguage, SetLanguage, Version, LookupCountry, GetAppearance, SetAppearance, GetShowProxySettings, SetShowProxySettings, GetBetaUpdates, SetBetaUpdates, ReadFullLog, GetRoutingState, SetSmartEnabled, SetSmartSites, SetSmartConfigs, SetAutoEnabled, SetAutoConfigs, ReconnectActive, RoutingHealth, PopularResources, GetBrowserBridge, SetBrowserBridgeEnabled, RevokeBrowserClients, AnswerBrowserPairing, ProvisionServer, CancelProvision, ForgetServerKey } from '../wailsjs/go/main/App';
+import { Connect, Disconnect, Status, ReadLog, ListConfigs, AddConfig, UpdateConfig, DeleteConfig, SetConfigGeo, ClearConfigCountry, Ping, ListResources, AddResource, DeleteResource, ApplyUpdate, GetLanguage, SetLanguage, Version, LookupCountry, GetAppearance, SetAppearance, GetBetaUpdates, SetBetaUpdates, ReadFullLog, GetRoutingState, SetSmartEnabled, SetSmartSites, SetSmartConfigs, SetAutoEnabled, SetAutoConfigs, ReconnectActive, RoutingHealth, PopularResources, GetBrowserBridge, SetBrowserBridgeEnabled, RevokeBrowserClients, AnswerBrowserPairing, ProvisionServer, CancelProvision, ForgetServerKey } from '../wailsjs/go/main/App';
 import { t, getLang, setLang, applyStaticTranslations } from './i18n.js';
 import { BACKGROUNDS, initBackground, initMiniBackground } from './background.js';
 import { PALETTES } from './palettes.js';
@@ -94,14 +94,6 @@ const pingTimers = new Map(); // id -> interval handle
 
 let resources = [];
 const resourceTimers = new Map(); // id -> interval handle
-
-// Independent per-config SOCKS5 proxy toggle state - id -> {running, port}.
-// Unrelated to currentStatus/the full-tunnel VPN: a config can have this on,
-// off, connected, disconnected, or any combination, all independently (see
-// windows/proxymanager.go). Not polled on a timer like ping/status - it only
-// ever changes in response to this app's own StartProxy/StopProxy calls, so
-// there's no external drift to detect.
-const proxyState = new Map();
 
 function escapeHtml(text) {
   const div = document.createElement('div');
@@ -407,93 +399,17 @@ function renderConfigList() {
         </div>
       </div>
       <button class="config-edit-btn icon-btn-gear" title="${t('edit')}"></button>
-      <div class="proxy-block${showProxySettings ? '' : ' hidden'}">
-        <button class="proxy-toggle" title="${t('proxy_tooltip')}">PROXY</button>
-        <input
-          class="proxy-port-input"
-          type="text"
-          inputmode="numeric"
-          placeholder="${t('port_ph')}"
-          value="${config.proxyPort || ''}"
-          title="${t('proxy_port_title')}"
-        />
-      </div>
       <button class="toggle-switch config-toggle" title="${t('connect')}"><span class="toggle-switch-thumb"></span></button>
     `;
 
     card.querySelector('.config-edit-btn').addEventListener('click', () => openEditScreen(config));
-    card.querySelector('.proxy-toggle').addEventListener('click', () => toggleProxy(config));
     card.querySelector('.config-toggle').addEventListener('click', () => toggleConnection(config));
 
     configList.appendChild(card);
     startPingLoop(config);
-    refreshProxyToggle(config.id);
   }
 
   refreshTileStatuses();
-}
-
-// Independent SOCKS5 proxy toggle - see the proxyState comment above. Doesn't
-// touch currentStatus/toggleConnection's full-tunnel state at all. The port
-// field under the toggle is only editable while off (see refreshProxyToggle) -
-// its value is read fresh right here at toggle time, so whatever the user
-// last typed is exactly what gets requested.
-async function toggleProxy(config) {
-  const state = proxyState.get(config.id);
-  if (state?.running) {
-    await StopProxy(config.id);
-    proxyState.set(config.id, { running: false });
-    refreshProxyToggle(config.id);
-    return;
-  }
-
-  const card = configList.querySelector(`[data-id="${config.id}"]`);
-  const btn = card?.querySelector('.proxy-toggle');
-  const portInput = card?.querySelector('.proxy-port-input');
-
-  const rawPort = portInput?.value.trim() || '';
-  let requestedPort = 0;
-  if (rawPort) {
-    requestedPort = Number(rawPort);
-    if (!Number.isInteger(requestedPort) || requestedPort < 1 || requestedPort > 65535) {
-      errorText.textContent = t('bad_port', { port: rawPort });
-      errorText.classList.remove('hidden');
-      return;
-    }
-  }
-
-  if (btn) btn.disabled = true;
-  try {
-    const resp = JSON.parse(await StartProxy(config.id, config.yaml, requestedPort));
-    proxyState.set(config.id, resp);
-    if (resp.running) {
-      errorText.classList.add('hidden');
-      config.proxyPort = resp.port; // keep in sync so a later re-render still shows it
-    } else {
-      errorText.textContent = t('proxy_failed', { port: rawPort || t('proxy_any'), error: resp.error });
-      errorText.classList.remove('hidden');
-    }
-  } finally {
-    if (btn) btn.disabled = false;
-    refreshProxyToggle(config.id);
-  }
-}
-
-function refreshProxyToggle(configId) {
-  const card = configList.querySelector(`[data-id="${configId}"]`);
-  const btn = card?.querySelector('.proxy-toggle');
-  const portInput = card?.querySelector('.proxy-port-input');
-  if (!btn || !portInput) return;
-  const state = proxyState.get(configId);
-  const running = !!state?.running;
-
-  btn.classList.toggle('active', running);
-  btn.title = running
-    ? t('proxy_tooltip_active', { port: state.port })
-    : t('proxy_tooltip');
-
-  portInput.disabled = running;
-  if (running) portInput.value = state.port;
 }
 
 function refreshTileStatuses() {
@@ -854,7 +770,6 @@ document.getElementById('btn-delete-confirm').addEventListener('click', async ()
   hideOverlay(deleteConfirm);
   if (editingId) {
     await DeleteConfig(editingId);
-    proxyState.delete(editingId);
     await reloadConfigs();
   }
   hideOverlay(configOverlay);
@@ -889,13 +804,6 @@ document.getElementById('btn-lang-ru').addEventListener('click', async () => {
 document.getElementById('btn-lang-en').addEventListener('click', async () => {
   await SetLanguage('en');
   applyLanguage('en');
-});
-
-document.getElementById('show-proxy-settings-toggle').addEventListener('click', async () => {
-  showProxySettings = !showProxySettings;
-  document.getElementById('show-proxy-settings-toggle').classList.toggle('active', showProxySettings);
-  await SetShowProxySettings(showProxySettings);
-  renderConfigList();
 });
 
 document.getElementById('beta-updates-toggle').addEventListener('click', async () => {
@@ -990,10 +898,6 @@ if (window.runtime) {
 // has to. Always dark: this design has no light variant to switch to.
 
 let appearance = { palette: 'midnight', background: 'orbs' };
-
-// Whether the per-config proxy button/port field are shown - toggled from
-// Settings, above the language switcher. On by default (see settings.go).
-let showProxySettings = true;
 
 // Whether the updater also offers GitHub prereleases - off by default (see
 // settings.go and updater.go's two-endpoint split).
@@ -1226,12 +1130,6 @@ setInterval(refreshStatus, 4000);
     console.error(e);
   }
   try {
-    showProxySettings = await GetShowProxySettings();
-  } catch (e) {
-    // default (shown) stays if the Go call fails
-  }
-  document.getElementById('show-proxy-settings-toggle').classList.toggle('active', showProxySettings);
-  try {
     betaUpdates = await GetBetaUpdates();
   } catch (e) {
     // default (stable channel only) stays if the Go call fails
@@ -1248,7 +1146,6 @@ setInterval(refreshStatus, 4000);
   diag(Cat.BG, 'startup', {
     palette: appearance.palette,
     background: appearance.background,
-    showProxySettings,
   });
 
   await reloadConfigs();

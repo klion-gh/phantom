@@ -122,7 +122,6 @@ object I18n {
             "view_log" to "Посмотреть лог",
             "log_title" to "Лог (%s)",
             "share" to "Поделиться",
-            "show_proxy_settings" to "Отобразить настройки прокси",
             "beta_updates" to "Скачивать beta-версии",
             "beta_updates_hint" to "Предлагать обновления до тестовых сборок. Они выходят чаще, но могут содержать ошибки.",
             "update_available_beta" to "Доступна beta-версия",
@@ -181,15 +180,11 @@ object I18n {
             // tiles
             "ping" to "Пинг",
             "ms" to "мс",
-            "port_ph" to "порт",
             "checking" to "Проверка...",
             "available" to "Доступен",
             "unavailable" to "Недоступен",
-            // toasts / proxy
+            // toasts
             "download_failed" to "Не удалось скачать обновление",
-            "bad_port" to "Некорректный порт: %s",
-            "proxy_failed" to "Не удалось включить прокси на порту %1\$s: %2\$s",
-            "proxy_any" to "(любой)",
             // notification
             "active" to "активен",
             "inactive" to "неактивен",
@@ -198,8 +193,6 @@ object I18n {
             "disconnect_vpn" to "Отключить VPN",
             "cancel_action" to "Отменить",
             "connect_vpn" to "Подключить VPN",
-            "disconnect_proxy" to "Отключить Proxy",
-            "connect_proxy" to "Подключить Proxy",
         ),
         Lang.EN to mapOf(
             "configs" to "Configurations",
@@ -276,7 +269,6 @@ object I18n {
             "view_log" to "View log",
             "log_title" to "Log (%s)",
             "share" to "Share",
-            "show_proxy_settings" to "Show proxy settings",
             "beta_updates" to "Download beta versions",
             "beta_updates_hint" to "Offer updates to test builds. They ship more often, but may contain bugs.",
             "update_available_beta" to "A beta version is available",
@@ -334,14 +326,10 @@ object I18n {
             "background_plain_desc" to "Background gradient only",
             "ping" to "Ping",
             "ms" to "ms",
-            "port_ph" to "port",
             "checking" to "Checking...",
             "available" to "Available",
             "unavailable" to "Unavailable",
             "download_failed" to "Failed to download the update",
-            "bad_port" to "Invalid port: %s",
-            "proxy_failed" to "Couldn’t start the proxy on port %1\$s: %2\$s",
-            "proxy_any" to "(any)",
             "active" to "active",
             "inactive" to "inactive",
             "connecting" to "connecting...",
@@ -349,8 +337,6 @@ object I18n {
             "disconnect_vpn" to "Disconnect VPN",
             "cancel_action" to "Cancel",
             "connect_vpn" to "Connect VPN",
-            "disconnect_proxy" to "Disconnect Proxy",
-            "connect_proxy" to "Connect Proxy",
         ),
     )
 }

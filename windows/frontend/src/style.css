@@ -395,67 +395,6 @@ html, body {
     align-self: center;
 }
 
-/* Independent SOCKS5 proxy toggle - grey outline when off, the same
-   gradient outline .config-card.connected uses when on (see toggleProxy in
-   main.js) - deliberately unrelated to the power button's own state. */
-.proxy-toggle {
-    position: relative;
-    flex-shrink: 0;
-    align-self: center;
-    background: var(--surface-high);
-    color: var(--text-secondary);
-    font-size: 10px;
-    font-weight: 700;
-    letter-spacing: 0.06em;
-    cursor: pointer;
-    padding: 6px 10px;
-    border-radius: 16px;
-    border: 1px solid var(--surface-outline);
-    transition: border-color 0.25s ease, color 0.25s ease;
-}
-.proxy-toggle:hover { color: var(--text-primary); }
-.proxy-toggle.active {
-    color: var(--text-primary);
-    border: 1px solid transparent;
-}
-/* Same mask-composite ::before ring as .config-card.connected - see its doc. */
-.proxy-toggle.active::before {
-    content: '';
-    position: absolute;
-    inset: -1px;
-    border-radius: inherit;
-    padding: 1px;
-    background: var(--brand-gradient);
-    -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
-    -webkit-mask-composite: xor;
-    mask-composite: exclude;
-    pointer-events: none;
-}
-
-.proxy-block {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    gap: 4px;
-    flex-shrink: 0;
-}
-
-/* Shows/edits the proxy's port - editable only while off (see
-   refreshProxyToggle in main.js, which disables it once running and fills it
-   with the actual bound port). */
-.proxy-port-input {
-    width: 56px;
-    background: transparent;
-    border: none;
-    border-bottom: 1px solid var(--surface-outline);
-    color: var(--text-secondary);
-    font-size: 11px;
-    text-align: center;
-    padding: 2px 0;
-}
-.proxy-port-input:focus { outline: none; border-bottom-color: var(--primary); color: var(--text-primary); }
-.proxy-port-input:disabled { border-bottom-color: transparent; color: var(--text-secondary); }
-
 .config-edit-btn:hover { background: var(--surface-high); color: var(--text-primary); }
 
 /* --- Empty state: a ringed circle, an icon, a title and a hint - centred
@@ -901,7 +840,7 @@ textarea::placeholder { color: var(--text-muted); }
 .config-dialog .form-inner { max-width: none; }
 .config-dialog textarea { flex: none; height: 260px; }
 
-/* --- "Show proxy settings"/"Glass effect" toggles + language selector
+/* --- "Beta updates"/"Glass effect" toggles + language selector
    (Settings screen) --- */
 /* Groups the two toggle rows tightly together, rather than leaving them
    28px apart via .content's own flex gap - the same spacing every unrelated

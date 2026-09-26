@@ -33,8 +33,6 @@ export function GetLanguage():Promise<string>;
 
 export function GetRoutingState():Promise<string>;
 
-export function GetShowProxySettings():Promise<boolean>;
-
 export function ListConfigs():Promise<string>;
 
 export function ListResources():Promise<string>;
@@ -71,19 +69,13 @@ export function SetConfigGeo(arg1:string,arg2:string,arg3:string,arg4:string):Pr
 
 export function SetLanguage(arg1:string):Promise<void>;
 
-export function SetShowProxySettings(arg1:boolean):Promise<void>;
-
 export function SetSmartConfigs(arg1:string):Promise<void>;
 
 export function SetSmartEnabled(arg1:boolean):Promise<void>;
 
 export function SetSmartSites(arg1:string):Promise<void>;
 
-export function StartProxy(arg1:string,arg2:string,arg3:number):Promise<string>;
-
 export function Status():Promise<string>;
-
-export function StopProxy(arg1:string):Promise<string>;
 
 export function UIDiag(arg1:string,arg2:string,arg3:string):Promise<void>;
 

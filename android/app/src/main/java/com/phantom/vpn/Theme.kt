@@ -128,16 +128,12 @@ object Appearance {
     private const val PREFS = "phantom_settings"
     private const val PALETTE_KEY = "palette"
     private const val BACKGROUND_KEY = "background_style"
-    private const val SHOW_PROXY_SETTINGS_KEY = "show_proxy_settings"
     private const val BETA_UPDATES_KEY = "beta_updates"
 
     var palette by mutableStateOf(Palette.MIDNIGHT)
         private set
 
     var background by mutableStateOf(BackgroundStyle.ORBS)
-        private set
-
-    var showProxySettings by mutableStateOf(true)
         private set
 
     // Whether the update check also offers releases GitHub has marked as
@@ -150,12 +146,10 @@ object Appearance {
         val p = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
         palette = runCatching { Palette.valueOf(p.getString(PALETTE_KEY, null) ?: "") }.getOrDefault(Palette.MIDNIGHT)
         background = runCatching { BackgroundStyle.valueOf(p.getString(BACKGROUND_KEY, null) ?: "") }.getOrDefault(BackgroundStyle.ORBS)
-        showProxySettings = p.getBoolean(SHOW_PROXY_SETTINGS_KEY, true)
         betaUpdates = p.getBoolean(BETA_UPDATES_KEY, false)
         Diag.log(
             Diag.Cat.APP, "appearanceLoaded",
             "palette" to palette, "background" to background,
-            "showProxySettings" to showProxySettings,
             "betaUpdates" to betaUpdates,
         )
     }
@@ -173,14 +167,6 @@ object Appearance {
         Diag.log(Diag.Cat.UI, "setBackground", "value" to value)
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
             .putString(BACKGROUND_KEY, value.name)
-            .apply()
-    }
-
-    fun setShowProxySettings(context: Context, value: Boolean) {
-        showProxySettings = value
-        Diag.log(Diag.Cat.UI, "setShowProxySettings", "value" to value)
-        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
-            .putBoolean(SHOW_PROXY_SETTINGS_KEY, value)
             .apply()
     }
 

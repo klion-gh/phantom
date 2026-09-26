@@ -127,9 +127,6 @@ func pollTrayStatus(app *App) {
 			continue
 		}
 
-		// Two independent facts on one line, mirroring the Android notification's
-		// "VPN: … | Proxy: …": the full-tunnel VPN and the standalone per-config
-		// proxies are unrelated features that can each be on or off separately.
 		lang := getTrayLang()
 		vpnState := trayT(lang, "vpn_off")
 		if status.Connected {
@@ -138,10 +135,6 @@ func pollTrayStatus(app *App) {
 		} else {
 			trayToggleItem.SetTitle(trayT(lang, "connect"))
 		}
-		proxyState := trayT(lang, "proxy_off")
-		if anyConfigProxyRunning() {
-			proxyState = trayT(lang, "proxy_on")
-		}
-		trayStatusItem.SetTitle(fmt.Sprintf("VPN: %s · Proxy: %s", vpnState, proxyState))
+		trayStatusItem.SetTitle(fmt.Sprintf("VPN: %s", vpnState))
 	}
 }

@@ -119,27 +119,12 @@ suspend fun lookupCountry(ip: String): Pair<String, String>? = withContext(Dispa
 fun ConfigInfoCard(
     config: SavedConfig,
     status: ConnectionStatus,
-    proxyRunning: Boolean,
-    proxyPort: Int?,
-    showProxy: Boolean,
     onToggle: () -> Unit,
-    onToggleProxy: (requestedPort: String) -> Unit,
     onLongPress: () -> Unit,
 ) {
     val domain = parseYamlField(config.yaml, "domain") ?: ""
     val server = parseYamlField(config.yaml, "server") ?: ""
     val info = PingStore[config.id]
-
-    // The port field mirrors whatever's actually running once it starts (in case it
-    // had to fall back... it doesn't anymore - see ProxyManager - but this also covers
-    // the field simply being blank and the OS picking one), and is otherwise just
-    // freely editable by the user while off.
-    var portText by remember(config.id) { mutableStateOf(config.proxyPort?.toString() ?: "") }
-    LaunchedEffect(proxyRunning, proxyPort) {
-        if (proxyRunning && proxyPort != null) {
-            portText = proxyPort.toString()
-        }
-    }
 
     val cardShape = RoundedCornerShape(18.dp)
     val isConnected = status == ConnectionStatus.CONNECTED
@@ -195,22 +180,7 @@ fun ConfigInfoCard(
                 }
             }
             Spacer(modifier = Modifier.width(8.dp))
-            // One column: the connect toggle on top, the independent-proxy controls
-            // directly under it - two separate concerns (whole-device tunnel vs. this
-            // one tile's own SOCKS5 proxy), but visually grouped since they're both
-            // "controls for this config", not tied to each other's state.
-            Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                ConnectSwitch(status = status, onClick = onToggle)
-                if (showProxy) {
-                    Spacer(modifier = Modifier.height(6.dp))
-                    ProxyBlock(
-                        running = proxyRunning,
-                        portText = portText,
-                        onPortTextChange = { portText = it },
-                        onToggleClick = { onToggleProxy(portText) },
-                    )
-                }
-            }
+            ConnectSwitch(status = status, onClick = onToggle)
         }
     }
 }
@@ -231,66 +201,3 @@ private fun ConnectSwitch(status: ConnectionStatus, onClick: () -> Unit) {
         enabled = status != ConnectionStatus.CONNECTING,
     )
 }
-
-/**
- * Independent per-config SOCKS5 proxy toggle - grey border when off, the same
- * gradient border the tile itself uses for "connected" when on - plus, right below
- * it, the port it's bound to. The port field is only actually editable while off
- * (see the disabled-look styling below); [onToggleClick] is invoked with whatever's
- * currently in it, and the caller (MainActivity's toggleProxy) decides what to do
- * with that - deliberately unrelated to [status]/the connect button, see ProxyManager.
- */
-@Composable
-private fun ProxyBlock(
-    running: Boolean,
-    portText: String,
-    onPortTextChange: (String) -> Unit,
-    onToggleClick: () -> Unit,
-) {
-    val shape = RoundedCornerShape(16.dp)
-    val gradient = Brush.linearGradient(colors = BrandGradient)
-    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-        Tile(
-            modifier = Modifier.clickable(onClick = onToggleClick),
-            color = SurfaceHigh,
-            shape = shape,
-            borderBrush = if (running) gradient else Brush.linearGradient(listOf(SurfaceOutline, SurfaceOutline)),
-        ) {
-            Text(
-                text = "PROXY",
-                color = if (running) TextPrimary else TextSecondary,
-                fontSize = 9.sp,
-                fontWeight = FontWeight.Bold,
-                modifier = Modifier.padding(horizontal = 8.dp, vertical = 5.dp),
-            )
-        }
-        Spacer(modifier = Modifier.height(4.dp))
-        Box(contentAlignment = Alignment.Center) {
-            if (portText.isEmpty()) {
-                Text(I18n.t("port_ph"), color = TextSecondary.copy(alpha = 0.6f), fontSize = 10.sp)
-            }
-            BasicTextField(
-                value = portText,
-                onValueChange = { new -> if (new.length <= 5 && new.all(Char::isDigit)) onPortTextChange(new) },
-                enabled = !running,
-                singleLine = true,
-                textStyle = TextStyle(
-                    color = if (running) TextSecondary else TextPrimary,
-                    fontSize = 10.sp,
-                    textAlign = TextAlign.Center,
-                ),
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                modifier = Modifier
-                    .width(46.dp)
-                    .padding(bottom = 2.dp)
-                    .border(
-                        width = 1.dp,
-                        color = if (running) Color.Transparent else TextSecondary.copy(alpha = 0.35f),
-                        shape = RoundedCornerShape(4.dp),
-                    )
-                    .padding(vertical = 3.dp),
-            )
-        }
-    }
-}
-

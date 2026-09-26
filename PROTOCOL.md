@@ -486,9 +486,8 @@ The same UDP relay is also reachable through the local SOCKS5 proxy: `socks5.go`
 implements **UDP ASSOCIATE** (RFC 1928), binding a loopback UDP socket for the
 association's lifetime (tied to the control TCP connection) and relaying each
 SOCKS5-UDP-wrapped datagram to a per-destination `Session.OpenUDP` stream, with the
-same 60-second idle eviction per destination. So an app pointed at the proxy (the
-desktop `cmd/client`, or either GUI app's independent per-config proxy) can send UDP
-through Phantom — e.g. Telegram voice calls or plain DNS-over-UDP — not just TCP
+same 60-second idle eviction per destination. So an app pointed at the desktop
+`cmd/client` proxy can send UDP through Phantom — e.g. Telegram voice calls or plain DNS-over-UDP — not just TCP
 CONNECT. Fragmented datagrams (`FRAG != 0`) are unsupported and dropped, as is standard.
 
 ---
@@ -866,7 +865,7 @@ replacing it - see below.
   `GradientSwitch` track, the update-progress fill), and - only when editing an existing
   config - a confirm-gated "Удалить конфигурацию" delete button. Opening it blurs
   (`Modifier.blur`, animated) whatever's behind it, same treatment as `AddResourceDialog`.
-- **Settings** (`SettingsScreen`): a "Показать настройки прокси" toggle, an "Эффект
+- **Settings** (`SettingsScreen`): a "Скачивать beta-версии" toggle, an "Эффект
   прозрачности" toggle (below - makes every tile's fill translucent instead of solid, so
   `AnimatedBackground` shows through; see §10.3), language, one of six palettes and one of
   eight animated backdrops (§10.3), a "Посмотреть лог" button, and the running version

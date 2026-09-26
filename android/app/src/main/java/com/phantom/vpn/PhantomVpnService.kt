@@ -15,7 +15,6 @@ import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.os.ParcelFileDescriptor
-import kotlinx.coroutines.runBlocking
 import mobile.Mobile
 import mobile.Protector
 import mobile.Tunnel
@@ -29,16 +28,6 @@ class PhantomVpnService : VpnService() {
         const val ACTION_CONNECT = "com.phantom.vpn.CONNECT"
         const val ACTION_DISCONNECT = "com.phantom.vpn.DISCONNECT"
         const val ACTION_SHOW_STATUS = "com.phantom.vpn.SHOW_STATUS"
-        // Sent by MainActivity right after any ProxyManager.start/stop call (success or
-        // not) so this service can re-evaluate whether it needs to be a foreground
-        // service - see showPersistentNotification and the class doc on ProxyManager.
-        const val ACTION_PROXY_STATE_CHANGED = "com.phantom.vpn.PROXY_STATE_CHANGED"
-        // The notification's own Proxy action buttons - unlike the UI's per-tile
-        // toggles, these operate on "the proxy" as a whole: connect resumes the
-        // last-active config (same fallback as ACTION_CONNECT's notification path),
-        // disconnect stops every running one.
-        const val ACTION_PROXY_CONNECT = "com.phantom.vpn.PROXY_CONNECT"
-        const val ACTION_PROXY_DISCONNECT = "com.phantom.vpn.PROXY_DISCONNECT"
         const val EXTRA_CONFIG_YAML = "config_yaml"
         const val EXTRA_CONFIG_ID = "config_id"
         // Marks a disconnect that came from the notification's own button - see
@@ -68,44 +57,6 @@ class PhantomVpnService : VpnService() {
 
         @Volatile
         private var activeInstance: PhantomVpnService? = null
-
-        /**
-         * A [Protector] for ProxyManager's independent proxy, evaluated lazily at each
-         * protect() call (not captured once at proxy start) because the proxy redials
-         * over its whole lifetime - pool self-healing, session refresh after a network
-         * change - and both whether a VPN is up and which service instance is alive
-         * change underneath it.
-         *
-         * It only actually calls VpnService.protect() while a full tunnel is really
-         * established (CONNECTED/CONNECTING); otherwise it's a no-op success. Two
-         * reasons:
-         *
-         *  - When no tunnel is up there's nothing capturing the proxy's sockets, so
-         *    protection is simply unnecessary.
-         *  - VpnService.protect() only works for the *active* system VPN. This service
-         *    is often foregrounded purely for the proxy, with no establish() call, so
-         *    it isn't the active VPN - and protect() then returns false, which fails
-         *    the dial. That's what left the proxy dead after a Wi-Fi<->cellular switch
-         *    until an app restart: the pool's fresh redial kept getting its socket
-         *    "protected" by a non-active VPN, i.e. rejected, forever.
-         *
-         * When a tunnel *is* up, protection is essential: without it, turning the full
-         * VPN on (for this config or any other) would capture the proxy's own
-         * connections into that tunnel and break them, since they were never part of
-         * its own protected dial. protect() applies per-process, not per-component, so
-         * the active VpnService instance can exempt them regardless of which component
-         * owns the sockets.
-         */
-        val lazyProtector: Protector = object : Protector {
-            override fun protect(fd: Long): Boolean {
-                val instance = activeInstance ?: return true
-                val vpnActive = VpnStateHolder.state.value.status.let {
-                    it == ConnectionStatus.CONNECTED || it == ConnectionStatus.CONNECTING
-                }
-                if (!vpnActive) return true
-                return instance.protect(fd.toInt())
-            }
-        }
 
         /**
          * Pushes the current routing settings into whatever tunnel is running,
@@ -172,21 +123,6 @@ class PhantomVpnService : VpnService() {
     // When the tunnel last switched networks, for the storm guard.
     private val recentSwitches = ArrayDeque<Long>()
 
-    // A separate, lightweight physical-network watch for the independent proxy,
-    // active only while a proxy is running. The VPN's own watch above rebuilds
-    // the tunnel on a network change, but a proxy running with no full VPN has
-    // no tunnel and no watch of its own - its pooled sockets to the server just
-    // die on a Wi-Fi<->cellular switch. This nudges the pool to redial at once
-    // (ProxyManager.reconnectAll) instead of recovering only lazily on the next
-    // request after the dead sockets time out. Same NET_CAPABILITY_NOT_VPN
-    // filter and debounce as the VPN watch; kept in its own fields so the two
-    // watches never interfere.
-    private var proxyConnectivityManager: ConnectivityManager? = null
-    private var proxyNetworkCallback: ConnectivityManager.NetworkCallback? = null
-    private var proxyWatchRegisteredAtMs: Long = 0
-    private val proxyReconnectHandler = Handler(Looper.getMainLooper())
-    private var pendingProxyReconnect: Runnable? = null
-
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         FileLog.i("onStartCommand action=${intent?.action}")
         when (intent?.action) {
@@ -225,36 +161,6 @@ class PhantomVpnService : VpnService() {
                 // Just (re)posts the notification for whatever the current state already
                 // is - never touches the tunnel, so it's safe to call on every app launch.
                 showPersistentNotification(VpnStateHolder.state.value.status)
-                return START_NOT_STICKY
-            }
-            ACTION_PROXY_CONNECT -> {
-                connectProxyFromNotification()
-                return START_NOT_STICKY
-            }
-            ACTION_PROXY_DISCONNECT -> {
-                executor.execute {
-                    ProxyManager.stopAll()
-                    ensureProxyNetworkWatch()
-                    showPersistentNotification(VpnStateHolder.state.value.status)
-                    val vpnActive = VpnStateHolder.state.value.status.let {
-                        it == ConnectionStatus.CONNECTED || it == ConnectionStatus.CONNECTING
-                    }
-                    if (!vpnActive) stopSelf()
-                }
-                return START_NOT_STICKY
-            }
-            ACTION_PROXY_STATE_CHANGED -> {
-                ensureProxyNetworkWatch()
-                showPersistentNotification(VpnStateHolder.state.value.status)
-                val vpnActive = VpnStateHolder.state.value.status.let {
-                    it == ConnectionStatus.CONNECTED || it == ConnectionStatus.CONNECTING
-                }
-                if (!vpnActive && !ProxyManager.hasAnyRunning()) {
-                    // Nothing left to keep this service (or its foreground exemption)
-                    // alive for - showPersistentNotification above already dropped out
-                    // of foreground state for us.
-                    stopSelf()
-                }
                 return START_NOT_STICKY
             }
         }
@@ -643,92 +549,6 @@ class PhantomVpnService : VpnService() {
         connectivityManager = null
     }
 
-    // Registers the proxy's physical-network watch when at least one proxy is
-    // running and tears it down when none are - idempotent, safe to call after
-    // any proxy start/stop. See the field comment above for why the proxy needs
-    // its own watch separate from the VPN's.
-    private fun ensureProxyNetworkWatch() {
-        if (!ProxyManager.hasAnyRunning()) {
-            unregisterProxyNetworkWatch()
-            return
-        }
-        if (proxyNetworkCallback != null) return
-        val cm = getSystemService(ConnectivityManager::class.java) ?: return
-        proxyConnectivityManager = cm
-        proxyWatchRegisteredAtMs = System.currentTimeMillis()
-
-        val request = NetworkRequest.Builder()
-            .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
-            .addCapability(NetworkCapabilities.NET_CAPABILITY_NOT_VPN)
-            .build()
-
-        val callback = object : ConnectivityManager.NetworkCallback() {
-            override fun onAvailable(network: Network) = onProxyPhysicalNetworkEvent()
-            override fun onLost(network: Network) = onProxyPhysicalNetworkEvent()
-        }
-        proxyNetworkCallback = callback
-        try {
-            cm.registerNetworkCallback(request, callback)
-        } catch (e: Throwable) {
-            FileLog.e("proxy registerNetworkCallback failed", e)
-            proxyNetworkCallback = null
-        }
-    }
-
-    // Initial-replay grace + debounce: registering replays onAvailable for
-    // networks that already exist, and a real handover fires a burst of
-    // events. The action is just "redial the proxy pools" (cheap), run on the
-    // executor since ProxyManager.reconnectAll closes sockets.
-    private fun onProxyPhysicalNetworkEvent() {
-        if (System.currentTimeMillis() - proxyWatchRegisteredAtMs < 2000) return
-        pendingProxyReconnect?.let { proxyReconnectHandler.removeCallbacks(it) }
-        val runnable = Runnable {
-            FileLog.i("underlying network changed, reconnecting proxy pools")
-            executor.execute { ProxyManager.reconnectAll() }
-        }
-        pendingProxyReconnect = runnable
-        proxyReconnectHandler.postDelayed(runnable, 1500)
-    }
-
-    private fun unregisterProxyNetworkWatch() {
-        proxyNetworkCallback?.let { cb ->
-            try {
-                proxyConnectivityManager?.unregisterNetworkCallback(cb)
-            } catch (e: Throwable) {
-                FileLog.e("proxy unregisterNetworkCallback error", e)
-            }
-        }
-        proxyNetworkCallback = null
-        proxyConnectivityManager = null
-        pendingProxyReconnect?.let { proxyReconnectHandler.removeCallbacks(it) }
-        pendingProxyReconnect = null
-    }
-
-    // The notification's "Подключить Proxy" - no Activity involved, so config choice
-    // mirrors ACTION_CONNECT's own notification path: the last-active config, falling
-    // back to the first saved one, with its remembered port (or any free port if this
-    // config never ran a proxy before). Runs on the executor since it's a real dial.
-    private fun connectProxyFromNotification() {
-        executor.execute {
-            val saved = ConfigStore.loadAll(this)
-            val resumed = ConfigStore.loadLastActiveId(this)?.let { last -> saved.find { it.id == last } }
-                ?: saved.firstOrNull()
-            if (resumed == null) {
-                FileLog.e("proxy connect from notification: no saved config")
-                return@execute
-            }
-            runBlocking {
-                ProxyManager.start(resumed.id, resumed.yaml, resumed.proxyPort ?: 0, lazyProtector)
-                    .onSuccess { port -> ConfigStore.setProxyPort(this@PhantomVpnService, resumed.id, port) }
-                    .onFailure { e -> FileLog.e("proxy connect from notification failed", e) }
-            }
-            // Success or not, re-render so the action button/status text match reality
-            // (and the service becomes foreground if the proxy did start).
-            ensureProxyNetworkWatch()
-            showPersistentNotification(VpnStateHolder.state.value.status)
-        }
-    }
-
     /**
      * Stops [old] on a thread of its own and waits for it at most
      * [TUNNEL_STOP_DEADLINE_MS]; past that it's abandoned, stop call and all,
@@ -834,7 +654,6 @@ class PhantomVpnService : VpnService() {
 
     override fun onDestroy() {
         if (activeInstance == this) activeInstance = null
-        unregisterProxyNetworkWatch()
         disconnect()
         super.onDestroy()
     }
@@ -846,23 +665,17 @@ class PhantomVpnService : VpnService() {
 
     /**
      * Posts/refreshes the always-visible connect/disconnect notification for [status],
-     * and puts this service in (or out of) foreground state to match - not just for
-     * the VPN itself, but also while any independent proxy is running (see
-     * ACTION_PROXY_STATE_CHANGED/ProxyManager.hasAnyRunning): a proxy alone doesn't
-     * need VpnService's own privileges, but its sockets still live in this process, and
-     * without a foreground service Android's background network throttling would make
-     * it increasingly unreliable once the app is backgrounded.
+     * and puts this service in (or out of) foreground state to match.
      */
     private fun showPersistentNotification(status: ConnectionStatus) {
         val notification = buildNotification(status)
         val shouldBeForeground = status == ConnectionStatus.CONNECTING ||
-            status == ConnectionStatus.CONNECTED ||
-            ProxyManager.hasAnyRunning()
+            status == ConnectionStatus.CONNECTED
         if (shouldBeForeground) {
             startForeground(NOTIFICATION_ID, notification)
         } else {
-            // Only meaningful if we were previously foregrounded (e.g. the last
-            // running proxy just stopped) - a harmless no-op otherwise. DETACH
+            // Only meaningful if we were previously foregrounded - a harmless
+            // no-op otherwise. DETACH
             // leaves the notification itself posted, matching disconnect()'s own
             // "stays visible in the shade" behavior.
             stopForeground(STOP_FOREGROUND_DETACH)
@@ -873,9 +686,6 @@ class PhantomVpnService : VpnService() {
     private fun buildNotification(status: ConnectionStatus): Notification {
         ensureChannel()
 
-        // Two independent facts, two independent action buttons - the full-tunnel VPN
-        // and the standalone proxy are unrelated features that just share this one
-        // notification (one process, one foreground exemption - see the class docs).
         val vpnText = when (status) {
             ConnectionStatus.CONNECTED -> I18n.t("active")
             ConnectionStatus.CONNECTING -> I18n.t("connecting")
@@ -903,25 +713,11 @@ class PhantomVpnService : VpnService() {
         } else {
             "$vpnLabel: $vpnText"
         }
-        val proxyRunning = ProxyManager.hasAnyRunning()
-        // Mirrors Settings' "show proxy settings" toggle - when the proxy controls
-        // are hidden from the config tiles, they should not leak back in here either.
-        val showProxy = Appearance.showProxySettings
-        val text = if (showProxy) {
-            "$vpnLine | Proxy: ${if (proxyRunning) I18n.t("active") else I18n.t("inactive")}"
-        } else {
-            vpnLine
-        }
-
         val vpnAction = when (status) {
             ConnectionStatus.CONNECTED -> I18n.t("disconnect_vpn") to disconnectPendingIntent()
             ConnectionStatus.CONNECTING -> I18n.t("cancel_action") to disconnectPendingIntent()
             else -> I18n.t("connect_vpn") to connectPendingIntent()
         }
-        val proxyAction =
-            if (proxyRunning) I18n.t("disconnect_proxy") to proxyDisconnectPendingIntent()
-            else I18n.t("connect_proxy") to proxyConnectPendingIntent()
-
         val openAppIntent = PendingIntent.getActivity(
             this, 0,
             Intent(this, MainActivity::class.java),
@@ -932,14 +728,11 @@ class PhantomVpnService : VpnService() {
 
         val builder = Notification.Builder(this, CHANNEL_ID)
             .setContentTitle("Phantom VPN")
-            .setContentText(text)
+            .setContentText(vpnLine)
             .setSmallIcon(R.drawable.ic_notification)
             .setContentIntent(openAppIntent)
             .addAction(Notification.Action.Builder(actionIcon, vpnAction.first, vpnAction.second).build())
             .setOngoing(true)
-        if (showProxy) {
-            builder.addAction(Notification.Action.Builder(actionIcon, proxyAction.first, proxyAction.second).build())
-        }
         return builder.build()
     }
 
@@ -963,15 +756,5 @@ class PhantomVpnService : VpnService() {
             putExtra(EXTRA_FROM_NOTIFICATION, true)
         }
         return PendingIntent.getService(this, 2, intent, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
-    }
-
-    private fun proxyConnectPendingIntent(): PendingIntent {
-        val intent = Intent(this, PhantomVpnService::class.java).apply { action = ACTION_PROXY_CONNECT }
-        return PendingIntent.getService(this, 3, intent, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
-    }
-
-    private fun proxyDisconnectPendingIntent(): PendingIntent {
-        val intent = Intent(this, PhantomVpnService::class.java).apply { action = ACTION_PROXY_DISCONNECT }
-        return PendingIntent.getService(this, 4, intent, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
     }
 }

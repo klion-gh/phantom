@@ -17,8 +17,6 @@ var trayStrings = map[string]map[string]string{
 		"quit_tip":   "Полностью закрыть Phantom",
 		"vpn_on":     "подключён",
 		"vpn_off":    "отключён",
-		"proxy_on":   "активен",
-		"proxy_off":  "отключён",
 	},
 	"en": {
 		"connect":    "Connect",
@@ -30,8 +28,6 @@ var trayStrings = map[string]map[string]string{
 		"quit_tip":   "Quit Phantom completely",
 		"vpn_on":     "on",
 		"vpn_off":    "off",
-		"proxy_on":   "active",
-		"proxy_off":  "off",
 	},
 }
 

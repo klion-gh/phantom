@@ -66,10 +66,6 @@ export function GetRoutingState() {
   return window['go']['main']['App']['GetRoutingState']();
 }
 
-export function GetShowProxySettings() {
-  return window['go']['main']['App']['GetShowProxySettings']();
-}
-
 export function ListConfigs() {
   return window['go']['main']['App']['ListConfigs']();
 }
@@ -142,10 +138,6 @@ export function SetLanguage(arg1) {
   return window['go']['main']['App']['SetLanguage'](arg1);
 }
 
-export function SetShowProxySettings(arg1) {
-  return window['go']['main']['App']['SetShowProxySettings'](arg1);
-}
-
 export function SetSmartConfigs(arg1) {
   return window['go']['main']['App']['SetSmartConfigs'](arg1);
 }
@@ -158,16 +150,8 @@ export function SetSmartSites(arg1) {
   return window['go']['main']['App']['SetSmartSites'](arg1);
 }
 
-export function StartProxy(arg1, arg2, arg3) {
-  return window['go']['main']['App']['StartProxy'](arg1, arg2, arg3);
-}
-
 export function Status() {
   return window['go']['main']['App']['Status']();
-}
-
-export function StopProxy(arg1) {
-  return window['go']['main']['App']['StopProxy'](arg1);
 }
 
 export function UIDiag(arg1, arg2, arg3) {
