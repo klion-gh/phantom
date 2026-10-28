@@ -55,16 +55,12 @@ const (
 	channelQueueN = 512
 )
 
-// directDNSResolver looks up hostnames by dialing a fixed public resolver
-// directly, rather than net.DefaultResolver's OS-ambient behaviour - see its
-// one call site in StartWindows for why that distinction matters here.
-var directDNSResolver = &net.Resolver{
-	PreferGo: true,
-	Dial: func(ctx context.Context, network, _ string) (net.Conn, error) {
-		d := net.Dialer{Timeout: 5 * time.Second}
-		return d.DialContext(ctx, network, "1.1.1.1:53")
-	},
-}
+// directDNSResolver looks up hostnames at public resolvers first, rather
+// than net.DefaultResolver's OS-ambient behaviour - see its one call site in
+// StartWindows for why that distinction matters here. The system resolver is
+// only its fallback (see transport.NewProtectedResolver); no protect hook is
+// needed, since nothing is tunnelled yet when it runs.
+var directDNSResolver = transport.NewProtectedResolver(nil)
 
 // WinTunnel is a running full-tunnel Windows VPN connection: a Wintun device
 // bridged into internal/netstack the same way mobile/mobile.go bridges a raw
@@ -139,7 +135,7 @@ func StartWindows(configYAML string, onNetworkChanged func()) (*WinTunnel, error
 		// explicit timeout keeps a slow/unresponsive resolver from stalling
 		// connect indefinitely either way.
 		//
-		// directDNSResolver, not net.DefaultResolver: this runs on every
+		// directDNSResolver, not net.DefaultResolver alone: this runs on every
 		// connect/reconnect, and net.DefaultResolver on Windows defers to
 		// whichever adapter's DNS server the OS currently prefers - right after
 		// a previous Phantom session's Wintun adapter goes away, Windows can

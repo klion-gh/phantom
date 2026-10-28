@@ -31,51 +31,130 @@ type IPLookuper interface {
 }
 
 // Public resolvers a protected lookup asks, over sockets taken out of the VPN.
-// Two, so one being filtered on a given network doesn't take lookups down.
+// Two, asked at once, so one being filtered on a given network doesn't take
+// lookups down.
 var directDNSServers = []string{"1.1.1.1:53", "8.8.8.8:53"}
 
+// systemHeadStart is how long the public resolvers get before the system
+// resolver is asked as well - unless both have already failed, which brings it
+// in at once. They go first because a provider's resolver may answer a blocked
+// domain with a stub address; but a network that drops outside DNS must not
+// cost the whole lookup deadline before the system resolver gets a turn.
+var systemHeadStart = 1500 * time.Millisecond
+
 // NewProtectedResolver returns a resolver whose DNS sockets go through protect
-// (VpnService.protect on Android, an interface bind on Windows) to a public
-// resolver, falling back to the system resolver only if neither answers - a
+// (VpnService.protect on Android, an interface bind on Windows, a routing mark
+// on Linux) to public resolvers, with the system resolver as the fallback - a
 // network that blocks outside DNS outright would otherwise lose every lookup
 // while a tunnel is up.
 func NewProtectedResolver(protect func(fd int) bool) IPLookuper {
-	return &protectedResolver{protect: protect}
+	r := &protectedResolver{system: net.DefaultResolver}
+	for _, server := range directDNSServers {
+		r.direct = append(r.direct, directResolver(server, protect))
+	}
+	return r
+}
+
+// directResolver asks exactly one server, over protected sockets.
+func directResolver(server string, protect func(fd int) bool) IPLookuper {
+	return &net.Resolver{
+		PreferGo: true,
+		Dial: func(ctx context.Context, network, _ string) (net.Conn, error) {
+			d := net.Dialer{Timeout: 2 * time.Second, Control: ProtectControl(protect)}
+			return d.DialContext(ctx, network, server)
+		},
+	}
 }
 
 type protectedResolver struct {
-	protect func(fd int) bool
+	direct []IPLookuper
+	system IPLookuper
 }
 
+type lookupResult struct {
+	ips    []net.IP
+	err    error
+	system bool
+}
+
+// LookupIP returns the first non-empty answer from the public resolvers
+// (asked together) or, once they've had systemHeadStart or both failed, the
+// system resolver. It fails only when every one of them has.
+//
+// The old order - public, then system, one after the other - shared a single
+// deadline: a public resolver that never answered (UDP can't fail to "dial",
+// so the second server was never even tried) spent all of it, and the system
+// resolver was then asked with no time left. Every connect on such a network
+// died on "lookup <server>: i/o timeout".
 func (r *protectedResolver) LookupIP(ctx context.Context, network, host string) ([]net.IP, error) {
 	// A literal address needs no lookup at all.
 	if ip := net.ParseIP(host); ip != nil {
 		return []net.IP{ip}, nil
 	}
-	direct := &net.Resolver{
-		PreferGo: true,
-		Dial: func(ctx context.Context, network, _ string) (net.Conn, error) {
-			d := net.Dialer{Timeout: 2 * time.Second, Control: ProtectControl(r.protect)}
-			var lastErr error
-			for _, server := range directDNSServers {
-				conn, err := d.DialContext(ctx, network, server)
-				if err == nil {
-					return conn, nil
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel() // stops whichever lookups are still running once one answers
+
+	results := make(chan lookupResult, len(r.direct)+1)
+	ask := func(l IPLookuper, system bool) {
+		go func() {
+			ips, err := l.LookupIP(ctx, network, host)
+			results <- lookupResult{ips: ips, err: err, system: system}
+		}()
+	}
+	for _, l := range r.direct {
+		ask(l, false)
+	}
+	pending, directLeft := len(r.direct), len(r.direct)
+	systemAsked := false
+	askSystem := func() {
+		if !systemAsked && r.system != nil {
+			systemAsked = true
+			pending++
+			ask(r.system, true)
+		}
+	}
+	if directLeft == 0 {
+		askSystem()
+	}
+	headStart := time.NewTimer(systemHeadStart)
+	defer headStart.Stop()
+
+	var firstErr error
+	for pending > 0 {
+		select {
+		case res := <-results:
+			pending--
+			if res.err == nil && len(res.ips) > 0 {
+				if res.system {
+					diag.Event(diag.CatTunnel, "resolveViaSystem", "host", host)
 				}
-				lastErr = err
+				return res.ips, nil
 			}
-			return nil, lastErr
-		},
+			if firstErr == nil {
+				firstErr = res.err
+			}
+			if !res.system {
+				directLeft--
+				if directLeft == 0 {
+					askSystem()
+				}
+			}
+		case <-headStart.C:
+			askSystem()
+		}
 	}
-	ips, err := direct.LookupIP(ctx, network, host)
-	if err == nil && len(ips) > 0 {
-		return ips, nil
+	if firstErr == nil {
+		firstErr = fmt.Errorf("no addresses for %s", host)
 	}
-	return net.DefaultResolver.LookupIP(ctx, network, host)
+	return nil, firstErr
 }
 
-// ProtectControl adapts a protect callback to net.Dialer.Control.
+// ProtectControl adapts a protect callback to net.Dialer.Control. A nil
+// callback means there's nothing to step around, and gives a nil Control.
 func ProtectControl(protect func(fd int) bool) func(string, string, syscall.RawConn) error {
+	if protect == nil {
+		return nil
+	}
 	return func(_, _ string, c syscall.RawConn) error {
 		var protectErr error
 		if err := c.Control(func(fd uintptr) {
