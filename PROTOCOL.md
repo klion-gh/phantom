@@ -1315,7 +1315,12 @@ mark `0x5048`.
 Nothing is touched until the server has answered, so a config that can't
 connect leaves the network as it was. Then, IPv4 and IPv6 alike:
 
-- table `0x5048` (20552): `default dev phantom0`;
+- table `0x5048` (20552): `default dev phantom0` for IPv4, `unreachable
+  default` for IPv6. IPv6 is refused, not tunnelled - Android's behaviour too,
+  where the VPN interface has no IPv6 address. Tunnelled, it hangs whenever
+  the server lacks working IPv6: the netstack accepts the app's connection at
+  once, so Happy Eyeballs never falls back to IPv4. Refused, apps switch to
+  IPv4 immediately, and nothing leaks around the tunnel;
 - rule 5100: `lookup main suppress_prefixlength 0` - the main table still
   decides everything except its default route, so the LAN stays reachable;
 - rule 5101: `not fwmark 0x5048 lookup 20552` - everything else goes in.

@@ -111,6 +111,7 @@ ctl status
 ip rule show
 ip route show table 20552
 ip -6 route show table 20552 || true
+ip -6 route show table 20552 2>/dev/null | grep -q '^unreachable default' || echo "note: no IPv6 block (IPv6 off on this kernel?)"
 
 ip rule show | grep -q 'not from all fwmark 0x5048 lookup 20552' || fail "tunnel rule missing"
 ip rule show | grep -q 'lookup main suppress_prefixlength 0' || fail "suppress rule missing"

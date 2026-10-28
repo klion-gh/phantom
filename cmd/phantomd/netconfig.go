@@ -21,7 +21,7 @@ import (
 // the kernel (over netlink) and never a distribution's network manager:
 //
 //   - A routing table of phantomd's own whose default route is the TUN device
-//     (IPv4 and IPv6).
+//     for IPv4 and "unreachable" for IPv6 (see installNetworking).
 //   - Rule "not fwmark fwMark -> that table": everything goes into the tunnel
 //     except sockets phantomd marked - its connection to the server, smart
 //     mode's direct flows, config pings (see markSocket).
@@ -69,15 +69,21 @@ func installNetworking(ifIndex int) error {
 	}); err != nil {
 		return fmt.Errorf("default route into the tunnel: %w", err)
 	}
-	// IPv6 rides the tunnel too, or it would bypass it entirely. A kernel
-	// with IPv6 switched off refuses the route - nothing to leak then.
+	// IPv6 is refused rather than tunnelled - the Android app's behaviour too,
+	// where the VPN interface simply has no IPv6 address. Tunnelling it fails
+	// badly whenever the server has no working IPv6 (common on a VPS): the
+	// netstack accepts an app's connection the moment it's opened, so the app
+	// waits on a dead site instead of falling back to IPv4 - Happy Eyeballs
+	// never gets its chance. "unreachable" fails the attempt on the spot, apps
+	// move to IPv4 at once, and nothing leaks around the tunnel either. A
+	// kernel with IPv6 switched off refuses the route - nothing to leak then.
 	ipv6 := true
 	if err := netlink.RouteReplace(&netlink.Route{
-		LinkIndex: ifIndex,
-		Dst:       &net.IPNet{IP: net.IPv6zero, Mask: net.CIDRMask(0, 128)},
-		Table:     routeTable,
+		Dst:   &net.IPNet{IP: net.IPv6zero, Mask: net.CIDRMask(0, 128)},
+		Table: routeTable,
+		Type:  unix.RTN_UNREACHABLE,
 	}); err != nil {
-		log.Printf("IPv6 default route: %v (IPv6 unavailable, continuing)", err)
+		log.Printf("IPv6 block: %v (IPv6 unavailable, continuing)", err)
 		ipv6 = false
 	}
 
