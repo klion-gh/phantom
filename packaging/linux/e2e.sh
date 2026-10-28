@@ -23,6 +23,7 @@ cleanup() {
 	[ -n "$daemon_pid" ] && kill -TERM "$daemon_pid" && wait "$daemon_pid"
 	[ -n "$server_pid" ] && kill "$server_pid"
 	ip rule del priority 5000 2>/dev/null
+	ip -6 rule del priority 5000 2>/dev/null
 	echo "--- phantomd log"; cat "$work/phantomd.log"
 	echo "--- server log"; cat "$work/server.log"
 }
@@ -69,6 +70,7 @@ step "server, as nobody, with its own traffic kept out of the tunnel"
 # On a real deployment the server is another machine. Here its outgoing
 # connections would otherwise follow phantomd's rules back into the tunnel.
 ip rule add uidrange 65534-65534 lookup main priority 5000
+ip -6 rule add uidrange 65534-65534 lookup main priority 5000
 runuser -u nobody -- "$bin/phantom-server" -config server.yaml > server.log 2>&1 &
 server_pid=$!
 sleep 1
