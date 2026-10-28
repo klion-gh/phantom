@@ -53,7 +53,7 @@ cert_file: "$work/srv.pem"
 key_file: "$work/srv.key"
 private_key: "$priv"
 psk: "$psk"
-log_level: "info"
+log_level: "debug"
 EOF
 cat > client.yaml <<EOF
 server: "127.0.0.1:8443"
@@ -86,6 +86,16 @@ for _ in $(seq 50); do [ -S /run/phantom/phantomd.sock ] && break; sleep 0.1; do
 
 ctl() { runuser -u nobody -- "$bin/phantomd" "$@"; } # an unprivileged client, like the window
 
+step "baseline, before connecting"
+# The tunnel's resolver forwards to 1.1.1.1 - if this runner can't reach it,
+# DNS through the tunnel can't work either, and that's the runner, not us.
+direct_dns=0
+if dig +time=3 +tries=1 +short @1.1.1.1 example.com A | grep -Eq '^[0-9.]+$'; then direct_dns=1; fi
+echo "1.1.1.1 reachable directly: $direct_dns"
+example_ip=$(getent ahostsv4 example.com | awk 'NR==1 {print $1}')
+echo "example.com = $example_ip"
+curl -sS --max-time 20 -o /dev/null https://example.com || fail "no network even before connecting"
+
 step "connect (full tunnel)"
 ctl ping client.yaml
 ctl connect client.yaml
@@ -101,7 +111,8 @@ ip route show table 20552 | grep -q 'default dev phantom0' || fail "tunnel defau
 step "traffic goes through the tunnel"
 down() { ctl status | tail -1 | grep -o '"bytes_down":[0-9]*' | cut -d: -f2; }
 before=$(down)
-curl -sS --max-time 20 -o /dev/null -w '%{http_code}\n' https://example.com | grep -q '^200$' || fail "https through the tunnel"
+# By address first: TCP through the tunnel, independent of DNS.
+curl -sS --max-time 20 --resolve "example.com:443:$example_ip" -o /dev/null -w '%{http_code}\n' https://example.com | grep -q '^200$' || fail "https through the tunnel"
 after=$(down)
 echo "bytes down through the tunnel: $before -> $after"
 [ "${after:-0}" -gt "${before:-0}" ] || fail "tunnel counters did not move"
@@ -109,11 +120,16 @@ echo "bytes down through the tunnel: $before -> $after"
 step "DNS to any resolver is answered through the tunnel"
 # 192.0.2.53 is TEST-NET - nothing answers there. Only the redirect to the
 # tunnel's resolver can produce an answer.
-dig +time=5 +tries=1 +short @192.0.2.53 example.com A | grep -Eq '^[0-9.]+$' || fail "DNS redirect"
+if [ "$direct_dns" = 1 ]; then
+	dig +time=5 +tries=1 +short @192.0.2.53 example.com A | grep -Eq '^[0-9.]+$' || fail "DNS redirect"
+	curl -sS --max-time 20 -o /dev/null https://example.com || fail "https by name through the tunnel"
+else
+	echo "SKIP: this runner can't reach 1.1.1.1, so tunnelled DNS can't be checked here"
+fi
 
 step "smart mode: listed site tunnelled, the rest direct"
 ctl connect client.yaml --smart example.com
-curl -sS --max-time 20 -o /dev/null -w '%{http_code}\n' https://example.com | grep -q '^200$' || fail "listed site in smart mode"
+curl -sS --max-time 20 --resolve "example.com:443:$example_ip" -o /dev/null -w '%{http_code}\n' https://example.com | grep -q '^200$' || fail "listed site in smart mode"
 curl -sS --max-time 20 -o /dev/null -w '%{http_code}\n' https://github.com | grep -Eq '^(200|301|302)$' || fail "unlisted site in smart mode"
 
 step "disconnect restores the network"
