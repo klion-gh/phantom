@@ -17,7 +17,8 @@
 8. [Конфигурация](#конфигурация)
 9. [Сборка мобильного ядра и APK](#сборка-мобильного-ядра-и-apk)
 10. [Сборка Windows-приложения](#сборка-windows-приложения)
-11. [Устранение проблем](#устранение-проблем)
+11. [Сборка Linux-приложения](#сборка-linux-приложения)
+12. [Устранение проблем](#устранение-проблем)
 
 ---
 
@@ -55,7 +56,7 @@ Phantom — личный VPN, устроенный так, чтобы соеди
 - **Оформление** — шесть тёмных палитр, восемь анимированных фонов и переключатель
   эффекта прозрачности плиток в настройках обоих приложений
 
-### Три клиента
+### Клиенты
 
 - **Windows (`desktop/`, `phantom.exe`)** — полноценный системный VPN на Wintun (тот же
   драйвер, что использует WireGuard-для-Windows): весь IP-трафик машины идёт через
@@ -65,6 +66,11 @@ Phantom — личный VPN, устроенный так, чтобы соеди
   Подключить/Отключить/Открыть/Выход, закрытие окна сворачивает в трей вместо выхода.
   Требует запуска от имени администратора (создание TUN-адаптера и изменение таблицы
   маршрутов). Обновляется сам — новая версия скачивается и устанавливается автоматически.
+- **Linux (`desktop/` + `cmd/phantomd`)** — то же приложение, что на Windows, для любого
+  дистрибутива с графическим окружением: тот же интерфейс, конфигурации, «Маршрутизация»,
+  настройка своего сервера, трей и мост для расширения. Туннель держит служба `phantomd`
+  (systemd, права root), окно работает от обычного пользователя. Пакеты `.deb`, `.rpm`,
+  `.pkg.tar.zst` и универсальный `tar.gz`; обновляется тем же способом, каким установлено.
 - **Android** — приложение `Phantom` (`android/`), заворачивает весь трафик устройства
   через `VpnService`. Тот же список плиток-профилей и тот же раздел «Маршрутизация»,
   плюс постоянное уведомление в шторке с
@@ -321,6 +327,32 @@ ssh root@<IP> "systemctl restart phantom"
 > он может ненадолго переподключиться сам (его собственная защита от утечек реагирует
 > на изменение таблицы маршрутов) — это нормально, не баг Phantom.
 
+### Linux (полноценный VPN)
+
+Скачать с [GitHub Releases](https://github.com/klion-gh/phantom/releases) пакет под свой
+дистрибутив и установить:
+
+| Дистрибутив | Файл | Команда |
+|---|---|---|
+| Ubuntu, Debian, Mint | `phantom-linux-amd64.deb` | `sudo apt install ./phantom-linux-amd64.deb` |
+| Fedora, openSUSE | `phantom-linux-amd64.rpm` | `sudo dnf install ./phantom-linux-amd64.rpm` / `sudo zypper install ./phantom-linux-amd64.rpm` |
+| Arch, Manjaro, EndeavourOS | `phantom-linux-amd64.pkg.tar.zst` | `sudo pacman -U phantom-linux-amd64.pkg.tar.zst` |
+| любой другой | `phantom-linux-amd64.tar.gz` | `tar xf phantom-linux-amd64.tar.gz && sudo sh phantom/install.sh` |
+
+После установки запущена служба `phantomd`, а в меню приложений появился **Phantom**. Дальше
+всё как в Windows-приложении: **+** → вставить `client.yaml` → нажать кнопку на плитке.
+
+- Окну права администратора не нужны: туннелем, маршрутами и DNS управляет служба. Без
+  systemd окно запустит службу само и один раз за сеанс спросит пароль.
+- Трей работает в KDE, Xfce, Cinnamon, MATE и других окружениях с поддержкой
+  StatusNotifierItem; в GNOME нужно расширение AppIndicator. Без трея закрытие окна
+  сворачивает его в панель задач.
+- Нужны GTK 3 и WebKitGTK 4.1 (Ubuntu 22.04+, Debian 12+, Fedora, Arch/Manjaro, openSUSE,
+  Mint 21+). Пакеты подтягивают их сами, `install.sh` подскажет команду, если их нет.
+- Лог окна — `~/.local/state/phantom/logs`, лог службы — `journalctl -u phantomd`.
+  Управлять службой можно и из терминала: `/usr/lib/phantom/phantomd status`.
+- Удаление: пакетным менеджером, а для `tar.gz` — `sudo sh /usr/lib/phantom/uninstall.sh`.
+
 ### Android
 
 1. Установить `bin/phantom.apk` (`adb install -r bin/phantom.apk`, перекинуть файл, или
@@ -466,7 +498,7 @@ cd android
 github.com/wailsapp/wails/v2/cmd/wails@latest`).
 
 ```bash
-cd windows
+cd desktop
 wails build
 # результат: desktop/build/bin/phantom.exe
 ```
@@ -479,11 +511,42 @@ wails build
 
 Детали пошагового запуска туннеля (порядок обхода петли маршрутизации, фикс метрики
 интерфейса, `validate=no` для DNS), хранения нескольких профилей и трей-иконки — в
-[PROTOCOL.md §11](PROTOCOL.md#11-windows-app-windows-phantomexe).
+[PROTOCOL.md §11](PROTOCOL.md#11-windows-app-desktop-phantomexe).
+
+---
+
+## Сборка Linux-приложения
+
+Нужны: Go 1.26+, Node.js/npm, Wails CLI, заголовки GTK 3 и WebKitGTK 4.1 (Ubuntu:
+`sudo apt install libgtk-3-dev libwebkit2gtk-4.1-dev`).
+
+```bash
+cd desktop
+wails build -platform linux/amd64 -tags webkit2_41   # окно: desktop/build/bin/phantom
+cd .. && CGO_ENABLED=0 go build -o phantomd ./cmd/phantomd  # служба
+```
+
+Пакеты собирает [nfpm](https://nfpm.goreleaser.com) по `packaging/linux/nfpm.yaml`, а
+`packaging/linux/e2e.sh` проверяет службу на настоящем ядре: поднимает сервер Phantom на
+этой же машине, подключается и убеждается, что трафик и DNS идут через туннель, а
+отключение возвращает сеть как было. Оба шага выполняет релизный workflow.
+
+Как служба заворачивает трафик (TUN, правила маршрутизации с fwmark, перенаправление
+DNS через nftables) — в [PROTOCOL.md §11a](PROTOCOL.md#11a-linux-app-desktop--cmdphantomd).
 
 ---
 
 ## Устранение проблем
+
+### Linux: пустое окно или служба не запускается
+
+- **Пустое белое окно** — на части видеокарт и виртуальных машин WebKitGTK не рисует через
+  GPU. Запустить `PHANTOM_NO_GPU=1 phantom`; если помогло, это можно прописать в ярлык.
+- **«phantomd is not running»** — `systemctl status phantomd` и `journalctl -u phantomd`.
+  Служба создаёт устройство `phantom0`: нужен `/dev/net/tun` (в контейнерах его
+  обычно нет).
+- **Нет интернета после аварийного завершения** — служба при старте сама убирает
+  оставшиеся правила; вручную то же делает `sudo systemctl restart phantomd`.
 
 ### Сертификат не выпускается / сервер не стартует
 

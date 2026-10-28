@@ -1272,6 +1272,100 @@ HTML/CSS), not a functional one.
 
 ---
 
+## 11a. Linux app (`desktop/` + `cmd/phantomd`)
+
+The same Wails app as §11, built for Linux, with one structural difference:
+the tunnel runs in a separate privileged process.
+
+### 11a.1 Why two processes
+
+Creating a TUN device, adding routes and policy rules, and installing nftables
+rules all need `CAP_NET_ADMIN`. On Windows the whole app simply runs elevated.
+On Linux the window can't: GTK (under WebKitGTK, under Wails) refuses to
+initialise in a process with elevated rights, and file capabilities set
+`AT_SECURE`, which GTK treats the same as setuid. So:
+
+- **`phantomd`** (`cmd/phantomd`) runs as root - a systemd service enabled at
+  install, or started once per session through `pkexec` where there is no
+  systemd. It owns the tunnel and its routing engine and does nothing until a
+  client asks.
+- **The window** (`desktop/`) runs as the user and drives it over
+  `/run/phantom/phantomd.sock` with `net/rpc` + JSON (`internal/daemonapi`):
+  Connect, Disconnect, Status, SetRouting, ResetMisroutedFlows, Ping. The
+  socket is open to local users (`0666`), like a system VPN managed from the
+  desktop; each client's uid is logged.
+
+The seam is `desktop/platform.go`: everything above it (configs, the smart
+selector, settings, server setup, the browser bridge, the bindings) is shared
+with Windows; `*_windows.go` run the tunnel in-process, `*_linux.go` call
+phantomd. Because phantomd outlives the window, a window started while a
+tunnel is up adopts it (`adoptRunningTunnel`) instead of showing it as off.
+
+### 11a.2 The tunnel is the Android one
+
+phantomd opens `phantom0` (`IFF_TUN | IFF_NO_PI`), gives it `10.10.0.2/24`, and
+hands the fd to `mobile.Start` - the same function the Android app binds to,
+with the same netstack, pool, smart routing and split DNS. Android's
+`VpnService.protect()` becomes `SO_MARK` (`markSocket`): every socket the core
+opens - the server pool, smart mode's direct flows, config pings - carries
+mark `0x5048`.
+
+### 11a.3 Getting traffic in: policy routing (as wg-quick)
+
+Nothing is touched until the server has answered, so a config that can't
+connect leaves the network as it was. Then, IPv4 and IPv6 alike:
+
+- table `0x5048` (20552): `default dev phantom0`;
+- rule 5100: `lookup main suppress_prefixlength 0` - the main table still
+  decides everything except its default route, so the LAN stays reachable;
+- rule 5101: `not fwmark 0x5048 lookup 20552` - everything else goes in.
+
+Marked sockets fall through to the main table and its real default route.
+Nothing pins a gateway, so a network change needs no route surgery: phantomd
+watches the main table's default routes over netlink and only recycles the
+server pool and re-reads the physical resolver (`mobile.Tunnel.NetworkChanged`)
+- the Android behaviour, not Windows' reconnect.
+
+### 11a.4 DNS: redirected with nftables, whatever the distribution uses
+
+A resolver on the local network (the router) is reached through the main
+table's on-link route, i.e. around the tunnel - leaking names and leaving smart
+mode blind, since it learns a listed site's addresses from the DNS answers
+crossing the tunnel. Distributions configure DNS in incompatible ways
+(systemd-resolved, NetworkManager, resolvconf, a plain file), so phantomd
+doesn't configure DNS at all; it redirects it, over netlink (no `nft` binary):
+
+- `ip phantom`, output nat: unmarked, not to `127.0.0.0/8`, UDP/TCP port 53 ->
+  `dnat to 10.10.0.1` - the tunnel's resolver address, which the netstack
+  answers via split DNS (`SetDNSUpstream`, as on Android);
+- `ip6 phantom`, output filter: the same for IPv6 -> `reject`, so resolvers
+  move to an IPv4 server immediately instead of timing out.
+
+A local stub (`127.0.0.53`) is left alone; its own upstream queries are what
+get redirected. Direct (unlisted) names go to the physical network's resolver,
+read from `/etc/resolv.conf` or, behind a stub, `/run/systemd/resolve/resolv.conf`.
+
+### 11a.5 Teardown and crash safety
+
+Disconnect, SIGTERM (systemd stop, shutdown) and phantomd's own startup all run
+`cleanupNetworking`: rules, the table, both nftables tables and the device.
+A killed phantomd's rules would point at a vanished device and its empty table
+falls through to the main one, so even before the restart cleans up, the
+machine is not left offline.
+
+### 11a.6 Packaging and updates
+
+One `packaging/linux/nfpm.yaml` builds `.deb`, `.rpm` (dependencies by soname,
+so Fedora and openSUSE both resolve them) and Arch packages; `install.sh` in
+the universal `tar.gz` covers everything else. Each writes
+`/usr/lib/phantom/install-method`, and the updater installs the next release
+the same way through `pkexec` (`dpkg -i`, `rpm -U`, `pacman -U`, or the new
+`install.sh`), after the same SHA256SUMS check as Windows. The window is built
+against WebKitGTK 4.1 on Ubuntu 22.04 for the widest glibc reach; phantomd is a
+static binary. `packaging/linux/e2e.sh` (release workflow) runs a Phantom
+server and phantomd on a real kernel and checks traffic, the DNS redirect,
+smart mode and teardown.
+
 ## 12. iOS portability path (not implemented in this repo)
 
 `gomobile bind -target=ios ./mobile` would produce an `.xcframework` from the identical

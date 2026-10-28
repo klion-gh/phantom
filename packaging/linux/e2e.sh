@@ -7,9 +7,13 @@
 #   sudo packaging/linux/e2e.sh <dir with phantom-server, phantom-keygen, phantomd>
 set -euo pipefail
 
-bin=$(cd "$1" && pwd)
 work=$(mktemp -d)
 chmod 755 "$work"
+# Copied out of the checkout: the runner's home directory isn't traversable
+# by nobody, who runs the server and the unprivileged client below.
+install -d -m 755 "$work/bin"
+install -m 755 "$1/phantom-server" "$1/phantom-keygen" "$1/phantomd" "$work/bin/"
+bin="$work/bin"
 cd "$work"
 server_pid=""
 daemon_pid=""

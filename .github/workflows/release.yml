@@ -117,7 +117,7 @@ jobs:
         run: go install github.com/wailsapp/wails/v2/cmd/wails@v2.12.0
 
       - name: Build phantom.exe
-        working-directory: windows
+        working-directory: desktop
         run: wails build -platform windows/amd64
 
       # After the build, not before: main.go embeds frontend/dist, which doesn't
@@ -125,7 +125,7 @@ jobs:
       # package won't even compile earlier in the job. The Windows half of the
       # desktop package is only ever compiled here.
       - name: Test the Windows client package
-        working-directory: windows
+        working-directory: desktop
         run: go test ./...
 
       - uses: actions/upload-artifact@v4
