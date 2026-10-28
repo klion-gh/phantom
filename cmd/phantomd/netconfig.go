@@ -93,11 +93,11 @@ func installNetworking(ifIndex int) error {
 		}
 	}
 
-	if err := installDNSRedirect(); err != nil {
+	if err := installNftables(); err != nil {
 		// Not fatal: traffic is tunnelled either way, and a resolver reached
 		// through the default route is still tunnelled. Only an on-link one
 		// (the router) would leak - worth a loud line, not a failed connect.
-		log.Printf("WARNING: DNS redirect unavailable, queries to a local-network resolver bypass the tunnel: %v", err)
+		log.Printf("WARNING: nftables unavailable, queries to a local-network resolver bypass the tunnel: %v", err)
 	}
 	return nil
 }
@@ -137,15 +137,32 @@ func cleanupNetworking() {
 			}
 		}
 	}
-	removeDNSRedirect()
+	removeNftables()
 	if link, err := netlink.LinkByName(tunName); err == nil {
 		netlink.LinkDel(link)
 	}
 }
 
-// --- DNS redirect (nftables, over netlink - no nft binary needed) -----------
+// --- nftables (over netlink - no nft binary needed) --------------------------
 
-// installDNSRedirect adds, in tables named nftTable:
+// installNftables adds two things, in tables named nftTable (ip and ip6):
+//
+// The mark, carried over to replies (both families):
+//
+//	postrouting: meta mark fwMark -> ct mark set fwMark
+//	prerouting:  ct mark fwMark   -> meta mark set fwMark
+//
+// Replies to phantomd's own connections - from the Phantom server, from sites
+// smart mode reaches directly - arrive unmarked. With strict reverse-path
+// filtering (rp_filter=1, the default on RHEL-like systems) the kernel checks
+// where it would route the *source* back to; unmarked, that's the tunnel, not
+// the interface the reply came in on, and the reply is dropped - the tunnel
+// would never get past its first packet there. Restoring the mark from
+// conntrack makes that check take the main table, as the outgoing packet
+// did. (wg-quick does the same; src_valid_mark, set in installNetworking, is
+// what makes rp_filter look at the mark at all.)
+//
+// The DNS redirect:
 //
 //	ip:  output nat:    meta mark != fwMark, ip daddr != 127.0.0.0/8,
 //	                    {udp,tcp} dport 53 -> dnat to tunnelDNS
@@ -155,14 +172,20 @@ func cleanupNetworking() {
 // IPv6 queries are refused rather than redirected (the tunnel's resolver is
 // IPv4-only): a refusal is immediate, so resolvers move on to an IPv4 server
 // instead of waiting out a timeout.
-func installDNSRedirect() error {
-	removeDNSRedirect()
+func installNftables() error {
+	removeNftables()
 	c, err := nftables.New()
 	if err != nil {
 		return err
 	}
 
+	// Each piece is flushed on its own, so a kernel missing, say, NAT support
+	// still gets the mark restore.
 	v4 := c.AddTable(&nftables.Table{Family: nftables.TableFamilyIPv4, Name: nftTable})
+	addMarkRestore(c, v4)
+	if err := c.Flush(); err != nil {
+		return fmt.Errorf("ipv4 mark restore: %w", err)
+	}
 	nat := c.AddChain(&nftables.Chain{
 		Name: "dns", Table: v4,
 		Type: nftables.ChainTypeNAT, Hooknum: nftables.ChainHookOutput, Priority: nftables.ChainPriorityNATDest,
@@ -188,6 +211,7 @@ func installDNSRedirect() error {
 	}
 
 	v6 := c.AddTable(&nftables.Table{Family: nftables.TableFamilyIPv6, Name: nftTable})
+	addMarkRestore(c, v6)
 	filter := c.AddChain(&nftables.Chain{
 		Name: "dns", Table: v6,
 		Type: nftables.ChainTypeFilter, Hooknum: nftables.ChainHookOutput, Priority: nftables.ChainPriorityFilter,
@@ -208,6 +232,32 @@ func installDNSRedirect() error {
 		log.Printf("DNS redirect: ipv6 table: %v (continuing)", err)
 	}
 	return nil
+}
+
+// addMarkRestore adds the two chains that carry fwMark over to replies - see
+// installNftables.
+func addMarkRestore(c *nftables.Conn, t *nftables.Table) {
+	mark := binaryutil.NativeEndian.PutUint32(fwMark)
+	post := c.AddChain(&nftables.Chain{
+		Name: "mark_save", Table: t,
+		Type: nftables.ChainTypeFilter, Hooknum: nftables.ChainHookPostrouting, Priority: nftables.ChainPriorityMangle,
+	})
+	c.AddRule(&nftables.Rule{Table: t, Chain: post, Exprs: []expr.Any{
+		&expr.Meta{Key: expr.MetaKeyMARK, Register: 1},
+		&expr.Cmp{Op: expr.CmpOpEq, Register: 1, Data: mark},
+		&expr.Immediate{Register: 1, Data: mark},
+		&expr.Ct{Key: expr.CtKeyMARK, Register: 1, SourceRegister: true},
+	}})
+	pre := c.AddChain(&nftables.Chain{
+		Name: "mark_restore", Table: t,
+		Type: nftables.ChainTypeFilter, Hooknum: nftables.ChainHookPrerouting, Priority: nftables.ChainPriorityMangle,
+	})
+	c.AddRule(&nftables.Rule{Table: t, Chain: pre, Exprs: []expr.Any{
+		&expr.Ct{Key: expr.CtKeyMARK, Register: 1},
+		&expr.Cmp{Op: expr.CmpOpEq, Register: 1, Data: mark},
+		&expr.Immediate{Register: 1, Data: mark},
+		&expr.Meta{Key: expr.MetaKeyMARK, Register: 1, SourceRegister: true},
+	}})
 }
 
 func unmarked() []expr.Any {
@@ -234,7 +284,7 @@ func concat(parts ...[]expr.Any) []expr.Any {
 	return out
 }
 
-func removeDNSRedirect() {
+func removeNftables() {
 	c, err := nftables.New()
 	if err != nil {
 		return

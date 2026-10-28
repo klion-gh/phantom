@@ -73,6 +73,14 @@ step "server, as nobody, with its own traffic kept out of the tunnel"
 nft add table inet e2e
 nft add chain inet e2e out '{ type route hook output priority mangle; }'
 nft add rule inet e2e out meta skuid 65534 meta mark set 0x5048
+# The mark lands after the kernel already picked the source address - the
+# tunnel's, from the route it took unmarked - so it's rewritten on the way out.
+# phantomd marks its sockets before connecting and never needs this.
+nft add chain inet e2e post '{ type nat hook postrouting priority srcnat; }'
+nft add rule inet e2e post meta skuid 65534 oifname != '{ "lo", "phantom0" }' masquerade
+# Strict reverse-path filtering, as RHEL-like systems ship it: replies to
+# phantomd's direct connections must still get through (see addMarkRestore).
+sysctl -w net.ipv4.conf.all.rp_filter=1
 runuser -u nobody -- "$bin/phantom-server" -config server.yaml > server.log 2>&1 &
 server_pid=$!
 sleep 1
