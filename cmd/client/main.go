@@ -81,7 +81,7 @@ func main() {
 	// the rest of the process's life and the user had to restart the proxy by
 	// hand - even though the ConnPool underneath had already redialed
 	// successfully. The Android bridge (mobile/mobile.go) and the Windows client
-	// (windows/proxymanager.go) both did this; only this client didn't.
+	// (desktop/proxymanager.go) both did this; only this client didn't.
 	refresh := func() (*tunnel.Session, error) {
 		freshMux, err := pool.Get(ctx)
 		if err != nil {

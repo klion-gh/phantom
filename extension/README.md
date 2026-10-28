@@ -2,7 +2,7 @@
 
 Adds the site in the current tab to the Phantom Windows app's Умный VPN list.
 Talks only to the app on this computer (`127.0.0.1:47815`, see
-`windows/browserbridge.go` and PROTOCOL.md §11.4a).
+`desktop/browserbridge.go` and PROTOCOL.md §11.4a).
 
 ```bash
 node build.mjs     # -> dist/chromium, dist/firefox

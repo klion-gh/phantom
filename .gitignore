@@ -31,3 +31,7 @@ android/app/libs/*.jar
 # OS/editor cruft
 .DS_Store
 Thumbs.db
+
+# Left behind by the windows/ -> desktop/ rename while the old build was running;
+# safe to delete once nothing runs from it.
+/windows/

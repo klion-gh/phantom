@@ -19,7 +19,7 @@ import (
 	"time"
 )
 
-// Categories, kept in step with Android's Diag.Cat and windows/diag.go.
+// Categories, kept in step with Android's Diag.Cat and desktop/diag.go.
 const (
 	CatApp    = "APP"    // process start, environment
 	CatVPN    = "VPN"    // tunnel lifecycle as the platform sees it

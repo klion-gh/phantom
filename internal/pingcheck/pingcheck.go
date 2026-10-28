@@ -1,6 +1,6 @@
 // Package pingcheck previews a saved client.yaml's reachability/latency
 // without building a tunnel - shared by the Android bridge (mobile.Ping) and
-// the Windows app (windows/ping.go), since the logic has no platform-specific
+// the Windows app (desktop/app.go), since the logic has no platform-specific
 // part (no TUN/gVisor involved, just a dial+handshake+timing).
 package pingcheck
 

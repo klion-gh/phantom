@@ -31,7 +31,7 @@ One Go implementation of the protocol (`internal/`) backs three clients:
 - **Desktop proxy** (`cmd/client`): local SOCKS5 (`127.0.0.1:1080`) + HTTP CONNECT
   (`127.0.0.1:1081`) proxy. Doesn't need Administrator; only tunnels traffic from apps
   explicitly pointed at the proxy, not the whole machine.
-- **Windows app** (`windows/`, `phantom.exe`): a full system-wide VPN via a Wintun
+- **Windows app** (`desktop/`, `phantom.exe`): a full system-wide VPN via a Wintun
   adapter (Wails v2 GUI). All IP traffic on the machine goes through the tunnel, not
   just proxy-aware apps. See §11.
 - **Android app** (`android/`, package `com.phantom.vpn`): a real system-wide VPN via
@@ -101,7 +101,7 @@ phantom/
 │   ├── mobile.go            gomobile-bind entry point: internal/netstack ⇄ Phantom session
 │   └── autoselect.go        gomobile-safe wrapper around internal/routing.Selector - §9.3
 ├── android/                 Kotlin/Compose app (package com.phantom.vpn) using mobile.aar - §10
-├── windows/                 Wails v2 app (Go + HTML/CSS/JS), phantom.exe - §11
+├── desktop/                 Wails v2 app (Go + HTML/CSS/JS), phantom.exe - §11
 ├── extension/               Browser extension (MV3) talking to phantom.exe - §11.4a
 ├── configs/                 Working client.yaml / server.yaml
 ├── scripts/install.sh       One-command server install/uninstall (curl | sh)
@@ -395,7 +395,7 @@ handles all three:
 ### 6.1 Client (`internal/transport/tls_client.go`)
 
 `transport.Dial(ctx, *TLSClientConfig)` is the single client-side entry point every
-caller uses — `cmd/client`, `mobile.Start`, `windows/wintun.go`'s `StartWindows`, and
+caller uses — `cmd/client`, `mobile.Start`, `desktop/tunnel_windows.go`'s `StartWindows`, and
 `internal/pingcheck.Ping` all call it directly.
 
 - uTLS-based fingerprint mimicry (`fingerprint` config field, mapped in
@@ -429,7 +429,7 @@ caller uses — `cmd/client`, `mobile.Start`, `windows/wintun.go`'s `StartWindow
   real browser would.
 - `ProtectFD` hook: on Android, wired to `VpnService.protect()` via a `net.Dialer.Control`
   callback so the app's own connection to the server bypasses its own VPN routing (see
-  §10). Windows has no equivalent per-socket exemption API — `windows/wintun.go` solves
+  §10). Windows has no equivalent per-socket exemption API — `desktop/tunnel_windows.go` solves
   the same underlying problem with a routing-table trick instead (see §11.2). `Ping`
   doesn't set `ProtectFD` at all since it never establishes a competing `0.0.0.0/0`
   route in the first place.
@@ -599,7 +599,7 @@ config switch then kept the VPN interface up in front of a dead stack - the whol
 offline. The Android service also bounds each stop on its own thread
 (`stopTunnelBounded`, 2.5s) before closing the interface, on switches as well as
 disconnects.
-- **Windows** (`windows/wintun.go`): no raw fd exists on Windows, so
+- **Windows** (`desktop/tunnel_windows.go`): no raw fd exists on Windows, so
   `gvisor.dev/gvisor/pkg/tcpip/link/channel.New` is used instead — a queue-based
   endpoint with no OS handle requirement. Two goroutines pump packets between it and a
   `golang.zx2c4.com/wireguard/tun` Wintun device (`pumpTunToChannel`/`pumpChannelToTun`).
@@ -622,7 +622,7 @@ error)` (`Ping` is the same with zero `Options`):
    **`"ip4"` specifically, not a dual-stack lookup**: on at least one real network this
    project was tested on, the AAAA query stalled for several seconds before falling back
    to A, which dominated total connect time; skipping it outright was the fix (see the
-   identical fix in `windows/wintun.go`'s own server-address resolution, §11.2).
+   identical fix in `desktop/tunnel_windows.go`'s own server-address resolution, §11.2).
 2. Dials **the resolved IP** (not the hostname, so the dialer never does a second,
    unprotected lookup of its own; SNI stays `domain`) via `transport.Dial` (the full
    disguised handshake, §5), timing from just before the dial to just after it succeeds.
@@ -641,7 +641,7 @@ handshake and the DNS lookup alike:
   0.0.0.0/0 route like any other app's.
 - **Windows**: an `IP_UNICAST_IF` bind to the physical interface captured before the
   tunnel's default route existed - the same index and mechanism smart mode's direct
-  flows use (`windows/pingpath.go`, `windows/directdial.go`, §11). Only the *current* server's IPs have /32 bypass routes,
+  flows use (`desktop/pingpath_windows.go`, `desktop/directdial_windows.go`, §11). Only the *current* server's IPs have /32 bypass routes,
   so without it a ping to any other config went through the tunnel.
 
 With the socket protected, the system resolver would still point into the tunnel
@@ -781,7 +781,7 @@ field log had one tear down every connection on the device over one slow probe),
 fresh switch has a 90s minimum dwell before another
 "merely better" switch is allowed - only a config that's actually confirmed dead (two
 failed probes in a row) skips that dwell. `mobile/autoselect.go` (`AutoSelector`) is the
-gomobile-safe wrapper Android binds to; Windows (`windows/routing.go`) drives the identical
+gomobile-safe wrapper Android binds to; Windows (`desktop/routing.go`) drives the identical
 `Selector` type directly, no wrapper needed since it's already Go on both sides of the
 call.
 
@@ -990,7 +990,7 @@ runs before the TCP connection completes.
 
 ---
 
-## 11. Windows app (`windows/`, `phantom.exe`)
+## 11. Windows app (`desktop/`, `phantom.exe`)
 
 A Wails v2 app: Go backend (`App` struct in `app.go`, methods bound to
 `window.go.main.App.*` in JS) + plain HTML/CSS/JS frontend (`frontend/`, no framework) in
@@ -1003,13 +1003,13 @@ the same underlying data shape (`SavedConfig{id, yaml}`, live ping polling per t
 `cmd/client` remains as a lighter-weight, no-Administrator-required option that only
 tunnels traffic from apps explicitly pointed at the SOCKS5/HTTP proxy - useful for
 headless use (WSL, a Linux box, curl/scripting) or routing just one app/browser profile
-through Phantom without touching the rest of the machine's traffic. `windows/` is a full
+through Phantom without touching the rest of the machine's traffic. `desktop/` is a full
 system-wide VPN — all IP traffic goes through it — which requires creating a TUN adapter
 and modifying the routing table, both of which need Administrator
 (`build/windows/wails.exe.manifest` sets `requestedExecutionLevel="requireAdministrator"`,
 so Windows shows the UAC prompt on launch automatically). An earlier `cmd/vpn` console
 wrapper around `cmd/client` (start/stop/toggle the Windows system proxy) was removed once
-`windows/` existed - it added nothing `windows/` didn't already do better (a full-tunnel
+`desktop/` existed - it added nothing `desktop/` didn't already do better (a full-tunnel
 GUI supersedes a proxy-only CLI for the desktop case), and had a stale hardcoded server IP
 in its status output.
 
@@ -1060,7 +1060,7 @@ order:
    the interface's own metric is also pinned low, not just the route's.
 6. Bridge the Wintun device into `internal/netstack.New` via a gVisor `channel.Endpoint`
    (§9), start the TCP/UDP forwarders, and hand the shared `internal/routing.Engine`
-   (§9.3) to it (`installRouting`, `windows/routing.go`) so smart-VPN decisions apply
+   (§9.3) to it (`installRouting`, `desktop/routing.go`) so smart-VPN decisions apply
    from the first packet.
 
 `Stop()` tears down in reverse, and explicitly `route delete`s the step-2 bypass host
@@ -1278,7 +1278,7 @@ HTML/CSS), not a functional one.
 source used for Android. The only platform-specific piece is the link-layer glue in
 `mobile.go` (`fdbased.New` reading a raw Android fd directly); iOS's
 `NEPacketTunnelProvider` would need gVisor's callback-driven `channel.Endpoint` instead
-(exactly the mechanism `windows/wintun.go` already uses for the same reason — no raw fd
+(exactly the mechanism `desktop/tunnel_windows.go` already uses for the same reason — no raw fd
 available), since `NetworkExtension` doesn't hand out one either. Everything else —
 config parsing, the disguised handshake, TCP/UDP forwarders, splicing, `Ping` — carries
 over unchanged, since `internal/netstack` and `internal/pingcheck` were already factored

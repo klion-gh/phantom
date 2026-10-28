@@ -4,7 +4,7 @@
 // iOS later via the same gomobile-bound source). It owns nothing platform
 // specific except the raw TUN file descriptor handed to it by the OS - the
 // actual packet routing lives in internal/netstack, shared with the Windows
-// client (windows/wintun.go), which feeds the same netstack.Tunnel from a
+// client (desktop/tunnel_windows.go), which feeds the same netstack.Tunnel from a
 // Wintun device instead of a raw fd.
 //
 // The exported API only uses gomobile-safe types (string, int, error) so it
@@ -14,11 +14,11 @@
 // Excluded from GOOS=windows: gvisor's fdbased link endpoint (pkg/rawfile)
 // is linux-only and was never meant to build there anyway (the Windows
 // client feeds netstack from a Wintun device via channel.Endpoint instead -
-// see windows/wintun.go) - but with no build constraint of its own, this
+// see desktop/tunnel_windows.go) - but with no build constraint of its own, this
 // package still got *type-checked* whenever a Windows-side tool loaded the
 // whole module (`go list ./...`/`go build ./...`), tripping over that
-// unrelated failure. That's harmless for a plain `go build ./windows/...`
-// (which only resolves windows/'s own dependency graph), but Wails' binding
+// unrelated failure. That's harmless for a plain `go build ./desktop/...`
+// (which only resolves desktop/'s own dependency graph), but Wails' binding
 // generator loads the full module graph to analyze the bound App struct -
 // and silently produced no bindings at all once that hit this error.
 package mobile

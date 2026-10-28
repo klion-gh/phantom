@@ -57,7 +57,7 @@ Phantom — личный VPN, устроенный так, чтобы соеди
 
 ### Три клиента
 
-- **Windows (`windows/`, `phantom.exe`)** — полноценный системный VPN на Wintun (тот же
+- **Windows (`desktop/`, `phantom.exe`)** — полноценный системный VPN на Wintun (тот же
   драйвер, что использует WireGuard-для-Windows): весь IP-трафик машины идёт через
   туннель, если не включена умная маршрутизация. Список сохранённых конфигураций
   плитками (домен, IP, пинг, страна+флаг), раздел «Маршрутизация» (Умный VPN с каталогом
@@ -468,13 +468,13 @@ github.com/wailsapp/wails/v2/cmd/wails@latest`).
 ```bash
 cd windows
 wails build
-# результат: windows/build/bin/phantom.exe
+# результат: desktop/build/bin/phantom.exe
 ```
 
 `wintun.dll` (драйвер Wintun) встроен в бинарник через `//go:embed` и распаковывается
 рядом с `phantom.exe` при первом запуске — распространяется один-единственный `.exe`.
 
-Манифест (`windows/build/windows/wails.exe.manifest`) уже настроен на
+Манифест (`desktop/build/windows/wails.exe.manifest`) уже настроен на
 `requireAdministrator` — Windows сама покажет запрос UAC при запуске.
 
 Детали пошагового запуска туннеля (порядок обхода петли маршрутизации, фикс метрики

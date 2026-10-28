@@ -4,7 +4,7 @@
 // (session.Open/OpenUDP), exactly the way a VPN client needs to. None of this
 // cares how the packets got to the link endpoint - the Android client
 // (mobile/mobile.go) feeds it from a raw TUN file descriptor via gVisor's
-// fdbased endpoint, the Windows client (windows/wintun.go) feeds it from a
+// fdbased endpoint, the Windows client (desktop/tunnel_windows.go) feeds it from a
 // Wintun device via gVisor's channel.Endpoint. Both wrap this package's
 // Tunnel with their own platform-specific setup/teardown (dialing, TUN
 // device lifecycle, routing table changes) rather than duplicating the
