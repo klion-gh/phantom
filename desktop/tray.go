@@ -1,7 +1,6 @@
 package main
 
 import (
-	_ "embed"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -11,9 +10,6 @@ import (
 	"github.com/energye/systray"
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 )
-
-//go:embed build/windows/icon.ico
-var trayIconBytes []byte
 
 var (
 	trayStatusItem *systray.MenuItem
@@ -28,6 +24,9 @@ var (
 // tray icon defaults to showing the context menu on right-click without any
 // extra wiring; SetOnClick below just makes left-click restore the window
 // too, matching how most tray-resident apps behave.
+// trayShown is whether runTray was started - see trayAvailable.
+var trayShown bool
+
 func runTray(app *App) {
 	systray.Run(func() { onTrayReady(app) }, func() {})
 }

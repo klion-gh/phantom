@@ -1,0 +1,67 @@
+# .deb, .rpm and Arch packages from one description (https://nfpm.goreleaser.com).
+# The release workflow's linux-client job runs, from the repository root:
+#   VERSION=x.y.z ARCH=amd64 nfpm package -f packaging/linux/nfpm.yaml -p deb|rpm|archlinux
+# with the built binaries in dist/linux/.
+name: phantom
+arch: ${ARCH}
+platform: linux
+version: ${VERSION}
+section: net
+priority: optional
+maintainer: klion-gh <noreply@github.com>
+description: |
+  Phantom VPN client: a full-system VPN with a disguised transport,
+  smart per-site routing and in-app server setup.
+vendor: Phantom
+homepage: https://github.com/klion-gh/phantom
+license: Proprietary
+
+contents:
+  - src: dist/linux/phantom
+    dst: /usr/bin/phantom
+    file_info: { mode: 0755 }
+  - src: dist/linux/phantomd
+    dst: /usr/lib/phantom/phantomd
+    file_info: { mode: 0755 }
+  - src: packaging/linux/phantomd.service
+    dst: /usr/lib/systemd/system/phantomd.service
+  - src: packaging/linux/phantom.desktop
+    dst: /usr/share/applications/phantom.desktop
+  - src: desktop/build/linux/phantom.png
+    dst: /usr/share/icons/hicolor/256x256/apps/phantom.png
+  - src: packaging/linux/com.phantom.vpn.policy
+    dst: /usr/share/polkit-1/actions/com.phantom.vpn.policy
+  # How the window's updater installs the next version - see desktop/updater_linux.go.
+  - src: packaging/linux/install-method/deb
+    dst: /usr/lib/phantom/install-method
+    packager: deb
+  - src: packaging/linux/install-method/rpm
+    dst: /usr/lib/phantom/install-method
+    packager: rpm
+  - src: packaging/linux/install-method/arch
+    dst: /usr/lib/phantom/install-method
+    packager: archlinux
+
+scripts:
+  postinstall: packaging/linux/postinstall.sh
+  preremove: packaging/linux/preremove.sh
+
+overrides:
+  deb:
+    depends:
+      - libgtk-3-0
+      - libwebkit2gtk-4.1-0
+  rpm:
+    # By library rather than package name: Fedora and openSUSE name the
+    # packages differently but provide the same sonames.
+    depends:
+      - libgtk-3.so.0()(64bit)
+      - libwebkit2gtk-4.1.so.0()(64bit)
+  archlinux:
+    depends:
+      - gtk3
+      - webkit2gtk-4.1
+
+archlinux:
+  scripts:
+    postupgrade: packaging/linux/postinstall.sh

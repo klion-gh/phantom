@@ -10,8 +10,6 @@ import (
 	"log"
 	"net/http"
 	"os"
-	"os/exec"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -72,7 +70,7 @@ const sumsAssetName = "SHA256SUMS"
 // ignored; the app keeps running on its current version rather than
 // treating "can't check" as fatal.
 func checkAndSelfUpdate(ctx context.Context) {
-	cleanupOldExe()
+	cleanupAfterUpdate()
 
 	tag, downloadURL, sumsURL, ok := checkForUpdate()
 	if !ok {
@@ -91,7 +89,7 @@ func checkAndSelfUpdate(ctx context.Context) {
 // applyPendingUpdate performs the actual download+swap+relaunch for
 // whatever update checkAndSelfUpdate most recently found. Returns an error
 // message on failure, or "" if there was nothing pending to apply - on
-// success this doesn't return at all, since selfUpdate relaunches the new
+// success this doesn't return at all, since applyUpdate relaunches the new
 // exe and calls os.Exit itself.
 func applyPendingUpdate(ctx context.Context) string {
 	pendingUpdateMu.Lock()
@@ -105,12 +103,12 @@ func applyPendingUpdate(ctx context.Context) string {
 	log.Printf("applying update %s (current %s)", tag, AppVersion)
 	runtime.EventsEmit(ctx, "update:downloading", tag)
 
-	if err := selfUpdate(ctx, downloadURL, sumsURL); err != nil {
+	if err := applyUpdate(ctx, downloadURL, sumsURL); err != nil {
 		log.Printf("self-update to %s failed: %v", tag, err)
 		runtime.EventsEmit(ctx, "update:failed", err.Error())
 		return err.Error()
 	}
-	return "" // unreachable - selfUpdate exits the process on success
+	return "" // unreachable - applyUpdate exits the process on success
 }
 
 // checkForUpdate asks GitHub for the newest release on the user's chosen
@@ -184,16 +182,17 @@ func checkForUpdate() (tag string, downloadURL string, sumsURL string, ok bool) 
 	)
 
 	var exeURL string
+	wantAsset := updateAssetName()
 	for _, asset := range release.Assets {
 		switch asset.Name {
-		case "phantom.exe":
+		case wantAsset:
 			exeURL = asset.BrowserDownloadURL
 		case sumsAssetName:
 			sumsURL = asset.BrowserDownloadURL
 		}
 	}
 	if exeURL == "" {
-		log.Printf("update check: release %s has no phantom.exe asset", release.TagName)
+		log.Printf("update check: release %s has no %s asset", release.TagName, wantAsset)
 		return "", "", "", false
 	}
 	if sumsURL == "" {
@@ -299,97 +298,6 @@ func parseVersion(v string) [3]int {
 	return out
 }
 
-// selfUpdate downloads downloadURL and swaps it in for the currently
-// running exe, then relaunches. Windows allows renaming a running exe's
-// file (it's only deleting/overwriting it in place while mapped for
-// execution that fails), so the swap is: download to phantom_new.exe next
-// to the current exe, rename the running exe out of the way to
-// phantom_old.exe, rename phantom_new.exe into the vacated name, start the
-// new exe, then exit this process. A leftover phantom_old.exe (unlocked
-// once this process exits) is removed by the next launch's cleanupOldExe.
-//
-// The relaunched exe still carries the requireAdministrator manifest, so
-// Windows shows a fresh UAC prompt for it - unavoidable given the app's
-// elevation requirement, regardless of how the new process is started.
-func selfUpdate(ctx context.Context, downloadURL, sumsURL string) error {
-	exePath, err := os.Executable()
-	if err != nil {
-		return fmt.Errorf("locate executable: %w", err)
-	}
-	dir := filepath.Dir(exePath)
-	newPath := filepath.Join(dir, "phantom_new.exe")
-	oldPath := filepath.Join(dir, "phantom_old.exe")
-
-	// Fetch the expected digest before downloading, so a release whose manifest
-	// can't be read costs nothing and changes nothing on disk.
-	wantSum, err := fetchExpectedSum(sumsURL, "phantom.exe")
-	if err != nil {
-		return err
-	}
-
-	client := &http.Client{Timeout: 120 * time.Second}
-	resp, err := client.Get(downloadURL)
-	if err != nil {
-		return fmt.Errorf("download: %w", err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("download: unexpected status %d", resp.StatusCode)
-	}
-
-	out, err := os.Create(newPath)
-	if err != nil {
-		return fmt.Errorf("create temp file: %w", err)
-	}
-	// Hash while writing rather than re-reading afterwards: what gets hashed is
-	// then exactly the bytes that were written. progress fans the same bytes out
-	// to "update:progress" so the frontend can show a bar under the logo instead
-	// of a bare "downloading" banner - GitHub always sends Content-Length for a
-	// release asset, so resp.ContentLength is reliable here.
-	hasher := sha256.New()
-	progress := newDownloadProgress(ctx, resp.ContentLength)
-	if _, err := io.Copy(io.MultiWriter(out, hasher, progress), resp.Body); err != nil {
-		out.Close()
-		os.Remove(newPath)
-		return fmt.Errorf("write temp file: %w", err)
-	}
-	out.Close()
-	runtime.EventsEmit(ctx, "update:progress", 100)
-
-	if got := hex.EncodeToString(hasher.Sum(nil)); got != wantSum {
-		os.Remove(newPath)
-		return fmt.Errorf("downloaded phantom.exe does not match the release checksum "+
-			"(expected %s, got %s) - not installing it", wantSum, got)
-	}
-	log.Printf("update: checksum verified")
-
-	os.Remove(oldPath) // clean up any previous leftover before reusing the name
-
-	if err := os.Rename(exePath, oldPath); err != nil {
-		os.Remove(newPath)
-		return fmt.Errorf("rename current exe out of the way: %w", err)
-	}
-	if err := os.Rename(newPath, exePath); err != nil {
-		os.Rename(oldPath, exePath) // best-effort restore so the app isn't left missing
-		return fmt.Errorf("rename new exe into place: %w", err)
-	}
-
-	// Free the single-instance mutex before starting the new process - both
-	// this (mid-exit) process and the new one would briefly be alive
-	// otherwise, and the new one would lose the single-instance check
-	// against its own about-to-exit predecessor.
-	releaseSingleInstanceLock()
-
-	cmd := exec.Command(exePath)
-	if err := cmd.Start(); err != nil {
-		return fmt.Errorf("relaunch: %w", err)
-	}
-
-	log.Printf("update installed, relaunching as pid %d", cmd.Process.Pid)
-	os.Exit(0)
-	return nil // unreachable
-}
-
 // downloadProgress is an io.Writer that turns bytes written (via
 // io.MultiWriter alongside the actual file/hasher) into periodic
 // "update:progress" events carrying a 0-100 percent complete. Throttled to at
@@ -425,13 +333,50 @@ func (p *downloadProgress) Write(b []byte) (int, error) {
 	return n, nil
 }
 
-// cleanupOldExe removes a phantom_old.exe left behind by a previous
-// self-update - it's locked while that old process was still exiting, but
-// is free to delete by the time the newly-relaunched process starts back up.
-func cleanupOldExe() {
-	exePath, err := os.Executable()
+// downloadVerified downloads downloadURL to destPath, refusing to keep it
+// unless its SHA-256 matches what the release's SHA256SUMS lists for name.
+// Progress goes out as "update:progress" events so the frontend can show a bar
+// under the logo instead of a bare "downloading" banner.
+func downloadVerified(ctx context.Context, downloadURL, sumsURL, name, destPath string) error {
+	// Fetch the expected digest before downloading, so a release whose manifest
+	// can't be read costs nothing and changes nothing on disk.
+	wantSum, err := fetchExpectedSum(sumsURL, name)
 	if err != nil {
-		return
+		return err
 	}
-	_ = os.Remove(filepath.Join(filepath.Dir(exePath), "phantom_old.exe"))
+
+	client := &http.Client{Timeout: 120 * time.Second}
+	resp, err := client.Get(downloadURL)
+	if err != nil {
+		return fmt.Errorf("download: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("download: unexpected status %d", resp.StatusCode)
+	}
+
+	out, err := os.Create(destPath)
+	if err != nil {
+		return fmt.Errorf("create temp file: %w", err)
+	}
+	// Hash while writing rather than re-reading afterwards: what gets hashed is
+	// then exactly the bytes that were written. GitHub always sends
+	// Content-Length for a release asset, so resp.ContentLength is reliable.
+	hasher := sha256.New()
+	progress := newDownloadProgress(ctx, resp.ContentLength)
+	if _, err := io.Copy(io.MultiWriter(out, hasher, progress), resp.Body); err != nil {
+		out.Close()
+		os.Remove(destPath)
+		return fmt.Errorf("write temp file: %w", err)
+	}
+	out.Close()
+	runtime.EventsEmit(ctx, "update:progress", 100)
+
+	if got := hex.EncodeToString(hasher.Sum(nil)); got != wantSum {
+		os.Remove(destPath)
+		return fmt.Errorf("downloaded %s does not match the release checksum "+
+			"(expected %s, got %s) - not installing it", name, wantSum, got)
+	}
+	log.Printf("update: checksum verified")
+	return nil
 }

@@ -10,7 +10,6 @@ import (
 
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 
-	"phantom/internal/pingcheck"
 	"phantom/internal/provision"
 )
 
@@ -78,8 +77,8 @@ func (a *App) ProvisionServer(requestJSON string) string {
 	defer cancel()
 
 	diag(diagCatApp, "provisionStart", "sshPort", sshPort, "port", req.Port, "rootUser", req.User == "" || req.User == "root")
-	opts := provision.Around(pingOptions().ProtectFD, func(yaml string) (int64, error) {
-		res, err := pingcheck.PingWith(yaml, pingOptions())
+	opts := provision.Around(provisionProtect(), func(yaml string) (int64, error) {
+		res, err := pingConfig(yaml)
 		return res.LatencyMs, err
 	})
 	res, err := provision.Run(ctx, req, opts, provisionListener{ctx: a.ctx})

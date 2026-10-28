@@ -374,6 +374,25 @@ func (w *WinTunnel) removeBypassRoutes() {
 	w.bypassServerIPs = nil
 }
 
+// startTunnel is the platform entry point App.Connect calls - see platform.go.
+func startTunnel(configID, configYAML string, onNetworkChanged func()) (activeTunnel, error) {
+	w, err := StartWindows(configYAML, onNetworkChanged)
+	if err != nil {
+		return nil, err // never a typed nil inside the interface
+	}
+	return w, nil
+}
+
+// adoptRunningTunnel: a Windows tunnel lives and dies with this process, so
+// there is never one left over to pick up.
+func adoptRunningTunnel() (activeTunnel, string) { return nil, "" }
+
+func (w *WinTunnel) ResetMisroutedFlows() {
+	if w.inner != nil {
+		w.inner.ResetMisroutedFlows()
+	}
+}
+
 func (w *WinTunnel) Stats() string {
 	if w.inner == nil {
 		return "{}"

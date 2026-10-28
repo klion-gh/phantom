@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=Phantom
+GenericName=VPN
+Comment=Phantom VPN client
+Comment[ru]=VPN-клиент Phantom
+Exec=/usr/bin/phantom
+Icon=phantom
+Terminal=false
+Categories=Network;
+Keywords=vpn;proxy;
+StartupWMClass=phantom

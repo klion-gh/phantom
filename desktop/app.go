@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"phantom/internal/geoip"
-	"phantom/internal/pingcheck"
 	"phantom/internal/routing"
 
 	"github.com/wailsapp/wails/v2/pkg/runtime"
@@ -16,7 +15,7 @@ import (
 
 // How many times a network-change reconnect retries before finally giving up,
 // and the gap between attempts on top of however long the failed dial itself
-// took (its own timeout is StartWindows's 15s dial context - see wintun.go).
+// took (its own timeout is StartWindows's 15s dial context - see tunnel_windows.go).
 const (
 	maxNetworkChangeRetries = 4
 	networkChangeRetryDelay = 3 * time.Second
@@ -28,7 +27,7 @@ type App struct {
 	ctx context.Context
 
 	mu             sync.Mutex
-	tunnel         *WinTunnel
+	tunnel         activeTunnel
 	activeConfigID string
 }
 
@@ -48,6 +47,15 @@ func (a *App) startup(ctx context.Context) {
 	onSelectorSwitch = func(configID string) { a.switchToConfig(configID) }
 	removeSplitTunnelLeftovers()
 	applyRoutingToEngine()
+	// On Linux the tunnel lives in phantomd and can outlive this window (a
+	// crash, a logout); pick it up rather than showing it as disconnected
+	// while it still carries the machine's traffic. Never anything on Windows.
+	if t, id := adoptRunningTunnel(); t != nil {
+		a.mu.Lock()
+		a.tunnel, a.activeConfigID = t, id
+		a.mu.Unlock()
+		log.Printf("adopted the running tunnel for config %s", id)
+	}
 	syncSelector()
 	startBrowserBridgeIfEnabled(a)
 
@@ -136,6 +144,13 @@ func (a *App) shutdown(ctx context.Context) {
 // instead is what makes the app "minimize to tray" - the process (and any
 // active tunnel) keeps running until "Выход" is chosen from the tray menu.
 func (a *App) beforeClose(ctx context.Context) (prevent bool) {
+	if !trayShown {
+		// No tray to bring a hidden window back from (a Linux desktop without
+		// a StatusNotifierItem host) - minimise instead, so it stays in the
+		// taskbar.
+		runtime.WindowMinimise(ctx)
+		return true
+	}
 	runtime.WindowHide(ctx)
 	return true
 }
@@ -165,7 +180,7 @@ func (a *App) Connect(configID string, configYAML string) string {
 		"smartEnabled", loadSmartEnabled(),
 		"autoEnabled", loadAutoEnabled(),
 	)
-	tun, err := StartWindows(configYAML, func() {
+	tun, err := startTunnel(configID, configYAML, func() {
 		log.Println("underlying network changed, reconnecting")
 		diag(diagCatVPN, "networkChanged", "configID", configID)
 		runtime.EventsEmit(a.ctx, "tunnel:reconnecting")
@@ -387,7 +402,7 @@ func (a *App) DeleteConfig(id string) string {
 // failure (unreachable, bad config), which the frontend treats as "no data
 // yet" rather than a hard error since this runs on a background timer.
 func (a *App) Ping(configYAML string) string {
-	result, err := pingcheck.PingWith(configYAML, pingOptions())
+	result, err := pingConfig(configYAML)
 	if err != nil {
 		return "{}"
 	}
@@ -515,8 +530,8 @@ func (a *App) resetMisroutedFlows() {
 	a.mu.Lock()
 	w := a.tunnel
 	a.mu.Unlock()
-	if w != nil && w.inner != nil {
-		w.inner.ResetMisroutedFlows()
+	if w != nil {
+		w.ResetMisroutedFlows()
 	}
 }
 

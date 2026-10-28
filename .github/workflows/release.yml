@@ -122,8 +122,8 @@ jobs:
 
       # After the build, not before: main.go embeds frontend/dist, which doesn't
       # exist in a fresh checkout until Wails has built the frontend - so the
-      # package won't even compile earlier in the job. The windows package is
-      # GOOS=windows-only, so this is the only runner that can test it at all.
+      # package won't even compile earlier in the job. The Windows half of the
+      # desktop package is only ever compiled here.
       - name: Test the Windows client package
         working-directory: windows
         run: go test ./...
@@ -132,6 +132,114 @@ jobs:
         with:
           name: windows-client
           path: desktop/build/bin/phantom.exe
+          retention-days: 1
+
+  # phantomd, the privileged half of the Linux client, tested end to end on a
+  # real kernel: a Phantom server on the runner, phantomd connecting to it,
+  # and checks that traffic and DNS go through the tunnel and that
+  # disconnecting (or SIGTERM) restores the network. The only place the Linux
+  # networking code - netlink rules, nftables, the TUN device - ever runs
+  # before a user's machine.
+  linux-daemon:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26"
+
+      - name: Build server, keygen and phantomd
+        env:
+          CGO_ENABLED: "0"
+        run: |
+          mkdir -p e2e
+          go build -o e2e/phantom-server ./cmd/server
+          go build -o e2e/phantom-keygen ./cmd/keygen
+          go build -o e2e/phantomd ./cmd/phantomd
+
+      - name: End-to-end test
+        run: sudo bash packaging/linux/e2e.sh e2e
+
+  # The Linux client: the same Wails app as Windows, built against GTK 3 and
+  # WebKitGTK 4.1 on the oldest Ubuntu still supported, so the binary runs on
+  # anything with a newer glibc (Ubuntu 22.04+, Debian 12+, Fedora, Arch and
+  # Manjaro, openSUSE, Mint 21+). Shipped four ways - the window's updater
+  # picks the one matching how it was installed (desktop/updater_linux.go):
+  # a universal tar.gz with install.sh, and .deb/.rpm/Arch packages.
+  linux-client:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Install GTK and WebKitGTK headers
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev pkg-config
+
+      - name: Install Wails and nfpm
+        run: |
+          go install github.com/wailsapp/wails/v2/cmd/wails@v2.12.0
+          go install github.com/goreleaser/nfpm/v2/cmd/nfpm@latest
+
+      - name: Build the window
+        working-directory: desktop
+        run: wails build -platform linux/amd64 -tags webkit2_41
+
+      - name: Test the desktop package on Linux
+        working-directory: desktop
+        run: go test -tags webkit2_41 ./...
+
+      - name: Build phantomd
+        env:
+          CGO_ENABLED: "0"
+        run: go build -o dist/linux/phantomd ./cmd/phantomd
+
+      - name: Package
+        run: |
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            version="${GITHUB_REF_NAME#v}"
+          else
+            version=$(grep -oE 'AppVersion = "[^"]+"' desktop/version.go | cut -d'"' -f2)
+          fi
+          cp desktop/build/bin/phantom dist/linux/phantom
+
+          # Universal tarball: everything install.sh needs, in one directory.
+          mkdir -p tarball/phantom
+          cp dist/linux/phantom dist/linux/phantomd tarball/phantom/
+          cp packaging/linux/install.sh packaging/linux/uninstall.sh \
+             packaging/linux/phantomd.service packaging/linux/phantom.desktop \
+             packaging/linux/com.phantom.vpn.policy desktop/build/linux/phantom.png tarball/phantom/
+          tar -C tarball -czf phantom-linux-amd64.tar.gz phantom
+
+          export VERSION="$version" ARCH=amd64
+          nfpm package -f packaging/linux/nfpm.yaml -p deb -t phantom-linux-amd64.deb
+          nfpm package -f packaging/linux/nfpm.yaml -p rpm -t phantom-linux-amd64.rpm
+          nfpm package -f packaging/linux/nfpm.yaml -p archlinux -t phantom-linux-amd64.pkg.tar.zst
+          ls -la phantom-linux-amd64.*
+
+      - name: Check the .deb installs and starts its service
+        run: |
+          sudo apt-get install -y ./phantom-linux-amd64.deb
+          systemctl is-active phantomd.service
+          test -S /run/phantom/phantomd.sock
+          /usr/lib/phantom/phantomd status
+          test "$(cat /usr/lib/phantom/install-method)" = deb
+          sudo apt-get remove -y phantom
+          ! systemctl is-active phantomd.service
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-client
+          path: phantom-linux-amd64.*
           retention-days: 1
 
   # The browser extension (extension/), zipped once per browser family. Plain
@@ -170,7 +278,7 @@ jobs:
   # strands everyone - cannot occur: until the operator attaches phantom.apk and
   # presses Publish, no client sees anything at all.
   release:
-    needs: [versions, server, windows-client, extension]
+    needs: [versions, server, windows-client, linux-daemon, linux-client, extension]
     if: startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
     steps:
@@ -183,7 +291,10 @@ jobs:
         run: |
           missing=0
           for f in phantom.exe phantom-server-linux-amd64 phantom-server-linux-arm64 \
-                   phantom-keygen-linux-amd64 phantom-keygen-linux-arm64                    phantom-extension-chromium.zip phantom-extension-firefox.zip; do
+                   phantom-keygen-linux-amd64 phantom-keygen-linux-arm64 \
+                   phantom-linux-amd64.tar.gz phantom-linux-amd64.deb phantom-linux-amd64.rpm \
+                   phantom-linux-amd64.pkg.tar.zst \
+                   phantom-extension-chromium.zip phantom-extension-firefox.zip; do
             if [ ! -f "dist/$f" ]; then echo "::error::dist/$f is missing"; missing=1; fi
           done
           [ "$missing" = 0 ]

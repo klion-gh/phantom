@@ -106,14 +106,42 @@ func directDialer(protect func(fd int) bool) netstack.DirectDialer {
 // internal/routing), which is why DNS itself keeps being tunnelled in this
 // mode regardless of the list.
 func (t *Tunnel) SetSmartRouting(enabled bool, sites string) {
-	if t.engine == nil {
+	t.setSmartRouting(enabled, sites)
+}
+
+// SetSmartRoutingWait is SetSmartRouting that also waits - at most timeoutMs -
+// for the new list's addresses to be resolved, so a ResetMisroutedFlows right
+// after it acts on the whole list rather than on whatever resolved first.
+func (t *Tunnel) SetSmartRoutingWait(enabled bool, sites string, timeoutMs int) {
+	seeded := t.setSmartRouting(enabled, sites)
+	if seeded == nil {
 		return
 	}
-	t.engine.SetSites(splitLines(sites))
+	select {
+	case <-seeded:
+	case <-time.After(time.Duration(timeoutMs) * time.Millisecond):
+	}
+}
+
+func (t *Tunnel) setSmartRouting(enabled bool, sites string) <-chan struct{} {
+	if t.engine == nil {
+		return nil
+	}
+	seeded := t.engine.SetSites(splitLines(sites))
 	if enabled {
 		t.engine.SetMode(routing.ModeSmart)
 	} else {
 		t.engine.SetMode(routing.ModeAll)
+	}
+	return seeded
+}
+
+// ResetMisroutedFlows closes the direct connections the current site list
+// would now tunnel, so apps reopen them through it - see
+// netstack.Tunnel.ResetMisroutedFlows.
+func (t *Tunnel) ResetMisroutedFlows() {
+	if t.inner != nil {
+		t.inner.ResetMisroutedFlows()
 	}
 }
 

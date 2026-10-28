@@ -1,0 +1,22 @@
+[Unit]
+Description=Phantom VPN service
+Documentation=https://github.com/klion-gh/phantom
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/lib/phantom/phantomd
+Restart=on-failure
+RestartSec=2
+# Creates /run/phantom, where the window's socket lives.
+RuntimeDirectory=phantom
+RuntimeDirectoryMode=0755
+# It only ever needs the network: a TUN device, routes, rules, nftables.
+CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_RAW CAP_NET_BIND_SERVICE
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+
+[Install]
+WantedBy=multi-user.target

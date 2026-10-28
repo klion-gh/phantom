@@ -13,18 +13,6 @@ import (
 // whole day of diagnostics to lay out. "Скопировать" copies the full log.
 const viewerTailBytes = 512 << 10
 
-// logDir keeps the log next to the running executable rather than under a
-// per-user config directory, so it's easy to find without hunting through
-// AppData - in a logs/ folder now that it's hourly segment files rather than
-// one phantom.log.
-func logDir() (string, error) {
-	exePath, err := os.Executable()
-	if err != nil {
-		return "", err
-	}
-	return filepath.Join(filepath.Dir(exePath), "logs"), nil
-}
-
 // initLog redirects the standard `log` package (used here and by every
 // internal/* package) into hourly segment files that keep only the last day
 // (see internal/logfile), mirroring the Android app's FileLog.

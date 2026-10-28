@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE policyconfig PUBLIC "-//freedesktop//DTD PolicyKit Policy Configuration 1.0//EN"
+  "http://www.freedesktop.org/standards/PolicyKit/1/policyconfig.dtd">
+<!-- Gives the pkexec prompt for starting phantomd a readable message. Only
+     used where there is no systemd to run the service (see the window's
+     startDaemon); with systemd the service is already running. -->
+<policyconfig>
+  <vendor>Phantom</vendor>
+  <vendor_url>https://github.com/klion-gh/phantom</vendor_url>
+  <action id="com.phantom.vpn.phantomd">
+    <description>Start the Phantom VPN service</description>
+    <description xml:lang="ru">Запуск службы Phantom VPN</description>
+    <message>Phantom needs administrator rights to start its VPN service</message>
+    <message xml:lang="ru">Phantom нужны права администратора, чтобы запустить службу VPN</message>
+    <icon_name>phantom</icon_name>
+    <defaults>
+      <allow_any>auth_admin</allow_any>
+      <allow_inactive>auth_admin</allow_inactive>
+      <allow_active>auth_admin_keep</allow_active>
+    </defaults>
+    <annotate key="org.freedesktop.policykit.exec.path">/usr/lib/phantom/phantomd</annotate>
+  </action>
+</policyconfig>

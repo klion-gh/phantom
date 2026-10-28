@@ -2,16 +2,12 @@ package main
 
 import (
 	"encoding/json"
-	"io"
-	"log"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
 	"time"
 
-	"phantom/internal/netstack"
-	"phantom/internal/pingcheck"
 	"phantom/internal/routing"
 )
 
@@ -48,11 +44,6 @@ func removeSplitTunnelLeftovers() {
 		os.Remove(filepath.Join(dir, name))
 	}
 }
-
-// engine is the live routing state the running tunnel consults. Shared rather
-// than per-tunnel so the UI can edit it while disconnected and have it apply
-// to whatever connects next.
-var engine = routing.NewEngine()
 
 var (
 	selectorMu sync.Mutex
@@ -146,7 +137,8 @@ func saveAutoConfigs(ids []string) { saveStringList(autoConfigsFileName, ids) }
 
 // --- wiring into a running tunnel ------------------------------------------
 
-// applyRoutingToEngine pushes the persisted settings into the shared engine.
+// applyRoutingToEngine pushes the persisted settings into the routing engine -
+// this process's own on Windows, phantomd's on Linux.
 // Called at startup and after every edit; the tunnel reads the engine per
 // flow, so this takes effect without reconnecting.
 //
@@ -162,13 +154,7 @@ func saveAutoConfigs(ids []string) { saveStringList(autoConfigsFileName, ids) }
 // The returned channel closes once the new list's DNS pre-seeding is done -
 // see applySiteList, which waits on it.
 func applyRoutingToEngine() <-chan struct{} {
-	seeded := engine.SetSites(loadSmartSites())
-	if loadSmartEnabled() && !loadAutoEnabled() {
-		engine.SetMode(routing.ModeSmart)
-	} else {
-		engine.SetMode(routing.ModeAll)
-	}
-	return seeded
+	return applyRoutingPlatform(loadSmartSites(), loadSmartEnabled() && !loadAutoEnabled())
 }
 
 // seedWaitLimit bounds how long applySiteList waits for the new list's
@@ -194,51 +180,6 @@ func applySiteList(a *App, sites []string) {
 	}()
 }
 
-// installRouting hooks the shared engine into a freshly built tunnel.
-// physicalIfIndex is the real interface captured before the tunnel's default
-// route existed - the only way a direct dial escapes the tunnel we just
-// created (see directdial.go).
-func installRouting(inner *netstack.Tunnel, physicalIfIndex uint32, haveIfIndex bool) {
-	// No SetDNSUpstream call here, unlike mobile.go's Android setup - Windows
-	// hands out real DNS servers (see wintun.go's configureInterface), so
-	// there is no placeholder address for it to rewrite. See wintun.go for
-	// why Windows deliberately doesn't use the same placeholder+rewrite trick.
-	if !haveIfIndex {
-		// Without a physical interface to bind to there is no way to send a
-		// flow around the tunnel, so smart mode can't be honoured. Leaving the
-		// hooks off means everything is tunnelled, which is the safe reading.
-		log.Printf("[routing] no physical interface index - smart routing unavailable this session")
-		return
-	}
-	inner.SetRouting(
-		func(network, target string) netstack.RouteDecision {
-			if engine.ShouldTunnel(network, target) {
-				return netstack.RouteTunnel
-			}
-			return netstack.RouteDirect
-		},
-		func(network, target string) (io.ReadWriteCloser, error) {
-			return dialDirect(network, target, physicalIfIndex)
-		},
-	)
-	inner.SetDNSObserver(func(stream io.ReadWriteCloser) io.ReadWriteCloser {
-		return routing.SniffDNS(stream, engine.Domains())
-	})
-	// The engine's own counters ride along on netstack's periodic summary, so
-	// one line says both what flowed and why it went where it did.
-	inner.SetDiagExtra(engine.DiagFields)
-	// Split DNS - see internal/netstack/splitdns.go: in smart mode only
-	// queries for listed names ride the tunnel; the rest go out the physical
-	// interface to whichever resolver Windows asked (1.1.1.1/8.8.8.8, set on
-	// the tunnel adapter), retried through the tunnel if that goes unanswered.
-	inner.SetDNSRouter(func(qname string) netstack.RouteDecision {
-		if engine.TunnelDNSQuery(qname) {
-			return netstack.RouteTunnel
-		}
-		return netstack.RouteDirect
-	})
-}
-
 // --- smart config selection ------------------------------------------------
 
 // syncSelector rebuilds the smart selector from the current settings, starting
@@ -260,7 +201,7 @@ func syncSelector() {
 	if selector == nil {
 		selector = routing.NewSelector(
 			routing.WithProbeTimeout(func(configYAML string) (int64, error) {
-				result, err := pingcheck.PingWith(configYAML, pingOptions())
+				result, err := pingConfig(configYAML)
 				if err != nil {
 					return 0, err
 				}
