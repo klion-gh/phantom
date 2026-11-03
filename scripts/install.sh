@@ -16,6 +16,9 @@
 #                     where something else already owns port 80)? Set both to use it directly
 #                     instead of Phantom's own ACME - prompted if unset and a TTY is available.
 #   PHANTOM_PORT      port the VPN listens on (default 8443)
+#   PHANTOM_VERSION   install this release tag (e.g. v2.3.0-beta.1) instead of the latest
+#                     stable one - for trying a beta server on one machine first
+#   PHANTOM_NO_TUNE=1 leave the kernel's TCP settings alone (see tune_network)
 #   PHANTOM_APP=1     run on behalf of the Phantom apps ("Подключить свой сервер"): never
 #                     prompts, and prints "@@PHANTOM ..." marker lines - steps, an error code
 #                     on failure, and the finished client.yaml between client-begin/client-end -
@@ -30,6 +33,7 @@ INSTALL_DIR=/opt/phantom
 DATA_DIR=/var/lib/phantom
 SERVICE_FILE=/etc/systemd/system/phantom.service
 SERVICE_NAME=phantom
+SYSCTL_FILE=/etc/sysctl.d/99-phantom.conf
 
 log()  { printf '\033[1;34m==>\033[0m %s\n' "$1"; }
 warn() { printf '\033[1;33m!!\033[0m %s\n' "$1" >&2; }
@@ -73,6 +77,52 @@ prompt() {
     fi
 }
 
+# tune_network switches TCP to BBR with the fq qdisc and raises the socket
+# buffer limits, through a file of its own under /etc/sysctl.d.
+#
+# Why: all of a client's traffic crosses a long international path, often with
+# loss, and CUBIC halves its window on every lost packet - on such a path it
+# runs far below the line's capacity. BBR paces by measured bandwidth and RTT
+# instead, which is what large downloads through the tunnel (Telegram media,
+# video) need. The default 208 KB buffer caps one connection at a few MB/s at
+# Russia-to-Europe round trips; 16 MB leaves room for the link.
+#
+# This applies to the whole machine, not only Phantom - normally a gain for
+# anything else on it too. PHANTOM_NO_TUNE=1 skips it; uninstall undoes it.
+tune_network() {
+    [ "${PHANTOM_NO_TUNE:-}" = "1" ] && return 0
+    modprobe tcp_bbr 2>/dev/null || true
+    if ! grep -qw bbr /proc/sys/net/ipv4/tcp_available_congestion_control 2>/dev/null; then
+        warn "this kernel has no BBR - leaving TCP settings as they are"
+        return 0
+    fi
+    cat > "$SYSCTL_FILE" <<'SYSCTL'
+# Written by the Phantom installer, removed by its uninstall.
+net.core.default_qdisc = fq
+net.ipv4.tcp_congestion_control = bbr
+net.core.rmem_max = 16777216
+net.core.wmem_max = 16777216
+net.ipv4.tcp_rmem = 4096 131072 16777216
+net.ipv4.tcp_wmem = 4096 65536 16777216
+net.ipv4.tcp_slow_start_after_idle = 0
+SYSCTL
+    if sysctl -q -p "$SYSCTL_FILE" >/dev/null 2>&1; then
+        log "TCP tuned: BBR, fq, 16 MB socket buffers ($SYSCTL_FILE)."
+    else
+        warn "could not apply $SYSCTL_FILE now - it takes effect after a reboot"
+    fi
+}
+
+untune_network() {
+    [ -f "$SYSCTL_FILE" ] || return 0
+    rm -f "$SYSCTL_FILE"
+    # Back to the stock Debian/Ubuntu choices for the two that matter; the
+    # buffer limits only ever raised a ceiling and return on reboot.
+    sysctl -q -w net.ipv4.tcp_congestion_control=cubic >/dev/null 2>&1 || true
+    sysctl -q -w net.core.default_qdisc=fq_codel >/dev/null 2>&1 || true
+    log "Removed $SYSCTL_FILE and switched TCP back to CUBIC."
+}
+
 do_uninstall() {
     log "Stopping and removing the $SERVICE_NAME service..."
     systemctl stop "$SERVICE_NAME" 2>/dev/null || true
@@ -82,6 +132,7 @@ do_uninstall() {
 
     rm -rf "$INSTALL_DIR"
     log "Removed $INSTALL_DIR (binary, server.yaml, server's private key and PSK)."
+    untune_network
 
     if [ "$PHANTOM_PURGE" = "1" ]; then
         purge=y
@@ -132,7 +183,16 @@ esac
 [ "$PORT" -ne 80 ] || die "port 80 is needed for the certificate - pick another PHANTOM_PORT" bad_port
 
 detect_arch
-BASE_URL="https://github.com/$REPO/releases/latest/download"
+if [ -n "${PHANTOM_VERSION:-}" ]; then
+    case "$PHANTOM_VERSION" in
+        v*) ;;
+        *) die "PHANTOM_VERSION is a release tag like v2.3.0-beta.1, got '$PHANTOM_VERSION'" bad_version ;;
+    esac
+    BASE_URL="https://github.com/$REPO/releases/download/$PHANTOM_VERSION"
+    log "Installing release $PHANTOM_VERSION."
+else
+    BASE_URL="https://github.com/$REPO/releases/latest/download"
+fi
 
 mkdir -p "$INSTALL_DIR" "$DATA_DIR"
 
@@ -191,6 +251,8 @@ curl -fsSL "$BASE_URL/phantom-server-linux-$ARCH" -o "$INSTALL_DIR/phantom-serve
 verify_checksum "$INSTALL_DIR/phantom-server.new" "phantom-server-linux-$ARCH"
 chmod 755 "$INSTALL_DIR/phantom-server.new"
 mv "$INSTALL_DIR/phantom-server.new" "$INSTALL_DIR/phantom-server"
+
+tune_network
 
 if [ "$UPGRADE" = "1" ]; then
     log "Restarting service with the new binary..."
