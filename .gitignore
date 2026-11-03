@@ -1,6 +1,8 @@
 # Real deployed secrets - never commit these. Use configs/*.example.yaml instead.
 configs/server.yaml
 configs/client.yaml
+# Local server inventory (IPs, domains, how to SSH in) - never commit.
+/SERVERS.md
 
 # Android release signing - never commit the actual key/password. Losing this file
 # means future releases can't be installed as an update over existing installs
@@ -35,3 +37,6 @@ Thumbs.db
 # Left behind by the windows/ -> desktop/ rename while the old build was running;
 # safe to delete once nothing runs from it.
 /windows/
+
+# flowlab recordings and reports (tools/flowlab)
+tools/flowlab/out/

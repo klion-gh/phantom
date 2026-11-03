@@ -37,6 +37,12 @@ type TLSClientConfig struct {
 	// lookup falls back to the last address that host was dialed on.
 	Resolver IPLookuper
 
+	// WrapConn, if set, wraps the raw TCP connection before TLS runs over
+	// it. Only tools/flowlab uses it: it records the size and timing of every
+	// read and write - what a DPI box on the path sees of the tunnel. Nil in
+	// every client.
+	WrapConn func(net.Conn) net.Conn
+
 	// rootCAs overrides the system trust store. Tests only (unexported): it
 	// lets them run the real Dial path - fingerprint, handshake pacing, TLS
 	// 1.3, the disguised handshake - against a throwaway certificate.
@@ -143,6 +149,9 @@ func dialAddr(ctx context.Context, cfg *TLSClientConfig, addr string) (net.Conn,
 		if tcpAddr, ok := conn.RemoteAddr().(*net.TCPAddr); ok {
 			rememberGoodIP(host, tcpAddr.IP.String())
 		}
+	}
+	if cfg.WrapConn != nil {
+		conn = cfg.WrapConn(conn)
 	}
 
 	utlsCfg := &utls.Config{
