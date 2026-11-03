@@ -1,6 +1,7 @@
 package transport
 
 import (
+	"bufio"
 	"context"
 	"crypto/tls"
 	"fmt"
@@ -8,9 +9,11 @@ import (
 	"net/http"
 	"os"
 	"sync"
+	"time"
 
 	"golang.org/x/crypto/acme"
 	"golang.org/x/crypto/acme/autocert"
+	"golang.org/x/net/http2"
 
 	"phantom/internal/handshake"
 	"phantom/internal/logx"
@@ -88,20 +91,10 @@ func ListenAndServe(ctx context.Context, cfg *TLSServerConfig, handler func(net.
 		}()
 
 		tlsConfig = certManager.TLSConfig()
-		// autocert's TLSConfig advertises h2 ahead of http/1.1, and Go's server
-		// picks by *server* preference - so every real-browser ClientHello (which
-		// offers h2, http/1.1) negotiated HTTP/2. Nothing here speaks HTTP/2: the
-		// disguised handshake sends an HTTP/1.1 upgrade request and the decoy site
-		// answers in plain HTTP/1.1 text. To a passive observer that's invisible,
-		// but to the one thing this whole design is meant to survive - an active
-		// prober simply opening https://domain/ in a browser or curl - the "real
-		// website" cover story collapsed into an HTTP/2 protocol error. Offering
-		// only http/1.1 keeps the decoy's answer valid for whatever asked.
-		//
 		// acme.ALPNProto stays in the list because autocert.Manager.GetCertificate
 		// answers tls-alpn-01 challenge probes itself (see the acme-tls/1 check in
 		// handleConnection); a client offering only that still gets it.
-		tlsConfig.NextProtos = []string{"http/1.1", acme.ALPNProto}
+		tlsConfig.NextProtos = append(append([]string{}, serverALPN...), acme.ALPNProto)
 	}
 
 	tlsConfig.MinVersion = tls.VersionTLS13
@@ -150,15 +143,23 @@ func newStaticCertConfig(certFile, keyFile string) (*tls.Config, error) {
 	}
 	return &tls.Config{
 		GetCertificate: reloader.getCertificate,
-		// Answer ALPN explicitly rather than leaving it unset. With no NextProtos
-		// Go negotiates nothing at all, and a browser offering h2/http1.1 falls
-		// back to HTTP/1.1 on its own - which happens to work, but "server ignores
-		// ALPN entirely" is not what any real web server on a CA-signed domain
-		// looks like. Only http/1.1 for the same reason as the ACME path above:
-		// it's the one protocol the decoy can actually speak.
-		NextProtos: []string{"http/1.1"},
+		// Answer ALPN explicitly rather than leaving it unset: with no
+		// NextProtos Go negotiates nothing at all, and "server ignores ALPN
+		// entirely" is not what any real web server on a CA-signed domain
+		// looks like.
+		NextProtos: serverALPN,
 	}, nil
 }
+
+// serverALPN is what the server offers, h2 first: a current site with a
+// CA-signed certificate answers a browser in HTTP/2, and one that always
+// settles for http/1.1 although the browser offered h2 stands out - TSPU
+// reportedly compares the start of a connection against an HTTP/2 browsing
+// profile. Browsers and probes that negotiate h2 get the decoy site over
+// HTTP/2 (serveH2). Phantom clients up to 2.2 offer h2 too (the Firefox
+// ClientHello they mimic does) but speak HTTP/1.1 regardless; handleConnection
+// tells them apart by the first bytes and serves them as before.
+var serverALPN = []string{"h2", "http/1.1"}
 
 type certReloader struct {
 	certFile, keyFile string
@@ -234,13 +235,27 @@ func handleConnection(conn net.Conn, cfg *TLSServerConfig, handler func(net.Conn
 		return
 	}
 
+	// h2 negotiated: a browser or prober sends the HTTP/2 preface and gets the
+	// site over HTTP/2. A Phantom client that offered h2 only because the
+	// ClientHello it mimics does sends an HTTP/1.1 request instead, and goes
+	// on below as it always has - with the bytes peeked here put back.
+	var conn2 net.Conn = tlsConn
+	if tlsConn.ConnectionState().NegotiatedProtocol == "h2" {
+		bc := newBufferedConn(tlsConn)
+		if bc.startsWithH2Preface() {
+			serveH2(bc, cfg)
+			return
+		}
+		conn2 = bc
+	}
+
 	// Over its per-IP budget: answer like an ordinary homepage visit without
 	// spending an auth attempt on it (see ratelimit.go). Uses the connection's
 	// remote IP; behind a reverse proxy this would be the proxy's IP, which is
 	// fine - Phantom terminates its own TLS directly, there's no proxy in front.
 	if ip, _, splitErr := net.SplitHostPort(conn.RemoteAddr().String()); splitErr == nil && !cfg.limiter.allow(ip) {
 		metricRateLimited.Add(1)
-		cfg.Decoy.ServeDefault(tlsConn)
+		cfg.Decoy.ServeDefault(conn2)
 		return
 	}
 
@@ -249,7 +264,7 @@ func handleConnection(conn net.Conn, cfg *TLSServerConfig, handler func(net.Conn
 		return state.ExportKeyingMaterial(label, context, length)
 	}
 
-	result, req, err := handshake.ServerHandshake(tlsConn, cfg.PSK, cfg.ServerPriv, cfg.ServerPub, exporter)
+	result, req, err := handshake.ServerHandshake(conn2, cfg.PSK, cfg.ServerPriv, cfg.ServerPub, exporter)
 	if err != nil {
 		// Didn't even parse as HTTP - not a real prober worth a full decoy
 		// response, just close like a real server would for garbage input.
@@ -259,12 +274,45 @@ func handleConnection(conn net.Conn, cfg *TLSServerConfig, handler func(net.Conn
 	}
 	if result == nil {
 		metricDecoyHits.Add(1)
-		cfg.Decoy.Serve(tlsConn, req)
+		cfg.Decoy.Serve(conn2, req)
 		return
 	}
 
 	metricHandshakeOK.Add(1)
 	metricActiveNow.Add(1)
 	defer metricActiveNow.Add(-1)
-	handler(tlsConn, result.Crypto)
+	handler(conn2, result.Crypto)
+}
+
+// serveH2 answers a connection that negotiated h2 and sent the HTTP/2
+// preface: the decoy site over Go's HTTP/2 server, for as long as the client
+// keeps the connection.
+func serveH2(c net.Conn, cfg *TLSServerConfig) {
+	metricDecoyHits.Add(1)
+	srv := &http2.Server{IdleTimeout: 60 * time.Second}
+	srv.ServeConn(c, &http2.ServeConnOpts{Handler: cfg.Decoy})
+}
+
+// bufferedConn is a TLS connection whose first bytes have been peeked: reads
+// come out of the buffer first, so nothing peeked is lost to whoever reads
+// next. It stays a *tls.Conn underneath, so the HTTP/2 server still sees the
+// connection's TLS state.
+type bufferedConn struct {
+	*tls.Conn
+	r *bufio.Reader
+}
+
+func newBufferedConn(c *tls.Conn) *bufferedConn {
+	return &bufferedConn{Conn: c, r: bufio.NewReaderSize(c, 4096)}
+}
+
+func (c *bufferedConn) Read(p []byte) (int, error) { return c.r.Read(p) }
+
+// startsWithH2Preface waits (up to 10s) for the first bytes and reports
+// whether they are the HTTP/2 client preface.
+func (c *bufferedConn) startsWithH2Preface() bool {
+	c.Conn.SetReadDeadline(time.Now().Add(10 * time.Second))
+	defer c.Conn.SetReadDeadline(time.Time{})
+	b, err := c.r.Peek(len(http2.ClientPreface))
+	return err == nil && string(b) == http2.ClientPreface
 }

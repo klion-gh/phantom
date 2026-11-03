@@ -50,6 +50,20 @@ func (d *DecoySite) Serve(w io.Writer, req *http.Request) {
 	d.write(w, body, contentType, status)
 }
 
+// ServeHTTP answers a request that arrived over HTTP/2, through Go's HTTP/2
+// server - a browser or prober that negotiated h2 gets the same site as one
+// that spoke HTTP/1.1. Date is added by the server; no Server header, for the
+// reason given in write.
+func (d *DecoySite) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	body, contentType, status := d.resolve(r.URL.Path)
+	w.Header().Set("Content-Type", contentType)
+	w.Header().Set("Content-Length", fmt.Sprint(len(body)))
+	w.WriteHeader(status)
+	if r.Method != http.MethodHead {
+		w.Write(body)
+	}
+}
+
 func (d *DecoySite) write(w io.Writer, body []byte, contentType string, status int) {
 	// Date is mandatory for an origin server per RFC 9110 §6.6.1, and every real
 	// web server sends it. Omitting it was a free, entirely passive distinguisher
