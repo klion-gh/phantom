@@ -40,7 +40,10 @@ SITES = [
     "https://www.apple.com/", "https://www.amazon.com/", "https://aliexpress.ru/",
 ]
 
-DOWN_URL = "https://speed.cloudflare.com/__down?bytes=30000000"
+# Hetzner's public test file, first 30 MB by range: Cloudflare's speed test
+# answers 429 to an exit address that has downloaded from it a few dozen times.
+DOWN_URL = "https://nbg1-speed.hetzner.com/100MB.bin"
+DOWN_RANGE = "0-29999999"
 UP_URL = "https://speed.cloudflare.com/__up"
 UP_BYTES = 10_000_000
 
@@ -121,7 +124,11 @@ def browse(args, out, site, profile):
 
 
 def bulk(args, out, label, up):
+    """One transfer, or --parallel of them at once through the same proxy -
+    the shape of Telegram fetching a file in parts, which is what spreading
+    streams over two connections is for. Reported as aggregate Mbit/s."""
     proc, port = start_flowlab(args, out, label)
+    n = max(1, args.parallel)
     try:
         cmd = ["curl", "-s", "-o", os.devnull, "-w", "%{size_download} %{size_upload} %{time_total}",
                "--max-time", "120", "-x", f"http://127.0.0.1:{port}"]
@@ -131,19 +138,32 @@ def bulk(args, out, label, up):
                 body.write_bytes(os.urandom(UP_BYTES))
             cmd += ["--data-binary", f"@{body}", UP_URL]
         else:
-            cmd += [DOWN_URL]
-        res = subprocess.run(cmd, capture_output=True, text=True)
+            cmd += ["-r", DOWN_RANGE, DOWN_URL]
+        if args.warm:
+            # A long-lived tunnel already has its connections up when a big
+            # transfer starts; a fresh one doesn't. Warm it so the pool's
+            # second connection exists before the transfers are spread.
+            subprocess.run(["curl", "-s", "-o", os.devnull, "--max-time", "20", "-x",
+                            f"http://127.0.0.1:{port}", "https://www.cloudflare.com/cdn-cgi/trace"])
+            time.sleep(3)
+        start = time.time()
+        procs = [subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True) for _ in range(n)]
+        outs = [p.communicate()[0] for p in procs]
+        wall = time.time() - start
         time.sleep(1.5)
     finally:
         kill_tree(proc)
     try:
-        down, upl, total = res.stdout.split()
-        size = float(upl if up else down)
-        mbit = size * 8 / float(total) / 1e6
-    except ValueError:
+        size = 0.0
+        for o in outs:
+            down, upl, _ = o.split()
+            size += float(upl if up else down)
+        total = wall if n > 1 else float(outs[0].split()[2])
+        mbit = size * 8 / total / 1e6
+    except (ValueError, IndexError):
         size, total, mbit = 0, 0, 0
     rec = {"t": time.time(), "mode": args.mode, "tag": args.tag, "dir": "up" if up else "down",
-           "bytes": size, "seconds": float(total or 0), "mbit": round(mbit, 2)}
+           "parallel": n, "bytes": size, "seconds": float(total or 0), "mbit": round(mbit, 2)}
     with open(OUT / "throughput.jsonl", "a") as f:
         f.write(json.dumps(rec) + "\n")
     print(f"  {label}: {mbit:.1f} Mbit/s", flush=True)
@@ -160,6 +180,8 @@ def main():
     ap.add_argument("--flowlab", default=str(FLOWLAB),
                     help="flowlab binary - a build of the client code under test")
     ap.add_argument("--bulk-only", action="store_true")
+    ap.add_argument("--parallel", type=int, default=1, help="bulk: simultaneous transfers")
+    ap.add_argument("--warm", action="store_true", help="bulk: open the tunnel's connections before transferring")
     ap.add_argument("--bulk-repeats", type=int, default=2)
     args = ap.parse_args()
 

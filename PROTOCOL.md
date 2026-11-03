@@ -118,15 +118,17 @@ phantom/
    (SNI = the operator's real domain). Server presents a genuine CA-signed
    certificate for that domain (ACME/Let's Encrypt) - not a self-signed one.
 3. Disguised handshake (internal/handshake), riding on top of that real TLS
-   session:
-     - Client sends what parses as an ordinary HTTP/1.1 WebSocket-upgrade
-       request. A fresh per-connection X25519 ephemeral keypair's public key
-       and an HMAC proof are base64'd into a Cookie header.
+   session, carried one of two ways depending on ALPN (§5.2b): inside an
+   ordinary HTTP/2 POST when the server negotiated h2 (servers from 2.3), or
+   as an HTTP/1.1 WebSocket upgrade otherwise:
+     - Client sends what parses as an ordinary HTTP request. A fresh
+       per-connection X25519 ephemeral keypair's public key and an HMAC proof
+       are base64'd into a Cookie header.
      - Server validates the proof (requires knowing the PSK and completing a
        real ECDH with its own static key - see §5) and that it's bound to
        *this* TLS connection (via TLS exporter keying material, RFC 5705).
-     - Valid  -> server replies "101 Switching Protocols" (a normal-looking
-       upgrade response) and the connection becomes the tunnel.
+     - Valid  -> server replies "200" (HTTP/2, the stream becomes the tunnel)
+       or "101 Switching Protocols" (HTTP/1.1, the connection becomes it).
      - Invalid/missing/malformed -> the connection is handed to a real decoy
        website (internal/transport/decoy.go) instead of being dropped.
 4. Multiplexer (internal/tunnel) takes over the now-authenticated connection.
@@ -318,6 +320,40 @@ Sec-WebSocket-Accept: <correctly computed per RFC 6455>
 protocol-correct HTTP/1.1 WebSocket-upgrade messages; nothing about their *shape*
 betrays the tunnel.
 
+### 5.2b The HTTP/2 carrier (`internal/transport/h2tunnel.go`, from 2.3)
+
+Shape on the wire was the weakness of §5.2: measured with `tools/flowlab`, the
+282-byte upgrade request and 225-byte 101 answer are the same pair of TLS records at the
+start of every connection, and a classifier separated the tunnel from browser traffic on
+them alone. A browser talking to a current site negotiates h2 and opens with HTTP/2's
+preface and SETTINGS instead.
+
+So the server offers `h2` first in ALPN (§6.2), and when it is negotiated the client
+opens an ordinary HTTP/2 connection (`golang.org/x/net/http2`'s client) and sends the
+handshake as one request:
+
+```
+:method POST   :path /ws (same path pool)   content-type: application/octet-stream
+cookie: session=<…>; csrf=<…>                user-agent: <Firefox, matching the ClientHello>
+```
+
+The server (Go's HTTP/2 server, the same one that serves the decoy) checks it with
+`handshake.VerifyRequest` and answers `200` with `set-cookie: sid=<server ephemeral
+key>`; from then on the request body is the tunnel upstream and the response body
+downstream, each write flushed as DATA frames. Unauthenticated requests - GETs and POSTs
+alike - get the decoy site over HTTP/2.
+
+The handshake itself is shared: `handshake.ClientAuth` (the cookies, then `Finish` on the
+answer) and `handshake.VerifyRequest` serve both carriers, and the §5.2 upgrade is built
+on them byte for byte as before. The multiplexer, frames and keys are unchanged, so the
+wire version stays 2. ALPN picks the carrier:
+
+| Client | Server | Carrier |
+|---|---|---|
+| 2.3+ | 2.3+ (offers h2) | HTTP/2 |
+| 2.3+ | before 2.3 (http/1.1 only) | upgrade (§5.2) |
+| before 2.3 | 2.3+ | upgrade - such a client offers h2 (its Firefox ClientHello does) but sends an HTTP/1.1 request; the server peeks at the first bytes and serves it as before |
+
 ### 5.2a Ephemeral-ephemeral exchange on the wire (mandatory since v2)
 
 The full-forward-secrecy step (§5.1) rides inside the same request/response:
@@ -445,6 +481,17 @@ caller uses — `cmd/client`, `mobile.Start`, `desktop/tunnel_windows.go`'s `Sta
 - Confirmed working against the live Let's Encrypt production API (not just staging):
   `openssl s_client` against a deployed server shows `issuer=C=US, O=Let's Encrypt`.
 - `MinVersion: tls.VersionTLS13`.
+- ALPN offers `h2`, then `http/1.1` (`serverALPN`). A connection that negotiated h2 and
+  sends the HTTP/2 preface is served by Go's HTTP/2 server - the decoy, or the tunnel
+  (§5.2b); one that negotiated h2 but sends an HTTP/1.1 request (a client before 2.3) is
+  served the old way with the peeked bytes put back (`bufferedConn`).
+- `DynamicRecordSizingDisabled`: full 16 KB TLS records from the start. Go otherwise
+  opens every burst after an idle second with small records growing ~1.2 KB a step, so
+  each answer started with the same 2389/3575/4761-byte records - a pattern `flowlab`
+  picked out at once; nginx and CDNs send 16 KB records.
+- Stopping: the listener is closed when the context ends, so SIGTERM stops the server
+  at once (it used to wait for the next client, and `systemctl restart` sat out the
+  90-second stop timeout).
 - Connections that negotiate the ALPN protocol `acme-tls/1` (an artifact of
   `autocert.Manager.TLSConfig()` always enabling ALPN-01 capability regardless of which
   challenge type is actually used) are recognized and left alone — `autocert` answers
@@ -506,7 +553,8 @@ psk: "<64 hex chars>"                 # required - shared secret, one HKDF input
 server_public_key: "<64 hex chars>"   # required - server's static X25519 public key
 listen: "127.0.0.1:1080"              # default; desktop SOCKS5 (cmd/client only)
 listen_http: "127.0.0.1:1081"         # default; desktop HTTP CONNECT (cmd/client only)
-pool_size: 4                          # default; parallel pooled connections
+pool_size: 4                          # default; cap on pooled connections. Two carry streams (ConnPool.Pick:
+                                      # each new stream goes to the less loaded one); 1 keeps a single connection
 log_level: "info"                     # not actually read by any logger; plain `log` package used unconditionally
 country: "Germany"                    # optional cosmetic location label for the GUI tile (operator-set, not looked up)
 country_code: "DE"                    # optional two-letter ISO code; rendered as a flag on both apps
@@ -1390,6 +1438,25 @@ out to be platform-neutral.
 
 ## 13. Known gaps / residual risks
 
+0. **The tunnel is still told apart from a browser by its traffic shape.** Measured with
+   `tools/flowlab` (a local proxy that records every TLS record's type, length and
+   arrival time - what a DPI box reads off the wire - for a headless Edge browsing the same
+   20 sites directly and through Phantom; `analyze.py` trains a gradient-boosting
+   classifier on the start of each connection, 5-second windows and whole connections).
+   On 3 November 2026 the start of a connection separated the two with ROC AUC 1.0.
+   Removed since, each confirmed by a re-run: the fixed 282/225-byte upgrade exchange
+   (§5.2b - the tunnel now opens like any HTTP/2 connection), Go's growing record
+   sizes on the server (§6.2), one record per frame (`writeLoop` now sends queued
+   frames in one write). With all three the start of a connection still separates at
+   AUC 0.99. What carries it now: the burst of padded upstream records as streams open
+   (the inner TLS handshakes of the sites visited - TLS-in-TLS, the next thing to
+   shape), a pause after the handshake that is partly the test's own doing (the tunnel
+   is up before the browser starts), and the volume of one connection carrying a whole
+   device.
+   The same run measured throughput: with BBR on the server (`scripts/install.sh`),
+   one download through the tunnel went from 45 to ~150-175 Mbit/s and four parallel
+   ones reached ~260-290 Mbit/s, the line's own ceiling; a second connection
+   (`ConnPool.Pick`) added nothing measurable on that path.
 1. **Single VPS IP is a single point of failure — partially mitigated.** The client
    config now accepts a `servers:` failover list (§8): multiple address:port endpoints,
    all serving the same domain/cert/psk, tried with last-good memory
