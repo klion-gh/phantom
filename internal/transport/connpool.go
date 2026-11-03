@@ -24,12 +24,30 @@ var connSeq atomic.Int64
 // with the DNS timeouts a stall causes - a resolver gives up after ~5s.
 const stallAfter = 8 * time.Second
 
+// activeConns is how many connections the pool keeps carrying streams, so a
+// big transfer isn't held to one TCP connection's congestion window. Every
+// stream used to share a single connection: on a lossy international path
+// one loss stalled all of them at once, and a per-connection throttle capped
+// the whole tunnel. Two, not more: an ordinary site is one or two long-lived
+// connections, and every extra one is another handshake on the wire. The
+// second is opened only once the first is up, and the handshake gate
+// (waitHandshakeTurn) keeps the two at least half a second apart.
+const activeConns = 2
+
+// growRetry is how long the pool waits after a failed second dial before
+// trying again: one connection still works, and a server that refused the
+// second shouldn't be asked again on every new stream.
+const growRetry = 30 * time.Second
+
 type ConnPool struct {
 	conns    []*poolConn
 	mu       sync.Mutex
 	dialFunc func(ctx context.Context) (net.Conn, *protocol.SessionCrypto, error)
 	maxConns int
 	closed   int32
+
+	growing      bool      // a background dial for another active connection is in flight
+	growFailedAt time.Time // when the last one failed - see growRetry
 
 	// Cancelled by Close, so a replacement dial still in flight when the
 	// pool shuts down is abandoned rather than finished - and Close, which
@@ -43,6 +61,7 @@ type poolConn struct {
 	crypto  *protocol.SessionCrypto
 	mux     *tunnel.Multiplexer
 	healthy bool
+	retired bool // closed on purpose as surplus - see retire
 	mu      sync.Mutex
 	id      int64
 }
@@ -66,9 +85,9 @@ func (p *ConnPool) Get(ctx context.Context) (*tunnel.Multiplexer, error) {
 		return nil, ErrPoolClosed
 	}
 
-	// A single healthy connection carries every stream (the multiplexer is built
-	// for exactly that), so steady state is one conn reused here; the rest of the
-	// pool only ever fills in transiently while a dead one is being replaced.
+	// Any healthy connection will do here: Get is what a session is built on
+	// and what refreshers call when theirs died. Spreading streams over the
+	// connections is Pick's job.
 	for _, pc := range p.conns {
 		pc.mu.Lock()
 		healthy := pc.healthy
@@ -94,6 +113,93 @@ func (p *ConnPool) Get(ctx context.Context) (*tunnel.Multiplexer, error) {
 	}
 	p.conns = append(p.conns, pc)
 	return pc.mux, nil
+}
+
+// Pick returns the healthy connection carrying the fewest streams, for the
+// next stream to go on, or nil if there is none (the caller falls back to the
+// connection it has, and Get redials). It never dials itself, so opening a
+// stream never waits on a handshake; instead, while fewer than activeConns are
+// up, it starts one more in the background.
+func (p *ConnPool) Pick() *tunnel.Multiplexer {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if atomic.LoadInt32(&p.closed) == 1 {
+		return nil
+	}
+	var best *poolConn
+	bestStreams, healthy := 0, 0
+	for _, pc := range p.conns {
+		if !pc.isHealthy() {
+			continue
+		}
+		healthy++
+		if n := pc.mux.NumStreams(); best == nil || n < bestStreams {
+			best, bestStreams = pc, n
+		}
+	}
+	p.growLocked(healthy)
+	if best == nil {
+		return nil
+	}
+	return best.mux
+}
+
+func (p *ConnPool) wantConns() int {
+	if p.maxConns < activeConns {
+		return p.maxConns
+	}
+	return activeConns
+}
+
+// growLocked starts a background dial for one more active connection when
+// one is missing. Only from a working pool (healthy > 0): with nothing up,
+// Get's own dial comes first. Caller holds p.mu.
+func (p *ConnPool) growLocked(healthy int) {
+	if healthy == 0 || healthy >= p.wantConns() || p.growing ||
+		len(p.conns) >= p.maxConns || time.Since(p.growFailedAt) < growRetry {
+		return
+	}
+	p.growing = true
+	go func() {
+		ctx, cancel := context.WithTimeout(p.life, 15*time.Second)
+		defer cancel()
+		pc, err := p.newConn(ctx)
+
+		p.mu.Lock()
+		defer p.mu.Unlock()
+		p.growing = false
+		if err != nil {
+			p.growFailedAt = time.Now()
+			return
+		}
+		live := 0
+		for _, c := range p.conns {
+			if c.isHealthy() {
+				live++
+			}
+		}
+		// A rotation may have filled the gap while this was dialing.
+		if atomic.LoadInt32(&p.closed) == 1 || live >= p.wantConns() {
+			pc.retire()
+			return
+		}
+		p.conns = append(p.conns, pc)
+	}()
+}
+
+func (pc *poolConn) isHealthy() bool {
+	pc.mu.Lock()
+	defer pc.mu.Unlock()
+	return pc.healthy
+}
+
+// retire closes a connection the pool decided not to keep. Its death must
+// not be mistaken for a lost connection that needs replacing.
+func (pc *poolConn) retire() {
+	pc.mu.Lock()
+	pc.retired = true
+	pc.mu.Unlock()
+	pc.mux.Close()
 }
 
 func (p *ConnPool) newConn(ctx context.Context) (*poolConn, error) {
@@ -185,7 +291,11 @@ func (p *ConnPool) monitorConn(pc *poolConn) {
 		"err", errOrClosed(pc.mux.Err()))
 	pc.mu.Lock()
 	pc.healthy = false
+	retired := pc.retired
 	pc.mu.Unlock()
+	if retired {
+		return
+	}
 	p.rotateConn(pc)
 }
 

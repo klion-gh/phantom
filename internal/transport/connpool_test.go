@@ -91,3 +91,121 @@ func TestNoConnectionOutlivesAClosedPool(t *testing.T) {
 		t.Fatalf("the connection dialed after Close was left open: %v", err)
 	}
 }
+
+// pipeDialer returns a dial function whose every call yields a fresh working
+// connection (the far end just drains), and a counter of dials made.
+func pipeDialer(t *testing.T) (func(context.Context) (net.Conn, *protocol.SessionCrypto, error), *atomic.Int32) {
+	crypto := testCrypto(t)
+	var dials atomic.Int32
+	return func(ctx context.Context) (net.Conn, *protocol.SessionCrypto, error) {
+		dials.Add(1)
+		c1, c2 := net.Pipe()
+		go io.Copy(io.Discard, c2)
+		return c1, crypto, nil
+	}, &dials
+}
+
+func healthyConns(p *ConnPool) int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	n := 0
+	for _, pc := range p.conns {
+		if pc.isHealthy() {
+			n++
+		}
+	}
+	return n
+}
+
+func waitFor(t *testing.T, what string, cond func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(3 * time.Second)
+	for !cond() {
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out waiting for %s", what)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+// Once the first connection is up, picking a connection for a stream brings
+// up a second one in the background - and never a third.
+func TestPickGrowsToTwoConnections(t *testing.T) {
+	dial, dials := pipeDialer(t)
+	pool := NewConnPool(4, dial)
+	defer pool.Close()
+	if _, err := pool.Get(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if pool.Pick() == nil {
+		t.Fatal("Pick found no connection on a working pool")
+	}
+	waitFor(t, "a second connection", func() bool { return healthyConns(pool) == 2 })
+	for i := 0; i < 20; i++ {
+		pool.Pick()
+	}
+	time.Sleep(50 * time.Millisecond)
+	if n := healthyConns(pool); n != 2 {
+		t.Fatalf("pool holds %d connections, want 2", n)
+	}
+	if n := dials.Load(); n != 2 {
+		t.Fatalf("%d dials, want 2", n)
+	}
+}
+
+// A pool capped at one connection stays at one: pool_size: 1 still means it.
+func TestPickRespectsAPoolOfOne(t *testing.T) {
+	dial, dials := pipeDialer(t)
+	pool := NewConnPool(1, dial)
+	defer pool.Close()
+	if _, err := pool.Get(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 5; i++ {
+		pool.Pick()
+	}
+	time.Sleep(50 * time.Millisecond)
+	if n := dials.Load(); n != 1 {
+		t.Fatalf("%d dials on a pool of one, want 1", n)
+	}
+}
+
+// New streams go to whichever connection carries fewer.
+func TestPickBalancesStreams(t *testing.T) {
+	dial, _ := pipeDialer(t)
+	pool := NewConnPool(4, dial)
+	defer pool.Close()
+	first, err := pool.Get(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	pool.Pick()
+	waitFor(t, "a second connection", func() bool { return healthyConns(pool) == 2 })
+
+	// Load the first connection with streams; the next pick must be the other.
+	for i := 0; i < 3; i++ {
+		if _, err := first.Open("example.org:443"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := pool.Pick(); got == first {
+		t.Fatal("Pick chose the busier connection")
+	}
+}
+
+// A surplus connection the pool closes on purpose is not "lost": closing it
+// must not trigger a replacement dial.
+func TestRetiredConnectionIsNotReplaced(t *testing.T) {
+	dial, dials := pipeDialer(t)
+	pool := NewConnPool(4, dial)
+	defer pool.Close()
+	pc, err := pool.newConn(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	pc.retire()
+	time.Sleep(100 * time.Millisecond)
+	if n := dials.Load(); n != 1 {
+		t.Fatalf("%d dials after retiring a connection, want 1 (no replacement)", n)
+	}
+}

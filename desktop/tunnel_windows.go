@@ -278,7 +278,7 @@ func StartWindows(configYAML string, onNetworkChanged func()) (*WinTunnel, error
 	go pumpTunToChannel(tunDev, linkEP)
 	go pumpChannelToTun(linkEP, tunDev)
 
-	session := tunnel.NewSessionFromMux(mux)
+	session := tunnel.NewSessionFromPool(mux, pool.Pick)
 	inner, err := netstack.New(session, linkEP, tunMTU)
 	if err != nil {
 		session.Close()
@@ -300,7 +300,7 @@ func StartWindows(configYAML string, onNetworkChanged func()) (*WinTunnel, error
 		if err != nil {
 			return nil, err
 		}
-		return tunnel.NewSessionFromMux(freshMux), nil
+		return tunnel.NewSessionFromPool(freshMux, pool.Pick), nil
 	})
 	applyRoutingToEngine()
 	installRouting(inner, physicalIfIndex, physicalIfErr == nil)

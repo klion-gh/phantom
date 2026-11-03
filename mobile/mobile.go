@@ -229,7 +229,7 @@ func Start(configYAML string, tunFD int, mtu int, protector Protector) (*Tunnel,
 		return nil, fmt.Errorf("link endpoint: %w", err)
 	}
 
-	session := tunnel.NewSessionFromMux(mux)
+	session := tunnel.NewSessionFromPool(mux, pool.Pick)
 	inner, err := netstack.New(session, linkEP, mtu)
 	if err != nil {
 		session.Close()
@@ -250,7 +250,7 @@ func Start(configYAML string, tunFD int, mtu int, protector Protector) (*Tunnel,
 		if err != nil {
 			return nil, err
 		}
-		return tunnel.NewSessionFromMux(freshMux), nil
+		return tunnel.NewSessionFromPool(freshMux, pool.Pick), nil
 	})
 
 	// Routing starts in "carry everything" mode - the tunnel behaves exactly

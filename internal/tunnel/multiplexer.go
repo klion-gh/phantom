@@ -44,6 +44,14 @@ type Activity struct {
 	BytesRx, BytesTx        int64
 }
 
+// NumStreams is how many streams are open on this connection - what a pool
+// spreading new streams over several connections balances on.
+func (m *Multiplexer) NumStreams() int {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return len(m.streams)
+}
+
 // Activity reports the connection's traffic timestamps and totals. The one
 // question it exists to answer: has the server gone silent while we're still
 // sending - a connection that looks open but has stopped delivering anything,

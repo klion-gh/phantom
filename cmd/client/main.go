@@ -63,7 +63,7 @@ func main() {
 		log.Fatalf("Failed to get connection: %v", err)
 	}
 
-	session := tunnel.NewSessionFromMux(mux)
+	session := tunnel.NewSessionFromPool(mux, pool.Pick)
 
 	httpAddr := cfg.ListenHTTP
 	if httpAddr == "" {
@@ -87,7 +87,7 @@ func main() {
 		if err != nil {
 			return nil, err
 		}
-		return tunnel.NewSessionFromMux(freshMux), nil
+		return tunnel.NewSessionFromPool(freshMux, pool.Pick), nil
 	}
 
 	httpProxy := proxy.NewHTTPProxyServer(httpAddr, session)
