@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"crypto/tls"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -107,15 +108,25 @@ func ListenAndServe(ctx context.Context, cfg *TLSServerConfig, handler func(net.
 
 	logx.Infof("[server] listening on %s (domain=%s)", cfg.ListenAddr, cfg.Domain)
 
-	for {
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		default:
-		}
+	// Accept blocks until the next client, so checking ctx between accepts
+	// let a stop wait for someone to connect: every `systemctl restart` sat
+	// out systemd's 90s stop timeout and ended in SIGKILL, leaving the server
+	// down for a minute and a half on each update. Closing the listener when
+	// ctx ends wakes Accept at once.
+	go func() {
+		<-ctx.Done()
+		listener.Close()
+	}()
 
+	for {
 		conn, err := listener.Accept()
 		if err != nil {
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			if errors.Is(err, net.ErrClosed) {
+				return err
+			}
 			logx.Warnf("[server] accept error: %v", err)
 			continue
 		}
