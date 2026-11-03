@@ -252,15 +252,16 @@ func handleConnection(conn net.Conn, cfg *TLSServerConfig, handler func(net.Conn
 		return
 	}
 
-	// h2 negotiated: a browser or prober sends the HTTP/2 preface and gets the
-	// site over HTTP/2. A Phantom client that offered h2 only because the
-	// ClientHello it mimics does sends an HTTP/1.1 request instead, and goes
-	// on below as it always has - with the bytes peeked here put back.
+	// h2 negotiated: whatever sends the HTTP/2 preface - a browser, a prober,
+	// a Phantom client from 2.3 on - is served over HTTP/2 (h2tunnel.go). A
+	// Phantom client up to 2.2 offered h2 only because the ClientHello it
+	// mimics does, and sends an HTTP/1.1 upgrade instead; it goes on below as
+	// it always has, with the bytes peeked here put back.
 	var conn2 net.Conn = tlsConn
 	if tlsConn.ConnectionState().NegotiatedProtocol == "h2" {
 		bc := newBufferedConn(tlsConn)
 		if bc.startsWithH2Preface() {
-			serveH2(bc, cfg)
+			serveH2(bc, tlsConn, cfg, handler)
 			return
 		}
 		conn2 = bc
@@ -299,15 +300,6 @@ func handleConnection(conn net.Conn, cfg *TLSServerConfig, handler func(net.Conn
 	metricActiveNow.Add(1)
 	defer metricActiveNow.Add(-1)
 	handler(conn2, result.Crypto)
-}
-
-// serveH2 answers a connection that negotiated h2 and sent the HTTP/2
-// preface: the decoy site over Go's HTTP/2 server, for as long as the client
-// keeps the connection.
-func serveH2(c net.Conn, cfg *TLSServerConfig) {
-	metricDecoyHits.Add(1)
-	srv := &http2.Server{IdleTimeout: 60 * time.Second}
-	srv.ServeConn(c, &http2.ServeConnOpts{Handler: cfg.Decoy})
 }
 
 // bufferedConn is a TLS connection whose first bytes have been peeked: reads

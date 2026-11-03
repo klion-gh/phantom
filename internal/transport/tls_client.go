@@ -217,7 +217,16 @@ func dialAddr(ctx context.Context, cfg *TLSClientConfig, addr string) (net.Conn,
 		return state.ExportKeyingMaterial(label, context, length)
 	}
 
-	crypto, err := handshake.ClientHandshake(uconn, cfg.Domain, cfg.PSK, cfg.ServerPub, exporter)
+	// The carrier follows ALPN: a server offering h2 (2.3 on) gets the
+	// handshake and the tunnel inside an HTTP/2 stream (h2tunnel.go), one
+	// offering only http/1.1 the WebSocket upgrade it has always understood.
+	var tunnelConn net.Conn = uconn
+	var crypto *protocol.SessionCrypto
+	if uconn.ConnectionState().NegotiatedProtocol == "h2" {
+		tunnelConn, crypto, err = clientH2(uconn, cfg.Domain, cfg.PSK, cfg.ServerPub, exporter)
+	} else {
+		crypto, err = handshake.ClientHandshake(uconn, cfg.Domain, cfg.PSK, cfg.ServerPub, exporter)
+	}
 	if err != nil {
 		uconn.Close()
 		return nil, nil, fmt.Errorf("handshake: %w", err)
@@ -227,9 +236,9 @@ func dialAddr(ctx context.Context, cfg *TLSClientConfig, addr string) (net.Conn,
 	// read/write timing (see internal/tunnel), and leaving this one in place
 	// would tear the connection down mid-session the moment it's reached.
 	if err := uconn.SetDeadline(time.Time{}); err != nil {
-		uconn.Close()
+		tunnelConn.Close()
 		return nil, nil, fmt.Errorf("clear handshake deadline: %w", err)
 	}
 
-	return uconn, crypto, nil
+	return tunnelConn, crypto, nil
 }
