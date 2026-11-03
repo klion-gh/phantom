@@ -99,6 +99,12 @@ func ListenAndServe(ctx context.Context, cfg *TLSServerConfig, handler func(net.
 	}
 
 	tlsConfig.MinVersion = tls.VersionTLS13
+	// Go starts each burst after an idle second with small records and grows
+	// them (about 1.2 KB a step) - so every answer the server sent opened with
+	// the same 2389, 3575, 4761-byte records, in every connection. flowlab
+	// picked that out at once. The web servers a browser mostly talks to
+	// (nginx, CDNs) send full 16 KB records from the start; so does this now.
+	tlsConfig.DynamicRecordSizingDisabled = true
 
 	listener, err := tls.Listen("tcp", cfg.ListenAddr, tlsConfig)
 	if err != nil {
