@@ -93,6 +93,7 @@
 :root {
     --danger: #FF5C7A;
     --success: #4ADE80;
+    --warning: #FBBF24;
     --brand-gradient: linear-gradient(135deg, var(--primary), var(--accent));
     /* Depth is layered surfaces + a 1px outline, not drop-shadow - the one
        exception is a soft colour glow around an active/accent element, which
@@ -374,25 +375,33 @@ html, body {
     margin-top: 6px;
 }
 
-/* The ping label is the button that takes a ping - there is no automatic
-   one. It keeps the look of the text it replaced, with a dotted underline
-   and an accent hover so it reads as clickable without becoming a second
-   button competing with the toggle. */
+/* The ping is a pill you click - there is no automatic one. Neutral until a
+   result is in, then tinted by it (pingTone in main.js): green, amber, or red
+   for slow or no answer. Same pill as the Android tile. */
 .ping-btn {
-    background: none;
-    border: none;
-    padding: 2px 0;
-    margin: -2px 0;
+    --tone: var(--text-secondary);
+    background: var(--surface-high);
+    border: 1px solid var(--surface-outline);
+    padding: 2px 9px;
     font: inherit;
-    color: var(--text-muted);
+    font-weight: 500;
+    color: var(--tone);
     cursor: pointer;
-    text-decoration: underline dotted;
-    text-underline-offset: 3px;
-    border-radius: 4px;
+    border-radius: 999px;
+    line-height: 1.5;
+}
+
+.ping-btn.tone-good { --tone: var(--success); }
+.ping-btn.tone-slow { --tone: var(--warning); }
+.ping-btn.tone-bad  { --tone: var(--danger); }
+
+.ping-btn[class*="tone-"] {
+    background: color-mix(in srgb, var(--tone) 16%, transparent);
+    border-color: color-mix(in srgb, var(--tone) 45%, transparent);
 }
 
 .ping-btn:hover:not(:disabled) {
-    color: var(--accent);
+    filter: brightness(1.15);
 }
 
 .ping-btn:focus-visible {
@@ -402,7 +411,7 @@ html, body {
 
 .ping-btn:disabled {
     cursor: progress;
-    text-decoration: none;
+    color: var(--text-muted);
 }
 
 /* .fi (flag-icons) sizes itself off font-size (1.333em wide x 1em tall) -

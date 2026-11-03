@@ -40,7 +40,6 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
-import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -58,6 +57,25 @@ data class PingInfo(
     val latencyMs: Long? = null,
     val failed: Boolean = false,
 )
+
+/**
+ * The colour a ping result is shown in, or null while there is none (not
+ * checked yet, or a check running). What it measures is a full handshake -
+ * TCP, TLS and the auth exchange - so a healthy server reads 80-250 ms.
+ */
+fun pingTone(info: PingInfo?, checking: Boolean): Color? {
+    if (checking) return null
+    if (info?.failed == true) return Danger
+    val ms = info?.latencyMs ?: return null
+    return when {
+        ms <= PING_GOOD_MS -> Success
+        ms <= PING_SLOW_MS -> Warning
+        else -> Danger
+    }
+}
+
+const val PING_GOOD_MS = 250L
+const val PING_SLOW_MS = 600L
 
 /** The label every ping readout shares - tile and routing list alike. */
 fun pingLabel(info: PingInfo?, checking: Boolean): String = when {
@@ -182,23 +200,29 @@ fun ConfigInfoCard(
                     overflow = TextOverflow.Ellipsis,
                 )
                 Spacer(modifier = Modifier.height(2.dp))
-                // The ping label is the only way to take a ping - there is no
-                // automatic one. Underlined dotted-style and given a real touch
-                // target (the padding) so it reads and works as a button.
+                // The ping is a pill you tap - there is no automatic ping. It is
+                // neutral until a result is in, then takes the result's colour
+                // (pingTone): green, amber, or red for slow or no answer.
+                Spacer(modifier = Modifier.height(2.dp))
+                val tone = pingTone(info, checking)
+                val pillShape = RoundedCornerShape(50)
                 Text(
                     text = pingLabel(info, checking),
-                    color = if (checking) TextMuted else TextSecondary,
-                    fontSize = 13.sp,
-                    textDecoration = if (checking) null else TextDecoration.Underline,
+                    color = tone ?: if (checking) TextMuted else TextSecondary,
+                    fontSize = 12.5.sp,
+                    fontWeight = FontWeight.Medium,
                     modifier = Modifier
-                        .clip(RoundedCornerShape(6.dp))
+                        .clip(pillShape)
+                        .background((tone ?: SurfaceHigh).copy(alpha = if (tone != null) 0.16f else 1f))
+                        .border(1.dp, (tone ?: SurfaceOutline).copy(alpha = if (tone != null) 0.45f else 1f), pillShape)
                         .clickable(
                             enabled = !checking,
                             onClickLabel = I18n.t("check_ping"),
                             role = Role.Button,
                         ) { scope.launch { PingStore.check(config) } }
-                        .padding(vertical = 4.dp),
+                        .padding(horizontal = 10.dp, vertical = 3.dp),
                 )
+                Spacer(modifier = Modifier.height(2.dp))
                 val countryLabel = config.country ?: config.countryCode
                 if (!countryLabel.isNullOrBlank()) {
                     Spacer(modifier = Modifier.height(4.dp))

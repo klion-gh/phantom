@@ -617,6 +617,9 @@ private fun PhantomApp(
  * page 2 while it is on screen and [appInForeground] is true, via ResourceCard's
  * pingEnabled parameter.
  */
+/** Side margin of the main screen's content - see MainScreen. */
+private val screenGutter = 16.dp
+
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun MainScreen(
@@ -664,10 +667,16 @@ private fun MainScreen(
     // edges instead of covering everything behind the dialog like ConfigDialog
     // (whose blur comes in via the modifier parameter, ahead of fillMaxSize)
     // already did correctly.
-    Column(modifier = modifier.blur(addResourceBlur).fillMaxSize().padding(horizontal = 16.dp, vertical = 24.dp)) {
+    // No side padding on the screen itself: the pager below would clip its
+    // pages to the padded width, leaving 16dp strips at both edges where
+    // nothing could draw - a tile lifted for dragging (scaled up) was cut off
+    // in them, and so was the neighbouring page mid-swipe. The 16dp is now
+    // applied by each part instead: the header and nav bar pad themselves, and
+    // the pager insets its pages (contentPadding) while drawing edge to edge.
+    Column(modifier = modifier.blur(addResourceBlur).fillMaxSize().padding(vertical = 24.dp)) {
         Row(
             verticalAlignment = Alignment.CenterVertically,
-            modifier = Modifier.fillMaxWidth(),
+            modifier = Modifier.fillMaxWidth().padding(horizontal = screenGutter),
         ) {
             // The logo sits on its own radial glow rather than a plate/tile
             // background - the glow *is* the backing (see style.css's
@@ -733,6 +742,7 @@ private fun MainScreen(
         if (updateProgress != null) {
             Box(
                 modifier = Modifier
+                    .padding(horizontal = screenGutter)
                     .fillMaxWidth()
                     .padding(top = 8.dp)
                     .height(3.dp)
@@ -752,12 +762,13 @@ private fun MainScreen(
 
         HorizontalPager(
             state = pagerState,
-            modifier = Modifier.weight(1f),
+            modifier = Modifier.weight(1f).fillMaxWidth(),
+            // Pages sit inset by the gutter but the pager spans the screen, so
+            // nothing on a page is clipped short of the screen edge.
+            contentPadding = PaddingValues(horizontal = screenGutter),
             // Default pageSpacing is 0 - with no gap, the outgoing and incoming
-            // pages' tiles sit flush against each other mid-swipe (each page's
-            // own content runs edge-to-edge, so nothing but the shared outer
-            // padding separated them). This gives the transition the same
-            // breathing room the pages already have at rest.
+            // pages' tiles sit flush against each other mid-swipe. Kept wider
+            // than the gutter so the neighbouring page never peeks in at rest.
             pageSpacing = 24.dp,
         ) { page ->
             when (page) {
@@ -800,6 +811,7 @@ private fun MainScreen(
         BottomNavBar(
             currentPage = pagerState.currentPage,
             onSelect = { page -> coroutineScope.launch { pagerState.animateScrollToPage(page) } },
+            modifier = Modifier.padding(horizontal = screenGutter),
         )
     }
 
@@ -828,9 +840,10 @@ private fun MainScreen(
 private fun BottomNavBar(
     currentPage: Int,
     onSelect: (Int) -> Unit,
+    modifier: Modifier = Modifier,
 ) {
     Tile(
-        modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+        modifier = modifier.fillMaxWidth().padding(top = 8.dp),
         color = Surface,
         shape = RoundedCornerShape(18.dp),
         borderColor = SurfaceOutline,

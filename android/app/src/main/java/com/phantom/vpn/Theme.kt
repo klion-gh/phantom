@@ -232,6 +232,7 @@ val Backdrop: List<Color> get() = Appearance.palette.backdrop
 // theme stops reading as an error/success.
 val Danger = Color(0xFFFF5C7A)
 val Success = Color(0xFF4ADE80)
+val Warning = Color(0xFFFBBF24)
 
 /** [Primary] -> [Accent], 135deg - the "this is on" outline/glow. */
 val BrandGradient: List<Color> get() = listOf(Primary, Accent)

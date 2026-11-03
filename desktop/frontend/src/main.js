@@ -210,6 +210,19 @@ async function pingNow(config) {
   updateRoutingPing(config.id);
 }
 
+// What a ping result is shown as: a full handshake (TCP, TLS, the auth
+// exchange), so a healthy server reads 80-250 ms. '' while there is none.
+const PING_GOOD_MS = 250;
+const PING_SLOW_MS = 600;
+function pingTone(id) {
+  if (pingsInFlight.has(id)) return '';
+  const info = pingData.get(id) || {};
+  if (info.failed) return 'bad';
+  if (info.latencyMs == null) return '';
+  if (info.latencyMs <= PING_GOOD_MS) return 'good';
+  return info.latencyMs <= PING_SLOW_MS ? 'slow' : 'bad';
+}
+
 // The Маршрутизация list shows exactly what the config tile shows, from the
 // same measurement (pingData) - not a second, separately-timed check that
 // could disagree with it.
@@ -235,6 +248,9 @@ function updateTileMeta(id) {
   const pingBtn = card.querySelector('.ping-btn');
   pingBtn.textContent = pingLabel(id);
   pingBtn.disabled = pingsInFlight.has(id);
+  pingBtn.classList.remove('tone-good', 'tone-slow', 'tone-bad');
+  const tone = pingTone(id);
+  if (tone) pingBtn.classList.add(`tone-${tone}`);
 
   // Country label comes from the operator-provided country/country_code in
   // the config, or a LookupCountry resolution keyed off the resolved IP (see
