@@ -122,67 +122,47 @@ func TestFrameDecodeTooShort(t *testing.T) {
 }
 
 func TestPadUnpadPlaintext(t *testing.T) {
-	cases := [][]byte{
-		[]byte(""),
-		[]byte("hi"),
-		make([]byte, 300),
-		make([]byte, 4096),
-		make([]byte, 32*1024), // io.Copy's default buffer size - past the largest bucket
+	cases := []struct {
+		payload []byte
+		pad     int
+	}{
+		{[]byte(""), 0},
+		{[]byte("hi"), 5},
+		{make([]byte, 300), 900},
+		{make([]byte, 4096), 0},
+		{make([]byte, 32*1024), 31},
+		{[]byte("negative pad means none"), -7},
 	}
-
-	for _, payload := range cases {
-		padded, err := PadPlaintext(payload)
+	for _, tc := range cases {
+		padded, err := PadPlaintext(tc.payload, tc.pad)
 		if err != nil {
 			t.Fatalf("PadPlaintext() error = %v", err)
 		}
-
-		// wire size must not reveal the real size: padding lifts it to at least
-		// the bucket floor (hiding magnitude) plus up to maxPadJitter random
-		// extra (breaking the discrete-bucket fingerprint), and never less than
-		// the payload it has to carry.
-		total := lengthPrefixSize + len(payload)
-		floor := chooseBucket(total)
-		if len(padded) < floor {
-			t.Errorf("padded size %d below the bucket floor %d (magnitude not hidden)", len(padded), floor)
+		pad := tc.pad
+		if pad < 0 {
+			pad = 0
 		}
-		if len(padded) > floor+maxPadJitter {
-			t.Errorf("padded size %d exceeds floor+jitter %d (unbounded overhead)", len(padded), floor+maxPadJitter)
+		if want := lengthPrefixSize + len(tc.payload) + pad; len(padded) != want {
+			t.Errorf("payload %d pad %d: padded to %d, want %d", len(tc.payload), tc.pad, len(padded), want)
 		}
-
 		unpadded, err := UnpadPlaintext(padded)
 		if err != nil {
 			t.Fatalf("UnpadPlaintext() error = %v", err)
 		}
-		if !bytes.Equal(unpadded, payload) {
-			t.Errorf("round trip mismatch: got %d bytes, want %d bytes", len(unpadded), len(payload))
+		if !bytes.Equal(unpadded, tc.payload) {
+			t.Errorf("round trip mismatch: got %d bytes, want %d bytes", len(unpadded), len(tc.payload))
 		}
 	}
 }
 
-func TestPadPlaintextRandomizesWithinBucketBand(t *testing.T) {
-	// A 1-byte and a 200-byte payload both land in the 256 bucket, so their
-	// padded sizes are drawn from the same band [256, 256+maxPadJitter] - an
-	// observer can't tell them apart by size. And repeated padding of the same
-	// payload must vary (randomized), not collapse to a single bucket value.
-	const bucket = 256
-	sizes := map[int]bool{}
-	for i := 0; i < 128; i++ {
-		a, err := PadPlaintext([]byte("x"))
-		if err != nil {
-			t.Fatal(err)
-		}
-		b, err := PadPlaintext(make([]byte, 200))
-		if err != nil {
-			t.Fatal(err)
-		}
-		for _, s := range []int{len(a), len(b)} {
-			if s < bucket || s > bucket+maxPadJitter {
-				t.Fatalf("padded size %d outside expected band [%d,%d]", s, bucket, bucket+maxPadJitter)
-			}
-		}
-		sizes[len(a)] = true
+// Padding is clamped so the sealed frame still fits: a sender asking for more
+// than the frame has room for gets as much as fits, never an overflow.
+func TestPadPlaintextClampsToTheFrame(t *testing.T) {
+	padded, err := PadPlaintext(make([]byte, DataChunkSize), 1<<20)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if len(sizes) < 2 {
-		t.Error("padding size is not randomized (same value every time)")
+	if len(padded) != maxPaddedPlaintext {
+		t.Fatalf("padded to %d, want the ceiling %d", len(padded), maxPaddedPlaintext)
 	}
 }

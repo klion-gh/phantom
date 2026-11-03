@@ -87,9 +87,11 @@ func (m *Multiplexer) setErr(err error) {
 	m.errMu.Unlock()
 }
 
+// writeRequest is one or more frames that must leave together and in order -
+// a stream's OPEN with its first data (see Stream.send) - answered once.
 type writeRequest struct {
-	frame *protocol.Frame
-	errCh chan error
+	frames []*protocol.Frame
+	errCh  chan error
 }
 
 // NewMultiplexer starts a bidirectional frame multiplexer over conn. Session
@@ -137,6 +139,7 @@ func (m *Multiplexer) openStream(target string, udp bool) (*Stream, error) {
 
 	s := newStream(0, m, target)
 	s.isUDP = udp
+	s.local = true
 
 	id, err := m.allocStreamID(s)
 	if err != nil {
@@ -149,17 +152,22 @@ func (m *Multiplexer) openStream(target string, udp bool) (*Stream, error) {
 		flags = protocol.FlagUDP
 	}
 
-	openFrame := &protocol.Frame{
+	// The OPEN is held back and leaves with the stream's first data, in the
+	// same TLS record (Stream.send). Sent on its own, every stream the tunnel
+	// opened put a small record on the wire followed by one carrying the
+	// inner connection's first bytes - typically a TLS ClientHello - which is
+	// the TLS-in-TLS pattern classifiers look for. A stream whose far side
+	// speaks first gets its OPEN after openHoldback on its own.
+	s.openMu.Lock()
+	s.pendingOpen = &protocol.Frame{
 		Type:     protocol.FrameOpen,
 		StreamID: id,
 		Flags:    flags,
 		Payload:  []byte(target),
+		Pad:      padFor(len(target), true, true),
 	}
-
-	if err := m.sendFrame(openFrame); err != nil {
-		m.removeStream(id)
-		return nil, err
-	}
+	s.openTimer = time.AfterFunc(openHoldback, s.flushOpen)
+	s.openMu.Unlock()
 
 	return s, nil
 }
@@ -211,9 +219,14 @@ func (m *Multiplexer) Accept() (*Stream, error) {
 }
 
 func (m *Multiplexer) sendFrame(f *protocol.Frame) error {
+	return m.sendFrames(f)
+}
+
+// sendFrames queues frames to leave in one write, in order, and waits for it.
+func (m *Multiplexer) sendFrames(frames ...*protocol.Frame) error {
 	req := &writeRequest{
-		frame: f,
-		errCh: make(chan error, 1),
+		frames: frames,
+		errCh:  make(chan error, 1),
 	}
 
 	select {
@@ -401,7 +414,7 @@ func (m *Multiplexer) writeLoop() {
 		select {
 		case req := <-m.writeCh:
 			batch = batch[:0]
-			first, ok := m.encodeFrame(req)
+			first, ok := m.encodeRequest(req)
 			if !ok {
 				continue
 			}
@@ -413,7 +426,7 @@ func (m *Multiplexer) writeLoop() {
 			for len(batch) < coalesceFrames && len(out) < coalesceBytes {
 				select {
 				case next := <-m.writeCh:
-					data, ok := m.encodeFrame(next)
+					data, ok := m.encodeRequest(next)
 					if !ok {
 						continue
 					}
@@ -443,17 +456,36 @@ func (m *Multiplexer) writeLoop() {
 	}
 }
 
-// encodeFrame seals and encodes req's frame. A frame that can't be sealed or
-// encoded is answered with its error at once and reported !ok, so it is left
-// out without affecting the rest of a batch.
-func (m *Multiplexer) encodeFrame(req *writeRequest) ([]byte, bool) {
-	f := req.frame
-	if f.Type.IsEncrypted() && m.crypto != nil {
-		aad := protocol.FrameAAD(f.Type, f.Flags, f.StreamID)
-		encrypted, err := m.crypto.EncryptFrame(aad, f.Payload)
+// encodeRequest seals and encodes req's frames. A request whose frames can't
+// be sealed or encoded is answered with the error at once and reported !ok,
+// so it is left out without affecting the rest of a batch.
+func (m *Multiplexer) encodeRequest(req *writeRequest) ([]byte, bool) {
+	if len(req.frames) == 1 {
+		data, err := m.encodeFrame(req.frames[0])
 		if err != nil {
 			req.errCh <- err
 			return nil, false
+		}
+		return data, true
+	}
+	var out []byte
+	for _, f := range req.frames {
+		data, err := m.encodeFrame(f)
+		if err != nil {
+			req.errCh <- err
+			return nil, false
+		}
+		out = append(out, data...)
+	}
+	return out, true
+}
+
+func (m *Multiplexer) encodeFrame(f *protocol.Frame) ([]byte, error) {
+	if f.Type.IsEncrypted() && m.crypto != nil {
+		aad := protocol.FrameAAD(f.Type, f.Flags, f.StreamID)
+		encrypted, err := m.crypto.EncryptFrame(aad, f.Payload, f.Pad)
+		if err != nil {
+			return nil, err
 		}
 		f = &protocol.Frame{
 			Type:     f.Type,
@@ -462,12 +494,7 @@ func (m *Multiplexer) encodeFrame(req *writeRequest) ([]byte, bool) {
 			Payload:  encrypted,
 		}
 	}
-	data, err := f.Encode()
-	if err != nil {
-		req.errCh <- err
-		return nil, false
-	}
-	return data, true
+	return f.Encode()
 }
 
 func (m *Multiplexer) removeStream(id uint16) {
@@ -482,15 +509,6 @@ func (m *Multiplexer) sendClose(id uint16) {
 		StreamID: id,
 	}
 	m.sendFrame(closeFrame)
-}
-
-func (m *Multiplexer) sendData(id uint16, data []byte) error {
-	f := &protocol.Frame{
-		Type:     protocol.FrameData,
-		StreamID: id,
-		Payload:  data,
-	}
-	return m.sendFrame(f)
 }
 
 // ErrSessionClosed is what a stream's pending Read/Write fails with when the

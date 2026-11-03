@@ -62,28 +62,19 @@ func FrameAAD(t FrameType, flags Flags, streamID uint16) []byte {
 	return aad
 }
 
-// BucketSizes are the fixed sizes DATA frame plaintexts get padded to before
-// encryption, so the wire size of a frame doesn't leak the real payload size.
-// Chosen to cover typical small control-ish writes up to a full TCP/UDP MTU-ish
-// chunk; anything bigger (e.g. io.Copy's default 32KB buffer) is rounded up to
-// the next multiple of the largest bucket instead of being sent unpadded.
-var BucketSizes = []int{256, 512, 1024, 2048, 4096}
+// How much padding a frame gets is decided per frame by the sender
+// (internal/tunnel's shaping - see padFor) and passed as Frame.Pad; the
+// receiver reads the real length from the prefix and ignores the rest, so a
+// sender may change its policy without its peer knowing. Until 2.3 every
+// frame was padded up to a bucket (256, 512, 1024, 2048, 4096 bytes) plus up
+// to 512 random bytes: no tunnel record was ever smaller than ~300 bytes,
+// while half of a browser's upstream records are under 90 - the padding meant
+// to hide sizes had become a signature of its own.
 
-// largestBucket must stay equal to the last element of BucketSizes; it exists
-// separately only because the padding-headroom arithmetic below needs to be
-// constant-expressible (BucketSizes is a slice and can't be indexed in a const).
-// TestLargestBucketMatchesBucketSizes pins the two together.
-const largestBucket = 4096
-
-// maxPadJitter is the random extra added on top of the bucket floor (see
-// chooseSize). Bucketing alone made every DATA frame's wire size exactly one of
-// a few discrete values - itself a distinguisher, since real HTTPS record sizes
-// are continuously distributed. The jitter is larger than the smallest
-// inter-bucket gap (256) so adjacent low buckets' jittered ranges overlap and a
-// given observed size no longer maps back to a single bucket, and it's
-// byte-granular (not quantized) so the size carries no alignment tell. Bounded
-// so overhead stays small.
-const maxPadJitter = 512
+// SealedFrameOverhead is what sealing and framing add to a plaintext: the
+// frame header, the XChaCha20 nonce, the real-length prefix and the Poly1305
+// tag. A plaintext of n bytes padded by p leaves as n + p + SealedFrameOverhead.
+const SealedFrameOverhead = FrameHeaderSize + 24 + lengthPrefixSize + 16
 
 // maxPaddedPlaintext is the largest padded plaintext that still fits a single
 // frame once encrypted: the encrypted frame body is nonce(24) + padded +
@@ -112,22 +103,24 @@ const MaxFramePayload = 65535
 // [2-byte real length][plaintext] + nonce(24) + poly1305 tag(16).
 const MaxDataPlaintext = MaxFramePayload - (lengthPrefixSize + 24 + 16)
 
-// DataChunkSize is the largest plaintext that can still be *fully* padded - i.e.
-// where chooseSize's bucket floor leaves room for an unclamped jitter draw. It's
-// the size byte-stream writes are split into (see tunnel.Stream.Write), so every
-// DATA frame on a TCP stream is padded, rather than the largest ones silently
-// falling through unpadded and leaking their exact length.
+// DataChunkSize is the size byte-stream writes are split into (see
+// tunnel.Stream.Write): 60 KiB with the length prefix, leaving ~4 KB of the
+// frame for padding. (The same value the bucket scheme arrived at, so frame
+// sizes for bulk data didn't change with it.)
 //
 // MaxDataPlaintext is deliberately the looser limit of the two: it's what an
-// indivisible UDP datagram is checked against, so datagrams between the two
-// limits still go through (unpadded, as before) instead of being dropped.
-const DataChunkSize = ((maxPaddedPlaintext-maxPadJitter)/largestBucket)*largestBucket - lengthPrefixSize
+// indivisible UDP datagram is checked against, so a datagram between the two
+// still goes through, with less room to pad.
+const DataChunkSize = 60<<10 - lengthPrefixSize
 
 type Frame struct {
 	Type     FrameType
 	StreamID uint16
 	Flags    Flags
 	Payload  []byte
+	// Pad is how many random bytes to add to the plaintext when sealing an
+	// encrypted frame - the sender's choice, never encoded as such.
+	Pad int
 }
 
 func (f *Frame) Encode() ([]byte, error) {
@@ -176,20 +169,22 @@ func Decode(data []byte) (*Frame, error) {
 	return f, nil
 }
 
-// PadPlaintext wraps a real DATA frame payload as
-// [2-byte real length][real payload][random padding] sized to hit one of
-// BucketSizes (or, past the largest bucket, the next multiple of it), so the
-// encrypted frame's wire size doesn't reveal the real payload size.
-func PadPlaintext(payload []byte) ([]byte, error) {
+// PadPlaintext wraps a real frame payload as
+// [2-byte real length][real payload][pad random bytes]. pad is clamped so the
+// sealed frame still fits one frame's 16-bit length; a negative pad means none.
+func PadPlaintext(payload []byte, pad int) ([]byte, error) {
 	if len(payload) > MaxDataPlaintext {
 		return nil, fmt.Errorf("data plaintext %d exceeds maximum %d", len(payload), MaxDataPlaintext)
 	}
 
 	total := lengthPrefixSize + len(payload)
-	size, err := chooseSize(total)
-	if err != nil {
-		return nil, err
+	if room := maxPaddedPlaintext - total; pad > room {
+		pad = room
 	}
+	if pad < 0 {
+		pad = 0
+	}
+	size := total + pad
 
 	padded := make([]byte, size)
 	binary.BigEndian.PutUint16(padded[0:lengthPrefixSize], uint16(len(payload)))
@@ -214,46 +209,4 @@ func UnpadPlaintext(padded []byte) ([]byte, error) {
 		return nil, errors.New("real length exceeds padded plaintext")
 	}
 	return padded[lengthPrefixSize : lengthPrefixSize+realLen], nil
-}
-
-func chooseBucket(n int) int {
-	for _, b := range BucketSizes {
-		if n <= b {
-			return b
-		}
-	}
-	largest := BucketSizes[len(BucketSizes)-1]
-	return ((n + largest - 1) / largest) * largest
-}
-
-// chooseSize is chooseBucket (the size floor that hides a frame's magnitude)
-// plus a random jitter (that breaks the discrete-bucket fingerprint - see
-// maxPadJitter), clamped so the padded plaintext plus AEAD overhead still fits
-// one frame's 16-bit length (see maxPaddedPlaintext).
-//
-// A plaintext whose bucket floor is already past that ceiling can't be padded at
-// all and is returned as-is. Callers keep byte streams below DataChunkSize so
-// that never happens to them; the only inputs that still land here are single
-// UDP datagrams in the band between DataChunkSize and MaxDataPlaintext, which
-// can't be split. Those go out unpadded (leaking their own length, as they
-// always did) - what they no longer do is overflow the frame header, since
-// PadPlaintext rejects anything past MaxDataPlaintext outright.
-func chooseSize(n int) (int, error) {
-	base := chooseBucket(n)
-
-	room := maxPaddedPlaintext - base
-	if room <= 0 {
-		return n, nil
-	}
-	maxJ := maxPadJitter
-	if room < maxJ {
-		maxJ = room
-	}
-
-	var b [2]byte
-	if _, err := rand.Read(b[:]); err != nil {
-		return 0, err
-	}
-	jitter := int(binary.BigEndian.Uint16(b[:])) % (maxJ + 1)
-	return base + jitter, nil
 }

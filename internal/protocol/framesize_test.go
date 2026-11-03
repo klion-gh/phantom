@@ -6,15 +6,6 @@ import (
 	"testing"
 )
 
-// TestLargestBucketMatchesBucketSizes pins the constant the padding-headroom
-// arithmetic is built on to the actual bucket list, so growing BucketSizes can't
-// quietly invalidate DataChunkSize.
-func TestLargestBucketMatchesBucketSizes(t *testing.T) {
-	if got := BucketSizes[len(BucketSizes)-1]; got != largestBucket {
-		t.Fatalf("largestBucket = %d, but BucketSizes ends at %d", largestBucket, got)
-	}
-}
-
 // TestSealedDataFrameAlwaysFitsOneFrame is the regression test for the header
 // length overflow: for every interesting plaintext size up to MaxDataPlaintext,
 // the sealed frame body must fit MaxFramePayload, and Encode must accept it.
@@ -22,9 +13,6 @@ func TestLargestBucketMatchesBucketSizes(t *testing.T) {
 // be announced as length 0.
 func TestSealedDataFrameAlwaysFitsOneFrame(t *testing.T) {
 	sizes := []int{0, 1, 255, 256, 257, 4095, 4096, 4097, 32 * 1024}
-	for _, b := range BucketSizes {
-		sizes = append(sizes, b-1, b, b+1)
-	}
 	sizes = append(sizes,
 		DataChunkSize-1, DataChunkSize,
 		DataChunkSize+1, // first size that can no longer be padded
@@ -41,7 +29,7 @@ func TestSealedDataFrameAlwaysFitsOneFrame(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		body, err := sc.EncryptFrame([]byte{0, 1}, plaintext)
+		body, err := sc.EncryptFrame([]byte{0, 1}, plaintext, 4096) // more than some sizes have room for
 		if err != nil {
 			t.Fatalf("EncryptFrame(%d bytes): %v", n, err)
 		}
@@ -69,17 +57,16 @@ func TestSealedDataFrameAlwaysFitsOneFrame(t *testing.T) {
 	}
 }
 
-// TestDataChunkSizeIsAlwaysPadded asserts the reason DataChunkSize is lower than
-// MaxDataPlaintext: at or below it, padding always actually happens.
-func TestDataChunkSizeIsAlwaysPadded(t *testing.T) {
-	for _, n := range []int{DataChunkSize - 1, DataChunkSize} {
-		padded, err := PadPlaintext(make([]byte, n))
-		if err != nil {
-			t.Fatalf("PadPlaintext(%d): %v", n, err)
-		}
-		if len(padded) <= lengthPrefixSize+n {
-			t.Fatalf("plaintext %d was not padded (padded to %d)", n, len(padded))
-		}
+// TestDataChunkSizeLeavesRoomToPad: a full chunk of a byte stream can still
+// take the most padding the opening phase asks for.
+func TestDataChunkSizeLeavesRoomToPad(t *testing.T) {
+	const pad = 1024
+	padded, err := PadPlaintext(make([]byte, DataChunkSize), pad)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := lengthPrefixSize + DataChunkSize + pad; len(padded) != want {
+		t.Fatalf("full chunk padded to %d, want %d", len(padded), want)
 	}
 }
 
@@ -119,7 +106,7 @@ func TestDecodeMaxLengthDoesNotPanic(t *testing.T) {
 }
 
 func TestPadPlaintextRejectsOversizedPlaintext(t *testing.T) {
-	if _, err := PadPlaintext(make([]byte, MaxDataPlaintext+1)); err == nil {
+	if _, err := PadPlaintext(make([]byte, MaxDataPlaintext+1), 0); err == nil {
 		t.Fatal("PadPlaintext accepted a plaintext past MaxDataPlaintext")
 	}
 }

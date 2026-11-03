@@ -4,6 +4,7 @@ import (
 	"errors"
 	"io"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"phantom/internal/protocol"
@@ -25,6 +26,21 @@ type Stream struct {
 	closeErr error
 	isUDP    bool
 	mu       sync.Mutex
+
+	// local: this side opened the stream. Its frames are the "request"
+	// direction for shaping (padFor), the other side's the "response".
+	local bool
+	// sent counts DATA bytes this side has written, for padFor's opening phase.
+	sent atomic.Int64
+
+	// The OPEN this side hasn't sent yet - it leaves with the first data
+	// (send) or, failing that, after openHoldback (flushOpen). openMu keeps
+	// the two from racing and any data from overtaking it; opened lets every
+	// later write skip the lock.
+	openMu      sync.Mutex
+	pendingOpen *protocol.Frame
+	openTimer   *time.Timer
+	opened      atomic.Bool
 }
 
 func newStream(id uint16, mux *Multiplexer, target string) *Stream {
@@ -119,7 +135,7 @@ func (s *Stream) Write(p []byte) (int, error) {
 		if len(p) > protocol.MaxDataPlaintext {
 			return 0, ErrDatagramTooLarge
 		}
-		if err := s.mux.sendData(s.id, p); err != nil {
+		if err := s.send(p); err != nil {
 			return 0, err
 		}
 		return len(p), nil
@@ -136,12 +152,57 @@ func (s *Stream) Write(p []byte) (int, error) {
 		if end > len(p) {
 			end = len(p)
 		}
-		if err := s.mux.sendData(s.id, p[sent:end]); err != nil {
+		if err := s.send(p[sent:end]); err != nil {
 			return sent, err
 		}
 		sent = end
 	}
 	return len(p), nil
+}
+
+// send writes one DATA frame, padded per padFor, with the stream's OPEN in
+// front of it if that hasn't gone out yet.
+func (s *Stream) send(data []byte) error {
+	f := &protocol.Frame{
+		Type:     protocol.FrameData,
+		StreamID: s.id,
+		Payload:  data,
+		Pad:      padFor(len(data), s.local, s.sent.Load() < shapeBytes),
+	}
+	s.sent.Add(int64(len(data)))
+	if s.opened.Load() || !s.local {
+		return s.mux.sendFrames(f)
+	}
+	s.openMu.Lock()
+	defer s.openMu.Unlock()
+	if open := s.takeOpenLocked(); open != nil {
+		return s.mux.sendFrames(open, f)
+	}
+	return s.mux.sendFrames(f)
+}
+
+// flushOpen sends the OPEN on its own when no data came to carry it within
+// openHoldback - a protocol where the far side speaks first.
+func (s *Stream) flushOpen() {
+	s.openMu.Lock()
+	defer s.openMu.Unlock()
+	if open := s.takeOpenLocked(); open != nil {
+		if err := s.mux.sendFrames(open); err != nil {
+			s.closeWithErr(err)
+		}
+	}
+}
+
+// takeOpenLocked hands over the pending OPEN, if any, and marks the stream
+// opened. Caller holds openMu.
+func (s *Stream) takeOpenLocked() *protocol.Frame {
+	open := s.pendingOpen
+	s.pendingOpen = nil
+	s.opened.Store(true)
+	if s.openTimer != nil {
+		s.openTimer.Stop()
+	}
+	return open
 }
 
 func (s *Stream) Close() error {
@@ -150,7 +211,21 @@ func (s *Stream) Close() error {
 		return nil
 	}
 
-	s.mux.sendClose(s.id)
+	// A stream closed before its OPEN left (no data, within openHoldback)
+	// sends both together, so the peer sees it open and close exactly as it
+	// did when OPEN went out at once.
+	closeFrame := &protocol.Frame{Type: protocol.FrameClose, StreamID: s.id}
+	var open *protocol.Frame
+	if s.local {
+		s.openMu.Lock()
+		open = s.takeOpenLocked()
+		s.openMu.Unlock()
+	}
+	if open != nil {
+		s.mux.sendFrames(open, closeFrame)
+	} else {
+		s.mux.sendFrames(closeFrame)
+	}
 	s.mux.removeStream(s.id)
 	return nil
 }

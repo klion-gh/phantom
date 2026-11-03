@@ -164,15 +164,15 @@ func hkdfExpand(secret, info []byte, length int) ([]byte, error) {
 // additional data the ciphertext is bound to - build it with FrameAAD so the
 // frame's type and flags are covered, not just its stream id.
 //
-// Plaintext is padded to hide its real length (see PadPlaintext) transparently to
-// every caller.
-func (sc *SessionCrypto) EncryptFrame(header, plaintext []byte) ([]byte, error) {
+// pad random bytes are added to the plaintext (see PadPlaintext); how many is
+// the sender's shaping decision (Frame.Pad).
+func (sc *SessionCrypto) EncryptFrame(header, plaintext []byte, pad int) ([]byte, error) {
 	aead, err := chacha20poly1305.NewX(sc.SendKey[:])
 	if err != nil {
 		return nil, err
 	}
 
-	padded, err := PadPlaintext(plaintext)
+	padded, err := PadPlaintext(plaintext, pad)
 	if err != nil {
 		return nil, err
 	}

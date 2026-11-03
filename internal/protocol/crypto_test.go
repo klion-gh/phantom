@@ -73,7 +73,7 @@ func TestFrameFromOneSideIsNotReadableBySameSide(t *testing.T) {
 	client, server := testPair(t)
 	aad := FrameAAD(FrameData, 0, 7)
 
-	sealed, err := client.EncryptFrame(aad, []byte("secret payload"))
+	sealed, err := client.EncryptFrame(aad, []byte("secret payload"), 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -92,7 +92,7 @@ func TestFrameFromOneSideIsNotReadableBySameSide(t *testing.T) {
 func TestAADCoversTypeAndFlags(t *testing.T) {
 	client, server := testPair(t)
 
-	sealed, err := client.EncryptFrame(FrameAAD(FrameOpen, 0, 7), []byte("example.com:443"))
+	sealed, err := client.EncryptFrame(FrameAAD(FrameOpen, 0, 7), []byte("example.com:443"), 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -121,7 +121,7 @@ func TestEncryptDecryptFrame(t *testing.T) {
 	header := FrameAAD(FrameData, 0, 1)
 	plaintext := []byte("hello world")
 
-	ciphertext, err := client.EncryptFrame(header, plaintext)
+	ciphertext, err := client.EncryptFrame(header, plaintext, 0)
 	if err != nil {
 		t.Fatalf("EncryptFrame() error = %v", err)
 	}
@@ -140,37 +140,26 @@ func TestEncryptDecryptFrame(t *testing.T) {
 	}
 }
 
-func TestEncryptFramePadsRandomlyWithinBand(t *testing.T) {
-	keys := testKeys(t)
+func TestEncryptFrameAddsTheRequestedPadding(t *testing.T) {
+	keys, server := testPair(t)
 	header := FrameAAD(FrameData, 0, 1)
 
-	// Encrypted frame body = XChaCha20 nonce (24) + padded plaintext + Poly1305
-	// tag (16). A 1-byte and a 200-byte payload both land in the 256 bucket, so
-	// both wire sizes fall in the same band and can't be told apart; and the
-	// size varies run to run (randomized padding), so it's not a fixed value.
+	// Sealed body = XChaCha20 nonce (24) + [2-byte length][payload][pad] +
+	// Poly1305 tag (16): the padding is exactly what the sender asked for -
+	// the policy lives in the sender (internal/tunnel's padFor), not here.
 	const aead = 24 + 16
-	const bucket = 256
-	lo, hi := bucket+aead, bucket+maxPadJitter+aead
-
-	sizes := map[int]bool{}
-	for i := 0; i < 128; i++ {
-		short, err := keys.EncryptFrame(header, []byte("x"))
+	for _, pad := range []int{0, 1, 300, 4000} {
+		body, err := keys.EncryptFrame(header, []byte("x"), pad)
 		if err != nil {
 			t.Fatal(err)
 		}
-		longer, err := keys.EncryptFrame(header, make([]byte, 200))
-		if err != nil {
-			t.Fatal(err)
+		if want := aead + lengthPrefixSize + 1 + pad; len(body) != want {
+			t.Errorf("pad %d: sealed to %d bytes, want %d", pad, len(body), want)
 		}
-		for _, ln := range []int{len(short), len(longer)} {
-			if ln < lo || ln > hi {
-				t.Fatalf("wire size %d outside the shared band [%d,%d] - magnitude leaked", ln, lo, hi)
-			}
+		pt, err := server.DecryptFrame(header, body)
+		if err != nil || string(pt) != "x" {
+			t.Errorf("pad %d: decrypted %q, %v", pad, pt, err)
 		}
-		sizes[len(short)] = true
-	}
-	if len(sizes) < 2 {
-		t.Error("wire size is not randomized")
 	}
 }
 
@@ -180,12 +169,12 @@ func TestEncryptFrameNonceIncrement(t *testing.T) {
 	header := FrameAAD(FrameData, 0, 1)
 	plaintext := []byte("hello world")
 
-	ct1, err := keys.EncryptFrame(header, plaintext)
+	ct1, err := keys.EncryptFrame(header, plaintext, 0)
 	if err != nil {
 		t.Fatalf("EncryptFrame() error = %v", err)
 	}
 
-	ct2, err := keys.EncryptFrame(header, plaintext)
+	ct2, err := keys.EncryptFrame(header, plaintext, 0)
 	if err != nil {
 		t.Fatalf("EncryptFrame() error = %v", err)
 	}
@@ -201,7 +190,7 @@ func TestDecryptFrameTampered(t *testing.T) {
 	header := FrameAAD(FrameData, 0, 1)
 	plaintext := []byte("hello world")
 
-	ciphertext, err := client.EncryptFrame(header, plaintext)
+	ciphertext, err := client.EncryptFrame(header, plaintext, 0)
 	if err != nil {
 		t.Fatalf("EncryptFrame() error = %v", err)
 	}
