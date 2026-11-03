@@ -383,43 +383,78 @@ func (m *Multiplexer) handlePing(f *protocol.Frame) {
 	m.sendFrame(pong)
 }
 
+// Frames already waiting when the write loop wakes leave in one Write, up to
+// these limits. Each Write used to be one frame, so every frame became its own
+// TLS record: opening a page put a run of small, padded records on the wire
+// (one per stream opened), and a server answering several streams sent records
+// no web server does. Coalesced, they leave as ordinary records of up to 16 KB.
+// Nothing waits to fill a batch - a lone frame is written at once.
+const (
+	coalesceFrames = 64
+	coalesceBytes  = 256 << 10
+)
+
 func (m *Multiplexer) writeLoop() {
+	var buf []byte
+	var batch []*writeRequest
 	for {
 		select {
 		case req := <-m.writeCh:
-			f := req.frame
-			if f.Type.IsEncrypted() && m.crypto != nil {
-				aad := protocol.FrameAAD(f.Type, f.Flags, f.StreamID)
-				encrypted, err := m.crypto.EncryptFrame(aad, f.Payload)
-				if err != nil {
-					req.errCh <- err
-					continue
-				}
-				f = &protocol.Frame{
-					Type:     f.Type,
-					StreamID: f.StreamID,
-					Flags:    f.Flags,
-					Payload:  encrypted,
+			buf, batch = buf[:0], batch[:0]
+			buf, batch = m.appendFrame(buf, batch, req)
+		drain:
+			for len(batch) < coalesceFrames && len(buf) < coalesceBytes {
+				select {
+				case next := <-m.writeCh:
+					buf, batch = m.appendFrame(buf, batch, next)
+				default:
+					break drain
 				}
 			}
-
-			data, err := f.Encode()
-			if err != nil {
-				req.errCh <- err
+			if len(batch) == 0 {
 				continue
 			}
 
-			_, err = m.conn.Write(data)
+			_, err := m.conn.Write(buf)
 			if err == nil {
 				m.lastTx.Store(time.Now().UnixNano())
-				m.bytesTx.Add(int64(len(data)))
+				m.bytesTx.Add(int64(len(buf)))
 			}
-			req.errCh <- err
+			for _, r := range batch {
+				r.errCh <- err
+			}
 
 		case <-m.closed:
 			return
 		}
 	}
+}
+
+// appendFrame seals and encodes req's frame onto buf and adds req to batch.
+// A frame that can't be sealed or encoded is answered with its error at once
+// and left out; the rest of the batch is unaffected.
+func (m *Multiplexer) appendFrame(buf []byte, batch []*writeRequest, req *writeRequest) ([]byte, []*writeRequest) {
+	f := req.frame
+	if f.Type.IsEncrypted() && m.crypto != nil {
+		aad := protocol.FrameAAD(f.Type, f.Flags, f.StreamID)
+		encrypted, err := m.crypto.EncryptFrame(aad, f.Payload)
+		if err != nil {
+			req.errCh <- err
+			return buf, batch
+		}
+		f = &protocol.Frame{
+			Type:     f.Type,
+			StreamID: f.StreamID,
+			Flags:    f.Flags,
+			Payload:  encrypted,
+		}
+	}
+	data, err := f.Encode()
+	if err != nil {
+		req.errCh <- err
+		return buf, batch
+	}
+	return append(buf, data...), append(batch, req)
 }
 
 func (m *Multiplexer) removeStream(id uint16) {
