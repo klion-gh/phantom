@@ -16,7 +16,7 @@
 #                     where something else already owns port 80)? Set both to use it directly
 #                     instead of Phantom's own ACME - prompted if unset and a TTY is available.
 #   PHANTOM_PORT      port the VPN listens on (default 8443)
-#   PHANTOM_VERSION   install this release tag (e.g. v2.3.0-beta.1) instead of the latest
+#   PHANTOM_VERSION   install this release tag (e.g. v2.3.0-beta.2) instead of the latest
 #                     stable one - for trying a beta server on one machine first
 #   PHANTOM_NO_TUNE=1 leave the kernel's TCP settings alone (see tune_network)
 #   PHANTOM_APP=1     run on behalf of the Phantom apps ("Подключить свой сервер"): never

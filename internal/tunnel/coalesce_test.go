@@ -15,12 +15,13 @@ import (
 type gatedConn struct {
 	net.Conn
 	writes  atomic.Int32
+	entered chan struct{} // closed once the first Write is held at the gate
 	release chan struct{}
-	once    sync.Once
 }
 
 func (c *gatedConn) Write(p []byte) (int, error) {
 	if c.writes.Add(1) == 1 {
+		close(c.entered)
 		<-c.release
 	}
 	return c.Conn.Write(p)
@@ -37,7 +38,7 @@ func TestQueuedFramesLeaveInOneWrite(t *testing.T) {
 	crypto1, _ := protocol.DeriveSessionKeys(ecdh, psk, cp, sp, protocol.RoleClient)
 	crypto2, _ := protocol.DeriveSessionKeys(ecdh, psk, cp, sp, protocol.RoleServer)
 
-	gc := &gatedConn{Conn: c1, release: make(chan struct{})}
+	gc := &gatedConn{Conn: c1, entered: make(chan struct{}), release: make(chan struct{})}
 	m1 := NewMultiplexer(gc, crypto1)
 	m2 := NewMultiplexer(c2, crypto2)
 	defer m1.Close()
@@ -45,18 +46,30 @@ func TestQueuedFramesLeaveInOneWrite(t *testing.T) {
 
 	const streams = 6
 	var wg sync.WaitGroup
-	for i := 0; i < streams; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			if _, err := m1.Open("example.org:443"); err != nil {
-				t.Error(err)
-			}
-		}()
+	open := func() {
+		defer wg.Done()
+		if _, err := m1.Open("example.org:443"); err != nil {
+			t.Error(err)
+		}
 	}
-	// Let the first OPEN reach the gate and the other five queue behind it.
-	deadline := time.Now().Add(2 * time.Second)
-	for len(m1.writeCh) < streams-1 && time.Now().Before(deadline) {
+	// One OPEN first, held in its Write; only then the other five, which
+	// must queue behind it.
+	wg.Add(1)
+	go open()
+	select {
+	case <-gc.entered:
+	case <-time.After(3 * time.Second):
+		t.Fatal("the first frame never reached the connection")
+	}
+	for i := 1; i < streams; i++ {
+		wg.Add(1)
+		go open()
+	}
+	deadline := time.Now().Add(3 * time.Second)
+	for len(m1.writeCh) < streams-1 {
+		if time.Now().After(deadline) {
+			t.Fatalf("only %d frames queued behind the held write", len(m1.writeCh))
+		}
 		time.Sleep(time.Millisecond)
 	}
 	close(gc.release)

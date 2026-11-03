@@ -154,7 +154,7 @@ ACME»](#сервер-serveryaml) ниже и [PROTOCOL.md §6.3](PROTOCOL.md).
 `PHANTOM_VERSION`:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/klion-gh/phantom/main/scripts/install.sh | PHANTOM_VERSION=v2.3.0-beta.1 sh
+curl -fsSL https://raw.githubusercontent.com/klion-gh/phantom/main/scripts/install.sh | PHANTOM_VERSION=v2.3.0-beta.2 sh
 ```
 
 Удаление — та же команда с аргументом `uninstall`:
