@@ -400,25 +400,38 @@ func (m *Multiplexer) writeLoop() {
 	for {
 		select {
 		case req := <-m.writeCh:
-			buf, batch = buf[:0], batch[:0]
-			buf, batch = m.appendFrame(buf, batch, req)
+			batch = batch[:0]
+			first, ok := m.encodeFrame(req)
+			if !ok {
+				continue
+			}
+			batch = append(batch, req)
+			// A lone frame - the common case for one busy stream - is
+			// written as encoded; only a batch is copied into buf.
+			out := first
 		drain:
-			for len(batch) < coalesceFrames && len(buf) < coalesceBytes {
+			for len(batch) < coalesceFrames && len(out) < coalesceBytes {
 				select {
 				case next := <-m.writeCh:
-					buf, batch = m.appendFrame(buf, batch, next)
+					data, ok := m.encodeFrame(next)
+					if !ok {
+						continue
+					}
+					if len(batch) == 1 {
+						buf = append(buf[:0], first...)
+					}
+					buf = append(buf, data...)
+					out = buf
+					batch = append(batch, next)
 				default:
 					break drain
 				}
 			}
-			if len(batch) == 0 {
-				continue
-			}
 
-			_, err := m.conn.Write(buf)
+			_, err := m.conn.Write(out)
 			if err == nil {
 				m.lastTx.Store(time.Now().UnixNano())
-				m.bytesTx.Add(int64(len(buf)))
+				m.bytesTx.Add(int64(len(out)))
 			}
 			for _, r := range batch {
 				r.errCh <- err
@@ -430,17 +443,17 @@ func (m *Multiplexer) writeLoop() {
 	}
 }
 
-// appendFrame seals and encodes req's frame onto buf and adds req to batch.
-// A frame that can't be sealed or encoded is answered with its error at once
-// and left out; the rest of the batch is unaffected.
-func (m *Multiplexer) appendFrame(buf []byte, batch []*writeRequest, req *writeRequest) ([]byte, []*writeRequest) {
+// encodeFrame seals and encodes req's frame. A frame that can't be sealed or
+// encoded is answered with its error at once and reported !ok, so it is left
+// out without affecting the rest of a batch.
+func (m *Multiplexer) encodeFrame(req *writeRequest) ([]byte, bool) {
 	f := req.frame
 	if f.Type.IsEncrypted() && m.crypto != nil {
 		aad := protocol.FrameAAD(f.Type, f.Flags, f.StreamID)
 		encrypted, err := m.crypto.EncryptFrame(aad, f.Payload)
 		if err != nil {
 			req.errCh <- err
-			return buf, batch
+			return nil, false
 		}
 		f = &protocol.Frame{
 			Type:     f.Type,
@@ -452,9 +465,9 @@ func (m *Multiplexer) appendFrame(buf []byte, batch []*writeRequest, req *writeR
 	data, err := f.Encode()
 	if err != nil {
 		req.errCh <- err
-		return buf, batch
+		return nil, false
 	}
-	return append(buf, data...), append(batch, req)
+	return data, true
 }
 
 func (m *Multiplexer) removeStream(id uint16) {
