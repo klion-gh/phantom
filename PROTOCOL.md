@@ -198,24 +198,35 @@ authenticate the frame.
 ### 4.2 Padding
 
 `PadPlaintext`/`UnpadPlaintext` wrap every encrypted frame's plaintext as
-`[2-byte real length][real payload][random padding]`. The padded size is a **bucket
-floor plus a random jitter** (`chooseSize`): first rounded up to the nearest of
-`BucketSizes = []int{256, 512, 1024, 2048, 4096}` (or, past 4096, the next multiple of
-4096 - e.g. `io.Copy`'s default 32KB buffer), which hides a frame's *magnitude*, then a
-uniform random `0..maxPadJitter` (512) bytes are added on top. The jitter matters
-because bucketing *alone* made every frame's wire size exactly one of a few discrete
-values - itself a distinguisher, since real HTTPS record sizes are continuously
-distributed. Because the jitter (512) exceeds the smallest inter-bucket gap (256),
-adjacent low buckets' size ranges overlap, so a given observed size no longer maps back
-to a single bucket, and a 1-byte and a 200-byte payload are drawn from the same size
-band (verified by `TestPadPlaintextRandomizesWithinBucketBand` /
-`TestEncryptFramePadsRandomlyWithinBand`). The jitter is clamped so the padded plaintext
-plus AEAD overhead still fits one frame's 16-bit length field.
+`[2-byte real length][real payload][random padding]`. The receiver reads the real
+length from the prefix and ignores however much padding follows, so **how much to pad
+is the sender's choice** and can change without its peer knowing. `EncryptFrame` takes
+it as an argument (`Frame.Pad`); the policy lives in `internal/tunnel/shape.go`
+(`padFor`), clamped so a sealed frame still fits one frame's 16-bit length.
 
-This is applied *inside* `SessionCrypto.EncryptFrame`/`DecryptFrame`
-(`internal/protocol/crypto.go`), so it's transparent to the multiplexer and every
-caller - the receiver reads the real length from the 2-byte prefix and ignores however
-much padding the sender chose to add.
+The policy since 2.3 (shaping):
+
+- **A stream's opening phase** - its first 8 KB in each direction, which carries the
+  inner TLS handshake and the first request and response. A frame is padded up towards
+  a TLS record size sampled from what a browser's own records measure at the start of a
+  connection (`tools/flowlab`, an Edge profile over 20 sites): requests for the side
+  that opened the stream, responses for the other. On top comes a random extra of up to
+  a quarter of the frame's length (at most 1 KB), which blurs the exact size of an inner
+  ClientHello or certificate chain.
+- **After it:** at most 32 random bytes. Bulk data leaves as full 16 KB records anyway.
+
+Until 2.3 every frame was padded to a bucket (256, 512, 1024, 2048 or 4096 bytes, or the
+next multiple of 4096) plus up to 512 random bytes. That hid magnitudes, but no tunnel
+record was ever smaller than ~300 bytes while half of a browser's upstream records are
+under 90 - the padding had become a signature of its own. Measured on the same sites,
+the change took the median upstream record at a connection's start from 610 to 260
+bytes (a browser's: 50) and cut the bytes on the wire per page by 19%.
+
+Related: a stream's OPEN no longer goes out on its own. It is held back and leaves in
+the same write as the stream's first data (`Stream.send`), so a new stream doesn't put a
+record of its own on the wire right before the one carrying the inner ClientHello. A
+stream whose far side speaks first sends it after 25 ms; one closed unused sends OPEN
+and CLOSE together, so the peer sees what it always did.
 
 ### 4.2a Directional keys and the wire version
 
@@ -1447,12 +1458,16 @@ out to be platform-neutral.
    Removed since, each confirmed by a re-run: the fixed 282/225-byte upgrade exchange
    (§5.2b - the tunnel now opens like any HTTP/2 connection), Go's growing record
    sizes on the server (§6.2), one record per frame (`writeLoop` now sends queued
-   frames in one write). With all three the start of a connection still separates at
-   AUC 0.99. What carries it now: the burst of padded upstream records as streams open
-   (the inner TLS handshakes of the sites visited - TLS-in-TLS, the next thing to
-   shape), a pause after the handshake that is partly the test's own doing (the tunnel
-   is up before the browser starts), and the volume of one connection carrying a whole
-   device.
+   frames in one write); then the per-stream shaping of §4.2. With all of it the start
+   of a connection still separates - AUC 0.999 on every feature, 1.0 on record sizes
+   alone. What carries it is inherent to carrying TLS inside TLS: when a page opens
+   connections through the tunnel, the tunnel sends their ClientHellos (500-1800 bytes
+   each) upstream within milliseconds, where a browser's own connection sends small
+   control records. Padding can only make a record larger, so this can be blurred but
+   not removed; going further would mean splitting inner handshakes across records or
+   holding them back, at a cost in latency. Also visible: a pause after the handshake
+   that is partly the test's own doing (the tunnel is up before the browser starts),
+   and the volume of one connection carrying a whole device.
    The same run measured throughput: with BBR on the server (`scripts/install.sh`),
    one download through the tunnel went from 45 to ~150-175 Mbit/s and four parallel
    ones reached ~260-290 Mbit/s, the line's own ceiling; a second connection
