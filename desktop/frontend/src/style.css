@@ -374,6 +374,37 @@ html, body {
     margin-top: 6px;
 }
 
+/* The ping label is the button that takes a ping - there is no automatic
+   one. It keeps the look of the text it replaced, with a dotted underline
+   and an accent hover so it reads as clickable without becoming a second
+   button competing with the toggle. */
+.ping-btn {
+    background: none;
+    border: none;
+    padding: 2px 0;
+    margin: -2px 0;
+    font: inherit;
+    color: var(--text-muted);
+    cursor: pointer;
+    text-decoration: underline dotted;
+    text-underline-offset: 3px;
+    border-radius: 4px;
+}
+
+.ping-btn:hover:not(:disabled) {
+    color: var(--accent);
+}
+
+.ping-btn:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+}
+
+.ping-btn:disabled {
+    cursor: progress;
+    text-decoration: none;
+}
+
 /* .fi (flag-icons) sizes itself off font-size (1.333em wide x 1em tall) -
    13px here lands close to the old fixed 18x13 <img>. overflow:hidden gives
    the flag itself the same rounded-corner treatment the old image had. */

@@ -1,10 +1,9 @@
 package com.phantom.vpn
 
-import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -12,43 +11,61 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ColorFilter
+import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import mobile.Mobile
 import org.json.JSONObject
 
-/** Snapshot of what a config tile shows about its server: live latency only - country/flag
- * are resolved once and cached on the SavedConfig itself, not polled on a timer. */
+/** Snapshot of what a config tile shows about its server: the last check's latency only -
+ * country/flag are resolved once and cached on the SavedConfig itself. [failed] means
+ * the last check got no answer, as opposed to no check having been made yet. */
 data class PingInfo(
     val ip: String? = null,
     val latencyMs: Long? = null,
+    val failed: Boolean = false,
 )
+
+/** The label every ping readout shares - tile and routing list alike. */
+fun pingLabel(info: PingInfo?, checking: Boolean): String = when {
+    checking -> "${I18n.t("ping")}: …"
+    info?.latencyMs != null -> "${I18n.t("ping")}: ${info.latencyMs} ${I18n.t("ms")}"
+    info?.failed == true -> "${I18n.t("ping")}: ${I18n.t("no_answer")}"
+    else -> "${I18n.t("ping")}: —"
+}
 
 /**
  * Reads a top-level `key: value` line out of a raw client.yaml string. No YAML dependency
@@ -78,8 +95,7 @@ fun countryCodeToFlag(code: String): String {
 /**
  * Calls the Go core's Ping (one real disguised handshake, no tunnel built) on the IO
  * dispatcher and parses its {"ip":...,"latency_ms":...} JSON. Returns null on any failure
- * (unreachable server, bad config, timeout) - the caller treats that as "no data yet"
- * rather than a hard error, since this runs on a background timer.
+ * (unreachable server, bad config, timeout).
  */
 suspend fun fetchPing(yaml: String): Pair<String, Long>? = withContext(Dispatchers.IO) {
     runCatching {
@@ -108,35 +124,38 @@ suspend fun lookupCountry(ip: String): Pair<String, String>? = withContext(Dispa
 }
 
 /**
- * One tile on the main screen: a saved config's domain/IP/live ping/location on the
- * left, a connect button on the right. The ping comes from [PingStore], filled by the
- * app-wide [PingPoller] - shared with the Маршрутизация page's config list, so both
- * always show the same measurement. Long-press anywhere on the tile (outside the
- * button itself) opens it for editing/deletion.
+ * One tile on the main screen: a saved config's domain/IP/ping/location on the left,
+ * a gear (edit/delete) and the connect switch on the right - the same layout as the
+ * Windows tile. The ping label is a button: tapping it takes one ping (see
+ * [PingStore]), shared with the Маршрутизация page's config list so both show the
+ * same measurement. Long-press and drag is the caller's (reordering - see
+ * [modifier]).
  */
-@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun ConfigInfoCard(
     config: SavedConfig,
     status: ConnectionStatus,
     onToggle: () -> Unit,
-    onLongPress: () -> Unit,
+    onEdit: () -> Unit,
+    modifier: Modifier = Modifier,
+    dragging: Boolean = false,
 ) {
     val domain = parseYamlField(config.yaml, "domain") ?: ""
     val server = parseYamlField(config.yaml, "server") ?: ""
     val info = PingStore[config.id]
+    val checking = PingStore.isChecking(config.id)
+    val scope = rememberCoroutineScope()
 
     val cardShape = RoundedCornerShape(18.dp)
     val isConnected = status == ConnectionStatus.CONNECTED
     val connectedGradient = Brush.linearGradient(colors = BrandGradient)
+    val idleBorder = if (dragging) Accent else SurfaceOutline.copy(alpha = 0.6f)
 
     Tile(
         color = Surface,
         shape = cardShape,
-        borderBrush = if (isConnected) connectedGradient else Brush.linearGradient(listOf(SurfaceOutline.copy(alpha = 0.6f), SurfaceOutline.copy(alpha = 0.6f))),
-        modifier = Modifier
-            .fillMaxWidth()
-            .combinedClickable(onClick = {}, onLongClick = onLongPress),
+        borderBrush = if (isConnected) connectedGradient else Brush.linearGradient(listOf(idleBorder, idleBorder)),
+        modifier = modifier.fillMaxWidth(),
     ) {
         Row(
             modifier = Modifier
@@ -162,11 +181,23 @@ fun ConfigInfoCard(
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
-                Spacer(modifier = Modifier.height(6.dp))
+                Spacer(modifier = Modifier.height(2.dp))
+                // The ping label is the only way to take a ping - there is no
+                // automatic one. Underlined dotted-style and given a real touch
+                // target (the padding) so it reads and works as a button.
                 Text(
-                    text = info?.latencyMs?.let { "${I18n.t("ping")}: $it ${I18n.t("ms")}" } ?: "${I18n.t("ping")}: —",
-                    color = TextSecondary,
+                    text = pingLabel(info, checking),
+                    color = if (checking) TextMuted else TextSecondary,
                     fontSize = 13.sp,
+                    textDecoration = if (checking) null else TextDecoration.Underline,
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(6.dp))
+                        .clickable(
+                            enabled = !checking,
+                            onClickLabel = I18n.t("check_ping"),
+                            role = Role.Button,
+                        ) { scope.launch { PingStore.check(config) } }
+                        .padding(vertical = 4.dp),
                 )
                 val countryLabel = config.country ?: config.countryCode
                 if (!countryLabel.isNullOrBlank()) {
@@ -179,7 +210,16 @@ fun ConfigInfoCard(
                     )
                 }
             }
-            Spacer(modifier = Modifier.width(8.dp))
+            Spacer(modifier = Modifier.width(4.dp))
+            IconButton(onClick = onEdit) {
+                Image(
+                    painter = painterResource(R.drawable.ic_settings_gear),
+                    contentDescription = I18n.t("edit"),
+                    colorFilter = ColorFilter.tint(TextSecondary),
+                    modifier = Modifier.size(20.dp),
+                )
+            }
+            Spacer(modifier = Modifier.width(4.dp))
             ConnectSwitch(status = status, onClick = onToggle)
         }
     }

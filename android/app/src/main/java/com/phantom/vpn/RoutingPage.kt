@@ -545,7 +545,7 @@ private fun ConfigPickRow(
                 // config, from the same measurement (see PingStore).
                 Spacer(Modifier.height(3.dp))
                 Text(
-                    ping?.latencyMs?.let { "${I18n.t("ping")}: $it ${I18n.t("ms")}" } ?: "${I18n.t("ping")}: —",
+                    pingLabel(ping, PingStore.isChecking(config.id)),
                     color = TextSecondary,
                     fontSize = 12.sp,
                 )

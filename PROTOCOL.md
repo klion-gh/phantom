@@ -654,12 +654,13 @@ default route, which is already direct. Auto-select probes (§9.3) go out the sa
 
 Returns `{IP, LatencyMs}`. `mobile.Ping` wraps this as a JSON string (gomobile-safe
 return type, same pattern as `Tunnel.Stats()`); the Windows `App.Ping` method does the
-same for its Wails binding. Both UIs poll this once per saved config on a **jittered**
-6-10s schedule - a flat interval put a perfectly periodic connection on the wire for as
-long as the app was open, which is exactly the shape traffic analysis looks for. That one
-result is shared: the Маршрутизация page's config list shows exactly what the config tile
-shows (Android `PingStore`/`PingPoller`, Windows `pingData`), rather than a second,
-separately-timed check that could disagree with it.
+same for its Wails binding. Both UIs call it **only when the tile's ping label is
+tapped or clicked** - there is no automatic ping. It used to run once per saved config
+on a jittered 6-10s schedule for as long as the window was open: hundreds of short TLS
+sessions an hour to every saved server, active or not, which no visitor of an ordinary
+site produces. That one result is shared: the Маршрутизация page's config list shows
+exactly what the config tile shows (Android `PingStore`, Windows `pingData`), rather
+than a second, separately-made check that could disagree with it.
 
 ### 9.2 Tile metadata (`internal/geoip`)
 
@@ -831,16 +832,18 @@ replacing it - see below.
   3-page `HorizontalPager` with a `BottomNavBar` to jump between pages directly, mirroring
   the Windows client's own three sections in the same order:
   - **Конфигурации** - saved-config tiles (`ConfigInfoCard`, `ConfigInfo.kt`), one per
-    `ConfigStore` entry. Each shows the config's domain, resolved IP, live ping
-    (`fetchPing`/`pingcheck.PingWith` via the `Mobile.ping` gomobile binding, polled on a
-    jittered 6-10s schedule per config by `PingPoller` into `PingStore`, which the
-    Маршрутизация page's config list reads too), and an optional country label from
+    `ConfigStore` entry. Each shows the config's domain, resolved IP, ping
+    (`fetchPing`/`pingcheck.PingWith` via the `Mobile.ping` gomobile binding, taken only
+    when the ping label is tapped, into `PingStore`, which the Маршрутизация page's
+    config list reads too), and an optional country label from
     the config's own `country`/`country_code` fields (§8, §9.2) as a flag emoji
     (`countryCodeToFlag`, built locally from regional-indicator characters, nothing
     downloaded) plus name. A `GradientSwitch` (`Theme.kt`) connects/disconnects that
     config; the currently-connected tile gets a purple→pink→blue gradient border. "+"
-    opens `ConfigDialog` blank; long-pressing an existing tile opens it pre-filled for
-    editing.
+    opens `ConfigDialog` blank; the gear on a tile opens it pre-filled for editing, as
+    on Windows. Long-pressing a tile lifts it, and dragging moves it above or below the
+    others (`ReorderState`, `Reorder.kt`); the order is saved on release
+    (`ConfigStore.saveOrder`).
   - **Маршрутизация** (`RoutingPage.kt`) - the smart-routing UI over §9.3's shared
     engine: an "Умный VPN" toggle + site list (with a "Популярные ресурсы" picker,
     `PopularResourcesScreen.kt`, listing §9.3's built-in catalogue) for per-site routing,

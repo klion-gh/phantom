@@ -181,6 +181,15 @@ object ConfigStore {
         })
     }
 
+    /** Puts the saved configs in the order of [ids] (the user dragged a tile).
+     * Applied to a fresh load rather than writing the caller's list back, so a
+     * country or IP stored in the meantime isn't overwritten; anything not in
+     * [ids] keeps its place at the end. */
+    fun saveOrder(context: Context, ids: List<String>) {
+        val rank = ids.withIndex().associate { (i, id) -> id to i }
+        saveAll(context, loadAll(context).sortedBy { rank[it.id] ?: Int.MAX_VALUE })
+    }
+
     fun delete(context: Context, id: String) {
         saveAll(context, loadAll(context).filterNot { it.id == id })
     }

@@ -151,6 +151,8 @@ const dict = {
     // tiles / dynamic
     ping: 'Пинг',
     ms: 'мс',
+    check_ping: 'Проверить пинг',
+    no_answer: 'нет ответа',
     available: 'Доступен',
     unavailable: 'Недоступен',
     checking: 'Проверка...',
@@ -301,6 +303,8 @@ const dict = {
     resource_name_ph: 'Name, e.g. Netflix',
     ping: 'Ping',
     ms: 'ms',
+    check_ping: 'Check ping',
+    no_answer: 'no answer',
     available: 'Available',
     unavailable: 'Unavailable',
     checking: 'Checking...',

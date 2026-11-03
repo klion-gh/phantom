@@ -88,9 +88,9 @@ let editingId = null;
 let pendingConnectId = null; // id currently mid-Connect() call - drives the spinner state
 let currentStatus = { connected: false, alive: false, stats: '{}', activeConfigId: '' };
 
-const pingData = new Map(); // id -> { ip, latencyMs } - just live latency; country/flag
+const pingData = new Map(); // id -> { ip, latencyMs } - the last check's latency; country/flag
                              // come from the config's own cached fields (see SetConfigGeo)
-const pingTimers = new Map(); // id -> interval handle
+const pingsInFlight = new Set(); // ids with a check running, so a second click doesn't stack one
 
 let resources = [];
 const resourceTimers = new Map(); // id -> interval handle
@@ -186,52 +186,38 @@ async function resolveConfigGeo(id, yaml) {
   resolveTileMetadata(id, yaml, explicit);
 }
 
-async function pollPing(config) {
+// A ping is only ever taken when someone clicks a tile's ping label. Each one is
+// a full TCP+TLS+handshake to the server; run on a timer for every saved config
+// while the window was open, that came to hundreds of short sessions an hour to
+// each server - more than any visitor of an ordinary site produces, and the
+// kind of regularity traffic analysis looks for. On demand it is one handshake
+// per click.
+async function pingNow(config) {
+  if (pingsInFlight.has(config.id)) return;
+  pingsInFlight.add(config.id);
+  updateTileMeta(config.id);
+  updateRoutingPing(config.id);
   const prev = pingData.get(config.id) || {};
   try {
     const json = JSON.parse(await Ping(config.yaml));
-    pingData.set(config.id, json.ip ? { ip: json.ip, latencyMs: json.latency_ms } : { ...prev, latencyMs: null });
+    pingData.set(config.id, json.ip ? { ip: json.ip, latencyMs: json.latency_ms, failed: false } : { ...prev, latencyMs: null, failed: true });
   } catch (e) {
-    pingData.set(config.id, { ...prev, latencyMs: null });
+    pingData.set(config.id, { ...prev, latencyMs: null, failed: true });
+  } finally {
+    pingsInFlight.delete(config.id);
   }
   updateTileMeta(config.id);
   updateRoutingPing(config.id);
-}
-
-// Each ping is a full TCP+TLS+handshake to the server, so setInterval(..., 6000)
-// put a perfectly periodic connection every 6.000 seconds on the wire for as long
-// as the app was open. Real browsing produces nothing like that regularity, and a
-// metronome is exactly what traffic analysis looks for - no amount of
-// per-connection disguise hides it. Rescheduled with jitter after each poll
-// instead (6-10s), which also stops the polls from stacking up if one is slow.
-function startPingLoop(config) {
-  const schedule = () => {
-    const delay = 6000 + Math.floor(Math.random() * 4000);
-    pingTimers.set(config.id, setTimeout(async () => {
-      await pollPing(config);
-      if (pingTimers.has(config.id)) schedule();
-    }, delay));
-  };
-  pollPing(config);
-  schedule();
-}
-
-function stopAllPingLoops() {
-  // clearTimeout: the ping loop reschedules itself with setTimeout (see
-  // startPingLoop) rather than running on a fixed interval. Clearing the map is
-  // what actually stops it - the loop checks pingTimers.has() before re-arming,
-  // so a poll already in flight won't schedule another one.
-  for (const handle of pingTimers.values()) clearTimeout(handle);
-  pingTimers.clear();
-  pingData.clear();
 }
 
 // The Маршрутизация list shows exactly what the config tile shows, from the
 // same measurement (pingData) - not a second, separately-timed check that
 // could disagree with it.
 function pingLabel(id) {
+  if (pingsInFlight.has(id)) return `${t('ping')}: …`;
   const info = pingData.get(id) || {};
-  return info.latencyMs != null ? `${t('ping')}: ${info.latencyMs} ${t('ms')}` : `${t('ping')}: —`;
+  if (info.latencyMs != null) return `${t('ping')}: ${info.latencyMs} ${t('ms')}`;
+  return info.failed ? `${t('ping')}: ${t('no_answer')}` : `${t('ping')}: —`;
 }
 
 function updateRoutingPing(id) {
@@ -246,7 +232,9 @@ function updateTileMeta(id) {
 
   const info = pingData.get(id) || {};
   card.querySelector('.config-ip').textContent = info.ip || config.ip || parseYamlField(config.yaml, 'server') || '—';
-  card.querySelector('.ping-text').textContent = pingLabel(id);
+  const pingBtn = card.querySelector('.ping-btn');
+  pingBtn.textContent = pingLabel(id);
+  pingBtn.disabled = pingsInFlight.has(id);
 
   // Country label comes from the operator-provided country/country_code in
   // the config, or a LookupCountry resolution keyed off the resolved IP (see
@@ -304,24 +292,23 @@ function stopAllResourceLoops() {
   resourceTimers.clear();
 }
 
-// Pausing on document.hidden (rather than only on renderConfigList/renderResourceList's
-// own stopAll*Loops) is what makes pinging skip minimized/backgrounded time - checking
-// blocked sites or dialing the disguised handshake every few seconds while nobody's
-// looking at the window is just wasted traffic. document.hidden reflects the native
-// window's occlusion/minimized state in WebView2, not just tab-switching, so this
-// covers both a plain taskbar minimize and the tray-hide from App.beforeClose. Unlike
-// stopAllPingLoops/stopAllResourceLoops (used when actually rebuilding the tile DOM),
-// this never touches pingData/resources - the last-known values stay on screen instead
-// of flashing to "—" every time the window is hidden and shown again.
+// Pausing on document.hidden (rather than only on renderResourceList's own
+// stopAllResourceLoops) is what makes the resource checks skip
+// minimized/backgrounded time - checking blocked sites every few seconds while
+// nobody's looking at the window is just wasted traffic. document.hidden
+// reflects the native window's occlusion/minimized state in WebView2, not just
+// tab-switching, so this covers both a plain taskbar minimize and the tray-hide
+// from App.beforeClose. Unlike stopAllResourceLoops (used when actually
+// rebuilding the tile DOM), this never touches resources - the last-known
+// values stay on screen instead of flashing to "—" every time the window is
+// hidden and shown again. Config pings have no loop to pause: they run only on
+// a click (see pingNow).
 function pauseAllPolling() {
-  for (const handle of pingTimers.values()) clearTimeout(handle); // see stopAllPingLoops
-  pingTimers.clear();
   for (const handle of resourceTimers.values()) clearInterval(handle);
   resourceTimers.clear();
 }
 
 function resumeAllPolling() {
-  for (const config of configs) startPingLoop(config);
   for (const resource of resources) startResourceLoop(resource);
 }
 
@@ -378,7 +365,12 @@ async function reloadResources() {
 }
 
 function renderConfigList() {
-  stopAllPingLoops();
+  // A rebuild keeps the last ping of every config that still exists - a ping
+  // is now a deliberate click, and re-rendering after an unrelated edit must
+  // not throw the answer away.
+  for (const id of [...pingData.keys()]) {
+    if (!configs.some((c) => c.id === id)) pingData.delete(id);
+  }
   configList.innerHTML = '';
   emptyState.classList.toggle('hidden', configs.length > 0);
 
@@ -393,7 +385,7 @@ function renderConfigList() {
         <div class="config-domain">${escapeHtml(domain)}</div>
         <div class="config-ip"></div>
         <div class="config-meta">
-          <span class="ping-text">${t('ping')}: —</span>
+          <button type="button" class="ping-btn" title="${t('check_ping')}">${t('ping')}: —</button>
           <span class="geo-flag fi hidden"></span>
           <span class="geo-text"></span>
         </div>
@@ -404,9 +396,10 @@ function renderConfigList() {
 
     card.querySelector('.config-edit-btn').addEventListener('click', () => openEditScreen(config));
     card.querySelector('.config-toggle').addEventListener('click', () => toggleConnection(config));
+    card.querySelector('.ping-btn').addEventListener('click', () => pingNow(config));
 
     configList.appendChild(card);
-    startPingLoop(config);
+    updateTileMeta(config.id);
   }
 
   refreshTileStatuses();
@@ -751,6 +744,7 @@ document.getElementById('btn-save').addEventListener('click', async () => {
   let targetId = editingId;
   if (editingId) {
     await UpdateConfig(editingId, yaml);
+    pingData.delete(editingId); // the yaml may point somewhere else now
   } else {
     targetId = await AddConfig(yaml);
   }

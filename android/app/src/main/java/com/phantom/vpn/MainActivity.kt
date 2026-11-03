@@ -49,6 +49,11 @@ import androidx.compose.ui.graphics.BlendMode
 import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.zIndex
+import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontFamily
@@ -529,6 +534,14 @@ private fun PhantomApp(
                     editingYaml = ""
                     showConfigDialog = true
                 },
+                // A drag reorders the in-memory list on every step past a
+                // neighbour, and is written to storage once, on release.
+                onMoveConfig = { from, to ->
+                    if (from in configs.indices && to in configs.indices) {
+                        configs = configs.toMutableList().apply { add(to, removeAt(from)) }
+                    }
+                },
+                onMoveConfigDone = { ConfigStore.saveOrder(context, configs.map { it.id }) },
                 onSetupServer = { showServerSetup = true },
                 onAddResource = { name, url ->
                     ResourceStore.add(context, name, url)
@@ -567,6 +580,7 @@ private fun PhantomApp(
                     val id = editingId
                     val targetId = if (id != null) {
                         ConfigStore.update(context, id, editingYaml)
+                        PingStore.forget(id) // the yaml may point somewhere else now
                         id
                     } else {
                         ConfigStore.add(context, editingYaml).id
@@ -580,6 +594,7 @@ private fun PhantomApp(
                     if (id != null) {
                         if (state.activeConfigId == id) onDisconnect()
                         ConfigStore.delete(context, id)
+                        PingStore.forget(id)
                         // Drop it from the routing selections too, or the
                         // selector would keep probing a config that no longer
                         // exists and could still "choose" it.
@@ -597,9 +612,9 @@ private fun PhantomApp(
 
 /**
  * Three swipeable pages sharing one fixed header: configs (page 0, the default),
- * routing (page 1) and resource-reachability tiles (page 2). Pings only run for what
- * is on screen, and only while [appInForeground] is true - config pings via
- * [PingPoller] (shared by pages 0 and 1), resource pings via ResourceCard's
+ * routing (page 1) and resource-reachability tiles (page 2). Config pings run only
+ * when a tile's ping label is tapped (see PingStore); resource checks run only for
+ * page 2 while it is on screen and [appInForeground] is true, via ResourceCard's
  * pingEnabled parameter.
  */
 @OptIn(ExperimentalFoundationApi::class)
@@ -630,6 +645,8 @@ private fun MainScreen(
     onApplySites: () -> Unit,
     onEditConfig: (SavedConfig) -> Unit,
     onAddConfig: () -> Unit,
+    onMoveConfig: (Int, Int) -> Unit,
+    onMoveConfigDone: () -> Unit,
     onSetupServer: () -> Unit,
     onAddResource: (String, String) -> Unit,
     onDeleteResource: (String) -> Unit,
@@ -733,11 +750,6 @@ private fun MainScreen(
 
         Spacer(modifier = Modifier.height(20.dp))
 
-        // One ping loop per config for both the Конфигурации and Маршрутизация
-        // pages (see PingStore) - running while either is on screen, so the
-        // routing list's numbers are as live as the tiles' own.
-        PingPoller(configs = configs, enabled = appInForeground && pagerState.currentPage in 0..1)
-
         HorizontalPager(
             state = pagerState,
             modifier = Modifier.weight(1f),
@@ -759,6 +771,8 @@ private fun MainScreen(
                     onToggle = onToggle,
                     onEditConfig = onEditConfig,
                     onAddConfig = onAddConfig,
+                    onMoveConfig = onMoveConfig,
+                    onMoveConfigDone = onMoveConfigDone,
                     onSetupServer = onSetupServer,
                 )
                 1 -> RoutingPage(
@@ -916,6 +930,7 @@ private fun AutoConfigTile(enabled: Boolean, onToggle: (Boolean) -> Unit) {
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun ConfigsPage(
     status: ConnectionStatus,
@@ -927,8 +942,16 @@ private fun ConfigsPage(
     onToggle: (SavedConfig) -> Unit,
     onEditConfig: (SavedConfig) -> Unit,
     onAddConfig: () -> Unit,
+    onMoveConfig: (Int, Int) -> Unit,
+    onMoveConfigDone: () -> Unit,
     onSetupServer: () -> Unit,
 ) {
+    val listState = rememberLazyListState()
+    val reorderScope = rememberCoroutineScope()
+    val currentOnMove by rememberUpdatedState(onMoveConfig)
+    val reorder = remember(listState) { ReorderState(listState, reorderScope) { from, to -> currentOnMove(from, to) } }
+    val haptics = LocalHapticFeedback.current
+
     // Умный VPN never makes a config the whole-device VPN - it only ever
     // carries the listed sites through whichever one it picked. Showing that
     // config as "on" here would say the opposite: this page is specifically
@@ -1015,6 +1038,7 @@ private fun ConfigsPage(
                 modifier = Modifier.weight(1f),
             ) {
                 LazyColumn(
+                    state = listState,
                     modifier = Modifier.fillMaxSize(),
                     verticalArrangement = Arrangement.spacedBy(14.dp),
                 ) {
@@ -1024,11 +1048,50 @@ private fun ConfigsPage(
                             activeConfigId == config.id -> status
                             else -> ConnectionStatus.IDLE
                         }
+                        val dragging = reorder.draggingKey == config.id
+                        // Long-press lifts the tile, dragging moves it past its
+                        // neighbours (see ReorderState); the order is saved on
+                        // release. Editing moved to the tile's gear.
                         ConfigInfoCard(
                             config = config,
                             status = cardStatus,
                             onToggle = { onToggle(config) },
-                            onLongPress = { onEditConfig(config) },
+                            onEdit = { onEditConfig(config) },
+                            dragging = dragging,
+                            modifier = Modifier
+                                .then(
+                                    if (dragging) {
+                                        Modifier
+                                            .zIndex(1f)
+                                            .graphicsLayer {
+                                                translationY = reorder.translationFor(config.id)
+                                                scaleX = 1.02f
+                                                scaleY = 1.02f
+                                            }
+                                    } else {
+                                        Modifier.animateItemPlacement()
+                                    },
+                                )
+                                .pointerInput(config.id) {
+                                    detectDragGesturesAfterLongPress(
+                                        onDragStart = {
+                                            haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                                            reorder.start(config.id)
+                                        },
+                                        onDrag = { change, amount ->
+                                            change.consume()
+                                            reorder.drag(amount.y)
+                                        },
+                                        onDragEnd = {
+                                            reorder.end()
+                                            onMoveConfigDone()
+                                        },
+                                        onDragCancel = {
+                                            reorder.end()
+                                            onMoveConfigDone()
+                                        },
+                                    )
+                                },
                         )
                     }
                 }
