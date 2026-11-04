@@ -64,11 +64,13 @@ detect_arch() {
 # printing the env-var instruction if no TTY is reachable (e.g. fully
 # unattended automation), rather than hanging forever on a `read` that can
 # never succeed.
+# Opening /dev/tty is the test: `-r /dev/tty` holds even with no controlling
+# terminal (ssh host 'curl ... | sh'), and the read then kills the install.
 prompt() {
     prompt_text="$1"
     if [ "${PHANTOM_APP:-}" = "1" ]; then
         echo ""
-    elif [ -t 0 ] || [ -r /dev/tty ]; then
+    elif [ -t 0 ] || ( : < /dev/tty ) 2>/dev/null; then
         printf '%s' "$prompt_text" > /dev/tty
         read -r reply < /dev/tty
         echo "$reply"
