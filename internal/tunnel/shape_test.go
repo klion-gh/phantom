@@ -153,3 +153,47 @@ func median(xs []int) int {
 	}
 	return c[len(c)/2]
 }
+
+// The holdback timer takes the OPEN at the moment the first Write arrives:
+// that data must still reach the wire after the OPEN, not ahead of it -
+// otherwise the peer drops it as data for an unknown stream and the stream
+// hangs. (Hit on a slow CI runner, where a Write ~25 ms after Open is common.)
+func TestFirstWriteRacingTheHoldbackStaysBehindOpen(t *testing.T) {
+	m1, m2, _ := shapedPair(t)
+	taken := make(chan struct{})
+	wrote := make(chan struct{})
+	afterOpenTaken = func() {
+		close(taken)
+		// Give a Write that wrongly bypassed the OPEN time to hit the wire.
+		select {
+		case <-wrote:
+		case <-time.After(200 * time.Millisecond):
+		}
+	}
+	defer func() { afterOpenTaken = nil }()
+
+	s, err := m1.Open("example.org:443")
+	if err != nil {
+		t.Fatal(err)
+	}
+	<-taken
+	go func() {
+		s.Write([]byte("hello"))
+		close(wrote)
+	}()
+	peer := acceptWithin(t, m2, 2*time.Second)
+	got := make(chan string, 1)
+	go func() {
+		buf := make([]byte, 5)
+		io.ReadFull(peer, buf)
+		got <- string(buf)
+	}()
+	select {
+	case g := <-got:
+		if g != "hello" {
+			t.Fatalf("peer read %q", g)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("the first data never arrived - it went out ahead of the OPEN")
+	}
+}

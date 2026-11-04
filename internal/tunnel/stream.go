@@ -176,6 +176,7 @@ func (s *Stream) send(data []byte) error {
 	s.openMu.Lock()
 	defer s.openMu.Unlock()
 	if open := s.takeOpenLocked(); open != nil {
+		defer s.opened.Store(true)
 		return s.mux.sendFrames(open, f)
 	}
 	return s.mux.sendFrames(f)
@@ -187,18 +188,28 @@ func (s *Stream) flushOpen() {
 	s.openMu.Lock()
 	defer s.openMu.Unlock()
 	if open := s.takeOpenLocked(); open != nil {
+		if afterOpenTaken != nil {
+			afterOpenTaken()
+		}
 		if err := s.mux.sendFrames(open); err != nil {
 			s.closeWithErr(err)
 		}
+		s.opened.Store(true)
 	}
 }
 
-// takeOpenLocked hands over the pending OPEN, if any, and marks the stream
-// opened. Caller holds openMu.
+// afterOpenTaken, when set (tests only), runs in flushOpen between taking the
+// OPEN and sending it - the window a concurrent first Write must not use.
+var afterOpenTaken func()
+
+// takeOpenLocked hands over the pending OPEN, if any. Caller holds openMu,
+// and marks the stream opened only once that OPEN has been sent: until then
+// a Write must take openMu and wait, or its data could reach the wire ahead
+// of the OPEN - and the peer drops data for a stream it hasn't seen open,
+// leaving the stream hung.
 func (s *Stream) takeOpenLocked() *protocol.Frame {
 	open := s.pendingOpen
 	s.pendingOpen = nil
-	s.opened.Store(true)
 	if s.openTimer != nil {
 		s.openTimer.Stop()
 	}
@@ -219,11 +230,13 @@ func (s *Stream) Close() error {
 	if s.local {
 		s.openMu.Lock()
 		open = s.takeOpenLocked()
+		if open != nil {
+			s.mux.sendFrames(open, closeFrame)
+		}
+		s.opened.Store(true)
 		s.openMu.Unlock()
 	}
-	if open != nil {
-		s.mux.sendFrames(open, closeFrame)
-	} else {
+	if open == nil {
 		s.mux.sendFrames(closeFrame)
 	}
 	s.mux.removeStream(s.id)
