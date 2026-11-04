@@ -188,8 +188,8 @@ func (s *Stream) flushOpen() {
 	s.openMu.Lock()
 	defer s.openMu.Unlock()
 	if open := s.takeOpenLocked(); open != nil {
-		if afterOpenTaken != nil {
-			afterOpenTaken()
+		if hook := afterOpenTaken.Load(); hook != nil {
+			(*hook)()
 		}
 		if err := s.mux.sendFrames(open); err != nil {
 			s.closeWithErr(err)
@@ -200,7 +200,8 @@ func (s *Stream) flushOpen() {
 
 // afterOpenTaken, when set (tests only), runs in flushOpen between taking the
 // OPEN and sending it - the window a concurrent first Write must not use.
-var afterOpenTaken func()
+// Atomic because holdback timers of other tests' streams read it too.
+var afterOpenTaken atomic.Pointer[func()]
 
 // takeOpenLocked hands over the pending OPEN, if any. Caller holds openMu,
 // and marks the stream opened only once that OPEN has been sent: until then

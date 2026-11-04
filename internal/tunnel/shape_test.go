@@ -3,6 +3,7 @@ package tunnel
 import (
 	"io"
 	"net"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -162,15 +163,19 @@ func TestFirstWriteRacingTheHoldbackStaysBehindOpen(t *testing.T) {
 	m1, m2, _ := shapedPair(t)
 	taken := make(chan struct{})
 	wrote := make(chan struct{})
-	afterOpenTaken = func() {
-		close(taken)
-		// Give a Write that wrongly bypassed the OPEN time to hit the wire.
-		select {
-		case <-wrote:
-		case <-time.After(200 * time.Millisecond):
-		}
+	var once sync.Once
+	hook := func() {
+		once.Do(func() {
+			close(taken)
+			// Give a Write that wrongly bypassed the OPEN time to hit the wire.
+			select {
+			case <-wrote:
+			case <-time.After(200 * time.Millisecond):
+			}
+		})
 	}
-	defer func() { afterOpenTaken = nil }()
+	afterOpenTaken.Store(&hook)
+	defer afterOpenTaken.Store(nil)
 
 	s, err := m1.Open("example.org:443")
 	if err != nil {
