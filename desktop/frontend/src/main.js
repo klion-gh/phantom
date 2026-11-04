@@ -8,7 +8,7 @@ import './style.css';
 // install ever shows, so the app's own footprint grows by the whole set
 // (~2.4MB) once, not per flag shown.
 import 'flag-icons/css/flag-icons.min.css';
-import { Connect, Disconnect, Status, ReadLog, ListConfigs, AddConfig, UpdateConfig, DeleteConfig, SetConfigGeo, ClearConfigCountry, Ping, ListResources, AddResource, DeleteResource, ApplyUpdate, GetLanguage, SetLanguage, Version, LookupCountry, GetAppearance, SetAppearance, GetBetaUpdates, SetBetaUpdates, ReadFullLog, GetRoutingState, SetSmartEnabled, SetSmartSites, SetSmartConfigs, SetAutoEnabled, SetAutoConfigs, ReconnectActive, RoutingHealth, PopularResources, GetBrowserBridge, SetBrowserBridgeEnabled, RevokeBrowserClients, AnswerBrowserPairing, ProvisionServer, CancelProvision, ForgetServerKey } from '../wailsjs/go/main/App';
+import { Connect, Disconnect, Status, ReadLog, ListConfigs, AddConfig, UpdateConfig, DeleteConfig, SetConfigGeo, ClearConfigCountry, Ping, ListResources, AddResource, DeleteResource, ApplyUpdate, GetLanguage, SetLanguage, Version, LookupCountry, GetAppearance, SetAppearance, GetBetaUpdates, SetBetaUpdates, ReadFullLog, GetRoutingState, SetSmartEnabled, SetSmartSites, SetSmartConfigs, SetAutoEnabled, SetAutoConfigs, GetRelay, SetRelay, ReconnectActive, RoutingHealth, PopularResources, GetBrowserBridge, SetBrowserBridgeEnabled, RevokeBrowserClients, AnswerBrowserPairing, ProvisionServer, CancelProvision, ForgetServerKey } from '../wailsjs/go/main/App';
 import { t, getLang, setLang, applyStaticTranslations } from './i18n.js';
 import { BACKGROUNDS, initBackground, initMiniBackground } from './background.js';
 import { PALETTES } from './palettes.js';
@@ -94,6 +94,12 @@ const pingsInFlight = new Set(); // ids with a check running, so a second click 
 
 let resources = [];
 const resourceTimers = new Map(); // id -> interval handle
+
+// The relay setting - see "Использовать ретранслятор" below.
+let relayState = { enabled: false, address: '' };
+const relayOverlay = document.getElementById('relay-overlay');
+const relayInput = document.getElementById('relay-input');
+const relayError = document.getElementById('relay-error');
 
 function escapeHtml(text) {
   const div = document.createElement('div');
@@ -1145,6 +1151,11 @@ setInterval(refreshStatus, 4000);
     // default (stable channel only) stays if the Go call fails
   }
   document.getElementById('beta-updates-toggle').classList.toggle('active', betaUpdates);
+  try {
+    relayState = JSON.parse(await GetRelay());
+  } catch (e) {
+    // off stays if the Go call fails
+  }
   applyAppearance();
   applyStaticTranslations();
   document.getElementById('btn-lang-ru').classList.toggle('active', getLang() === 'ru');
@@ -1309,6 +1320,7 @@ function renderRouting() {
   document.getElementById('auto-tile').classList.toggle('hidden', configs.length === 0);
   document.getElementById('auto-toggle').classList.toggle('active', routingState.autoEnabled);
   renderAutoBanner();
+  renderRelay();
 
   renderSiteList();
   renderSitesApplyRow();
@@ -1500,6 +1512,63 @@ document.getElementById('auto-toggle').addEventListener('click', async () => {
     currentStatus = { connected: false, alive: false, stats: '{}', activeConfigId: '' };
   }
   renderRouting();
+});
+
+// --- "Использовать ретранслятор" -----------------------------------------
+// One relay every config connects through while it's on (desktop/relay.go).
+// The address is kept when it's switched off, so turning it back on is one
+// click; the gear is where it's changed.
+
+function renderRelay() {
+  document.getElementById('relay-tile').classList.toggle('hidden', configs.length === 0);
+  document.getElementById('relay-toggle').classList.toggle('active', relayState.enabled);
+  const sub = document.getElementById('relay-sub');
+  sub.classList.toggle('set', relayState.enabled);
+  sub.textContent = relayState.enabled
+    ? relayState.address
+    : relayState.address ? t('relay_off', { address: relayState.address }) : t('relay_hint');
+}
+
+async function applyRelay(enabled, address) {
+  const err = await SetRelay(enabled, address);
+  if (err) return err;
+  relayState = JSON.parse(await GetRelay());
+  // Every ping so far measured the other path; a stale number next to the
+  // new setting would read as a measurement of it.
+  pingData.clear();
+  renderConfigList();
+  renderRelay();
+  return '';
+}
+
+function openRelayDialog() {
+  relayInput.value = relayState.address;
+  relayError.classList.add('hidden');
+  showOverlay(relayOverlay);
+  setTimeout(() => relayInput.focus(), 50);
+}
+
+document.getElementById('relay-toggle').addEventListener('click', async () => {
+  if (!relayState.enabled && !relayState.address) {
+    openRelayDialog();
+    return;
+  }
+  await applyRelay(!relayState.enabled, relayState.address);
+});
+document.getElementById('relay-edit').addEventListener('click', openRelayDialog);
+document.getElementById('btn-relay-cancel').addEventListener('click', () => hideOverlay(relayOverlay));
+async function saveRelayFromDialog() {
+  const err = await applyRelay(true, relayInput.value);
+  if (err) {
+    relayError.classList.remove('hidden');
+    return;
+  }
+  hideOverlay(relayOverlay);
+}
+document.getElementById('btn-relay-save').addEventListener('click', saveRelayFromDialog);
+relayInput.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') saveRelayFromDialog();
+  else relayError.classList.add('hidden');
 });
 
 async function addSiteFromInput() {

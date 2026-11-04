@@ -171,6 +171,7 @@ func Start(configYAML string, tunFD int, mtu int, protector Protector) (*Tunnel,
 		mtu = 1500
 	}
 
+	configYAML = withRelay(configYAML)
 	cfg, err := config.ParseClientConfig([]byte(configYAML))
 	if err != nil {
 		return nil, fmt.Errorf("parse config: %w", err)
@@ -395,7 +396,7 @@ func (t *Tunnel) IsAlive() bool {
 // this gomobile-safe, same pattern as Stats). The actual work lives in
 // internal/pingcheck, shared with the Windows app.
 func Ping(configYAML string) (string, error) {
-	result, err := pingcheck.PingWith(configYAML, pingOptions())
+	result, err := pingcheck.PingWith(withRelay(configYAML), pingOptions())
 	if err != nil {
 		return "", err
 	}

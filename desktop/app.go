@@ -174,6 +174,7 @@ func (a *App) Connect(configID string, configYAML string) string {
 	a.mu.Unlock()
 
 	log.Println("connect: establishing tunnel")
+	configYAML = withRelaySetting(configYAML)
 	connectStart := time.Now()
 	diag(diagCatVPN, "connectStart",
 		"configID", configID,

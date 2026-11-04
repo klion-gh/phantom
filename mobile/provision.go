@@ -54,7 +54,7 @@ func ProvisionServer(requestJSON string, listener ProvisionListener) string {
 	// Around the app's own VPN when it is up, the same way its pings go.
 	protect := pingOptions().ProtectFD
 	opts := provision.Around(protect, func(yaml string) (int64, error) {
-		res, err := pingcheck.PingWith(yaml, pingOptions())
+		res, err := pingcheck.PingWith(withRelay(yaml), pingOptions())
 		return res.LatencyMs, err
 	})
 	res, err := provision.Run(ctx, req, opts, provisionAdapter{listener})

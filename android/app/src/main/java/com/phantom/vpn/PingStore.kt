@@ -47,4 +47,10 @@ object PingStore {
     fun forget(configId: String) {
         results.remove(configId)
     }
+
+    /** Drops every result - after the path they were all measured on changed
+     * (the relay switched on or off). */
+    fun forgetAll() {
+        results.clear()
+    }
 }

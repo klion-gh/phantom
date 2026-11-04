@@ -12,6 +12,7 @@ import (
 // running the service makes the handshake; when it isn't, there is no tunnel
 // and the default route already goes around nothing.
 func pingConfig(configYAML string) (pingcheck.Result, error) {
+	configYAML = withRelaySetting(configYAML)
 	var reply daemonapi.PingReply
 	err := withDaemon(false, func(c *daemonapi.Client) error {
 		var callErr error

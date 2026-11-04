@@ -59,7 +59,7 @@ func NewAutoSelector(listener SwitchListener) *AutoSelector {
 			// A full Phantom handshake, not a TCP connect: a blocked server
 			// whose port still accepts connections would otherwise look
 			// perfectly healthy and keep being selected.
-			result, err := pingcheck.PingWith(configYAML, pingOptions())
+			result, err := pingcheck.PingWith(withRelay(configYAML), pingOptions())
 			if err != nil {
 				return 0, err
 			}

@@ -29,6 +29,9 @@ class PhantomApplication : Application() {
         // tunnel - which can happen from a notification action without any
         // Activity ever having been created.
         RoutingStore.load(this)
+        // Before the auto-selector's first probe and any tunnel: both go
+        // through the relay when it's on.
+        RelayStore.load(this)
         RoutingController.sync(this)
         Diag.log(
             Diag.Cat.ROUTE, "startupState",

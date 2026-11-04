@@ -89,12 +89,19 @@ jobs:
           GOARCH: ${{ matrix.arch }}
         run: go build -o "phantom-keygen-linux-${{ matrix.arch }}" ./cmd/keygen
 
+      - name: Build phantom-relay
+        env:
+          GOOS: linux
+          GOARCH: ${{ matrix.arch }}
+        run: go build -o "phantom-relay-linux-${{ matrix.arch }}" ./cmd/relay
+
       - uses: actions/upload-artifact@v4
         with:
           name: binaries-${{ matrix.arch }}
           path: |
             phantom-server-linux-${{ matrix.arch }}
             phantom-keygen-linux-${{ matrix.arch }}
+            phantom-relay-linux-${{ matrix.arch }}
           retention-days: 1
 
   # The Windows client, built the way the README documents. Its updater looks for
@@ -294,6 +301,7 @@ jobs:
           missing=0
           for f in phantom.exe phantom-server-linux-amd64 phantom-server-linux-arm64 \
                    phantom-keygen-linux-amd64 phantom-keygen-linux-arm64 \
+                   phantom-relay-linux-amd64 phantom-relay-linux-arm64 \
                    phantom-linux-amd64.tar.gz phantom-linux-amd64.deb phantom-linux-amd64.rpm \
                    phantom-linux-amd64.pkg.tar.zst \
                    phantom-extension-chromium.zip phantom-extension-firefox.zip; do

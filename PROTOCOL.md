@@ -550,6 +550,40 @@ CONNECT. Fragmented datagrams (`FRAG != 0`) are unsupported and dropped, as is s
 
 ---
 
+## 7a. Relay entry point (`cmd/relay`, `internal/relay`)
+
+An optional server in front of the real ones, for networks that block or filter the
+real servers' addresses (seen in November 2026: foreign VPS IPs dropped outright, and
+mobile networks cutting foreign cloud ranges while a Moscow VPS stayed reachable). The
+client connects to the relay instead of `server`; everything else is unchanged — SNI is
+still `domain`, TLS still validates the real server's certificate, and the disguised
+handshake still runs against the real server's keys.
+
+The relay reads only the ClientHello. `crypto/tls` parses it (the handshake is abandoned
+at `GetConfigForClient`, and the alert it would send is discarded), the SNI picks the
+target — `routes[sni]` if set, otherwise `sni:target_port` (8443) at the first address
+`sni` resolves to — and the bytes read so far are replayed to the target, after which
+the relay copies both ways with half-close passed on. It holds no keys, decrypts
+nothing, and can't tell a Phantom tunnel from any other TLS on that domain.
+
+Guards: `allow` (exact domains or `*.suffix`; empty means any), no SNI means no forward,
+targets must be public addresses unless `allow_private`, and a target that is the relay
+itself on one of its own listen ports is refused (a loop). Config is
+`/opt/phantom-relay/relay.yaml`, written by `scripts/install-relay.sh`.
+
+Clients: `relay: "host:port"` in a client config makes `ServerList()` return only the
+relay (`DirectServerList()` keeps the server's own endpoints, which ping uses to report
+the server's IP rather than the relay's). The apps don't store it in configs — the
+"Использовать ретранслятор" switch on the configs screen is an app setting, added to
+each config on its way into the core (`config.WithRelay`; desktop `withRelaySetting`,
+mobile `SetRelay`). Turning it on or off rebuilds a running tunnel.
+
+Cost: one more TCP hop (the relay's own uplink caps throughput — ~60–70 Mbit/s on the
+first one), and the relay's IP serves the real domain's certificate, which an active
+prober comparing DNS with the answering address could notice.
+
+---
+
 ## 8. Configuration (`internal/config/config.go`)
 
 ```yaml

@@ -54,7 +54,7 @@ func bindSocketToInterface(s windows.Handle, ifIndex uint32) error {
 
 // pingConfig pings a config's server around the tunnel - see pingOptions.
 func pingConfig(configYAML string) (pingcheck.Result, error) {
-	return pingcheck.PingWith(configYAML, pingOptions())
+	return pingcheck.PingWith(withRelaySetting(configYAML), pingOptions())
 }
 
 // provisionProtect is the hook server setup dials with - the same physical

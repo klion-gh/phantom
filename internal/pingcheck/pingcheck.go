@@ -108,13 +108,42 @@ func PingWith(configYAML string, opts Options) (Result, error) {
 		}
 		latency := time.Since(start)
 		conn.Close()
-		return Result{IP: ips[0].String(), LatencyMs: latency.Milliseconds()}, nil
+		ip := ips[0].String()
+		if cfg.Relay != "" {
+			// What was timed is the relay path, but the tile is about the
+			// server: its IP, and the country looked up from it.
+			ip = serverIP(resolver, cfg.DirectServerList())
+		}
+		return Result{IP: ip, LatencyMs: latency.Milliseconds()}, nil
 	}
 
 	if lastErr == nil {
 		lastErr = fmt.Errorf("no endpoints configured")
 	}
 	return Result{}, lastErr
+}
+
+// serverIP resolves the first of a config's own endpoints without dialing it -
+// through a relay the server is never contacted directly, so this is only
+// where it is. "" when it doesn't resolve.
+func serverIP(resolver transport.IPLookuper, endpoints []string) string {
+	if len(endpoints) == 0 {
+		return ""
+	}
+	host, _, err := net.SplitHostPort(endpoints[0])
+	if err != nil {
+		return ""
+	}
+	if ip := net.ParseIP(host); ip != nil {
+		return ip.String()
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	ips, err := resolver.LookupIP(ctx, "ip4", host)
+	if err != nil || len(ips) == 0 {
+		return ""
+	}
+	return ips[0].String()
 }
 
 // resolverFor returns the resolver a ping should use: the system one when

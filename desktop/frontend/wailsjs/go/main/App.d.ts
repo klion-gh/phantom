@@ -31,6 +31,8 @@ export function GetBrowserBridge():Promise<string>;
 
 export function GetLanguage():Promise<string>;
 
+export function GetRelay():Promise<string>;
+
 export function GetRoutingState():Promise<string>;
 
 export function ListConfigs():Promise<string>;
@@ -68,6 +70,8 @@ export function SetBrowserBridgeEnabled(arg1:boolean):Promise<void>;
 export function SetConfigGeo(arg1:string,arg2:string,arg3:string,arg4:string):Promise<string>;
 
 export function SetLanguage(arg1:string):Promise<void>;
+
+export function SetRelay(arg1:boolean,arg2:string):Promise<string>;
 
 export function SetSmartConfigs(arg1:string):Promise<void>;
 

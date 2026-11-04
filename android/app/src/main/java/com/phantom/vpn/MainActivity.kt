@@ -36,9 +36,11 @@ import androidx.compose.foundation.pager.PagerState
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Description
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -943,6 +945,142 @@ private fun AutoConfigTile(enabled: Boolean, onToggle: (Boolean) -> Unit) {
     }
 }
 
+// "Использовать ретранслятор": every config connects through one relay while
+// it's on - see RelayStore. The gear edits the address; switching on without
+// one asks for it first.
+@Composable
+private fun RelayTile() {
+    val context = LocalContext.current
+    var editing by remember { mutableStateOf(false) }
+    val shape = RoundedCornerShape(18.dp)
+    Tile(
+        modifier = Modifier.fillMaxWidth(),
+        color = Surface,
+        shape = shape,
+        borderColor = SurfaceOutline.copy(alpha = 0.6f),
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.fillMaxWidth().padding(start = 16.dp, end = 12.dp, top = 12.dp, bottom = 12.dp),
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    I18n.t("relay"),
+                    color = TextPrimary,
+                    fontSize = 15.5.sp,
+                    fontWeight = FontWeight.SemiBold,
+                )
+                Spacer(Modifier.height(3.dp))
+                val on = RelayStore.enabled
+                Text(
+                    when {
+                        on -> RelayStore.address
+                        RelayStore.address.isNotEmpty() -> I18n.t("relay_off").replace("{address}", RelayStore.address)
+                        else -> I18n.t("relay_hint")
+                    },
+                    color = if (on) Primary else TextSecondary,
+                    fontSize = 12.5.sp,
+                    lineHeight = 17.sp,
+                    fontWeight = if (on) FontWeight.SemiBold else FontWeight.Normal,
+                    fontFamily = if (on) FontFamily.Monospace else FontFamily.Default,
+                )
+            }
+            IconButton(onClick = { editing = true }) {
+                Image(
+                    painter = painterResource(R.drawable.ic_settings_gear),
+                    contentDescription = I18n.t("relay_edit"),
+                    colorFilter = ColorFilter.tint(TextSecondary),
+                    modifier = Modifier.size(20.dp),
+                )
+            }
+            Spacer(Modifier.width(4.dp))
+            GradientSwitch(
+                checked = RelayStore.enabled,
+                onCheckedChange = { on ->
+                    if (on && RelayStore.address.isEmpty()) editing = true
+                    else RelayStore.set(context, on, RelayStore.address)
+                },
+            )
+        }
+    }
+    if (editing) {
+        RelayDialog(
+            initial = RelayStore.address,
+            onDismiss = { editing = false },
+            onSave = { addr -> RelayStore.set(context, true, addr).also { if (it) editing = false } },
+        )
+    }
+}
+
+@Composable
+private fun RelayDialog(
+    initial: String,
+    onDismiss: () -> Unit,
+    onSave: (String) -> Boolean,
+) {
+    var address by remember { mutableStateOf(initial) }
+    var bad by remember { mutableStateOf(false) }
+    val fieldColors = OutlinedTextFieldDefaults.colors(
+        focusedTextColor = TextPrimary,
+        unfocusedTextColor = TextPrimary,
+        focusedBorderColor = Primary,
+        unfocusedBorderColor = TextSecondary.copy(alpha = 0.4f),
+        cursorColor = Primary,
+    )
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        shape = RoundedCornerShape(24.dp),
+        title = { Text(I18n.t("relay_title"), fontSize = 19.sp, fontWeight = FontWeight.SemiBold) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text(I18n.t("relay_intro"), fontSize = 13.5.sp, lineHeight = 19.sp)
+                OutlinedTextField(
+                    value = address,
+                    onValueChange = { address = it; bad = false },
+                    placeholder = { Text("203.0.113.10:443", color = TextSecondary) },
+                    singleLine = true,
+                    isError = bad,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
+                    colors = fieldColors,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                if (bad) {
+                    Text(I18n.t("relay_bad_address"), color = Danger, fontSize = 12.5.sp)
+                }
+                Text(I18n.t("relay_install_hint"), fontSize = 12.5.sp)
+                SelectionContainer {
+                    Text(
+                        RELAY_INSTALL_COMMAND,
+                        color = TextPrimary,
+                        fontSize = 11.sp,
+                        lineHeight = 15.sp,
+                        fontFamily = FontFamily.Monospace,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(10.dp))
+                            .background(Surface)
+                            .padding(horizontal = 10.dp, vertical = 8.dp),
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = { if (!onSave(address)) bad = true }) {
+                Text(I18n.t("relay_save"), color = Primary)
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text(I18n.t("cancel")) }
+        },
+        containerColor = SurfaceHigh,
+        titleContentColor = TextPrimary,
+        textContentColor = TextSecondary,
+    )
+}
+
+private const val RELAY_INSTALL_COMMAND =
+    "curl -fsSL https://raw.githubusercontent.com/klion-gh/phantom/main/scripts/install-relay.sh | sh"
+
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun ConfigsPage(
@@ -1032,6 +1170,13 @@ private fun ConfigsPage(
             InactiveOverlay(inactive = smartDriving) {
                 AutoConfigTile(enabled = autoEnabled && !smartDriving, onToggle = onToggleAuto)
             }
+            Spacer(modifier = Modifier.height(14.dp))
+        }
+
+        // Not under any overlay: the relay applies to every mode alike - a
+        // config, "Выбирать лучшую" and Умный VPN all connect through it.
+        if (configs.isNotEmpty()) {
+            RelayTile()
             Spacer(modifier = Modifier.height(14.dp))
         }
 

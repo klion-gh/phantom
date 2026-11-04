@@ -62,6 +62,10 @@ export function GetLanguage() {
   return window['go']['main']['App']['GetLanguage']();
 }
 
+export function GetRelay() {
+  return window['go']['main']['App']['GetRelay']();
+}
+
 export function GetRoutingState() {
   return window['go']['main']['App']['GetRoutingState']();
 }
@@ -136,6 +140,10 @@ export function SetConfigGeo(arg1, arg2, arg3, arg4) {
 
 export function SetLanguage(arg1) {
   return window['go']['main']['App']['SetLanguage'](arg1);
+}
+
+export function SetRelay(arg1, arg2) {
+  return window['go']['main']['App']['SetRelay'](arg1, arg2);
 }
 
 export function SetSmartConfigs(arg1) {

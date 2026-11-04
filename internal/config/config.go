@@ -1,9 +1,14 @@
 package config
 
 import (
+	"bytes"
 	"encoding/hex"
 	"errors"
+	"fmt"
+	"net"
 	"os"
+	"strconv"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 )
@@ -25,6 +30,13 @@ type ClientConfig struct {
 	// third-party geo/flag service. country_code is a two-letter ISO code.
 	Country     string `yaml:"country"`
 	CountryCode string `yaml:"country_code"`
+	// Optional relay "address:port" (cmd/relay): when set, every connection
+	// goes to the relay instead of server/servers, with SNI still domain. The
+	// relay reads that SNI and passes the bytes through to the real server
+	// untouched - it holds no keys and decrypts nothing. The apps don't store
+	// it in the config: they add it on the way in (WithRelay) from their own
+	// "use a relay" setting, so one relay serves every saved config.
+	Relay string `yaml:"relay"`
 }
 
 type ServerConfig struct {
@@ -82,6 +94,16 @@ func ParseClientConfig(data []byte) (*ClientConfig, error) {
 // falling back to the single server field. All share the same domain/cert/psk;
 // they're just alternative address:port pairs for failover.
 func (c *ClientConfig) ServerList() []string {
+	if c.Relay != "" {
+		return []string{c.Relay}
+	}
+	return c.DirectServerList()
+}
+
+// DirectServerList is ServerList ignoring the relay: the server's own
+// endpoints. Through a relay they are never dialed, but they still say where
+// the server is (the IP a tile shows and looks the country up for).
+func (c *ClientConfig) DirectServerList() []string {
 	if len(c.Servers) > 0 {
 		return c.Servers
 	}
@@ -92,7 +114,7 @@ func (c *ClientConfig) ServerList() []string {
 }
 
 func (c *ClientConfig) Validate() error {
-	if len(c.ServerList()) == 0 {
+	if len(c.DirectServerList()) == 0 {
 		return errors.New("server (or servers) is required")
 	}
 	if c.Domain == "" {
@@ -104,7 +126,47 @@ func (c *ClientConfig) Validate() error {
 	if c.ServerPublicKey == "" {
 		return errors.New("server_public_key is required")
 	}
+	if c.Relay != "" {
+		if _, _, err := net.SplitHostPort(c.Relay); err != nil {
+			return fmt.Errorf("relay must be address:port: %w", err)
+		}
+	}
 	return nil
+}
+
+// WithRelay returns configYAML with its relay set to addr, or with any relay
+// removed when addr is empty. It edits the document rather than the text, so
+// the rest of the config - comments, key order, quoting - comes back as it was.
+func WithRelay(configYAML, addr string) (string, error) {
+	var doc yaml.Node
+	if err := yaml.Unmarshal([]byte(configYAML), &doc); err != nil {
+		return "", err
+	}
+	if len(doc.Content) == 0 || doc.Content[0].Kind != yaml.MappingNode {
+		return "", errors.New("config is not a mapping")
+	}
+	m := doc.Content[0]
+	for i := 0; i+1 < len(m.Content); i += 2 {
+		if m.Content[i].Value == "relay" {
+			m.Content = append(m.Content[:i], m.Content[i+2:]...)
+			break
+		}
+	}
+	if addr != "" {
+		m.Content = append(m.Content,
+			&yaml.Node{Kind: yaml.ScalarNode, Value: "relay"},
+			&yaml.Node{Kind: yaml.ScalarNode, Value: addr, Style: yaml.DoubleQuotedStyle})
+	}
+	var out bytes.Buffer
+	enc := yaml.NewEncoder(&out)
+	enc.SetIndent(2)
+	if err := enc.Encode(&doc); err != nil {
+		return "", err
+	}
+	if err := enc.Close(); err != nil {
+		return "", err
+	}
+	return out.String(), nil
 }
 
 func (c *ClientConfig) GetPSK() ([]byte, error) {
@@ -172,4 +234,30 @@ func decodeKey(hexStr string) ([]byte, error) {
 		return nil, errors.New("key must be 32 bytes (64 hex characters)")
 	}
 	return b, nil
+}
+
+// NormalizeRelayAddr turns what a user typed as a relay address into the
+// address:port WithRelay takes: surrounding space trimmed, and the relay's
+// default port 443 added when none is given. An error means it isn't an
+// address at all.
+func NormalizeRelayAddr(s string) (string, error) {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return "", errors.New("empty")
+	}
+	if strings.ContainsAny(s, " \t/") {
+		return "", errors.New("not an address")
+	}
+	host, port, err := net.SplitHostPort(s)
+	if err != nil {
+		// No port: a bare host, or a bare IPv6 address.
+		host, port = strings.Trim(s, "[]"), "443"
+	}
+	if host == "" {
+		return "", errors.New("no host")
+	}
+	if n, err := strconv.Atoi(port); err != nil || n < 1 || n > 65535 {
+		return "", fmt.Errorf("bad port %q", port)
+	}
+	return net.JoinHostPort(host, port), nil
 }
