@@ -155,3 +155,32 @@ func resolverFor(protect func(fd int) bool) transport.IPLookuper {
 	}
 	return transport.NewProtectedResolver(protect)
 }
+
+// PingRelay times a TCP connect to a relay (cmd/relay) - its IP and how long
+// the connect took. A relay holds no keys, so unlike a server there is no
+// handshake to make with it; reaching its port is what "up" means for one.
+func PingRelay(addr string, opts Options) (Result, error) {
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		return Result{}, fmt.Errorf("invalid relay address %q: %w", addr, err)
+	}
+	ip := net.ParseIP(host)
+	if ip == nil {
+		resolveCtx, resolveCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		ips, err := resolverFor(opts.ProtectFD).LookupIP(resolveCtx, "ip4", host)
+		resolveCancel()
+		if err != nil || len(ips) == 0 {
+			return Result{}, fmt.Errorf("resolve relay address %q: %w", host, err)
+		}
+		ip = ips[0]
+	}
+	d := net.Dialer{Timeout: 8 * time.Second, Control: transport.ProtectControl(opts.ProtectFD)}
+	start := time.Now()
+	conn, err := d.Dial("tcp", net.JoinHostPort(ip.String(), port))
+	if err != nil {
+		return Result{}, err
+	}
+	latency := time.Since(start)
+	conn.Close()
+	return Result{IP: ip.String(), LatencyMs: latency.Milliseconds()}, nil
+}

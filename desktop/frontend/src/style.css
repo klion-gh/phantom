@@ -1594,7 +1594,7 @@ textarea::placeholder { color: var(--text-muted); }
 /* While automatic selection is on, the config tiles below are driven by it,
    not by the user - so they are dimmed and inert rather than silently
    ignoring clicks. */
-.config-list.locked {
+#config-list.locked {
     opacity: 0.45;
     pointer-events: none;
 }
@@ -1635,18 +1635,94 @@ textarea::placeholder { color: var(--text-muted); }
 
 /* --- "Использовать ретранслятор" (Конфигурации section) ----------------------
    A setting about the user's network, so it reads as a settings row - the
-   routing tiles' look - rather than as one more server in the list. The
-   gear opens the address; the switch turns it on and off. */
+   routing tiles' look - rather than as one more server in the list. */
 .relay-tile {
     flex-shrink: 0;
     padding: 12px 14px 12px 16px;
-    gap: 6px;
+    margin-bottom: 12px;
 }
-.relay-tile .routing-tile-hint.set {
-    color: var(--primary);
+
+/* The relays and the configs each sit in one block of their own: a faint
+   panel round its tiles, so the two kinds never read as one list. */
+.tile-group {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 8px;
+    border-radius: 24px;
+    background: color-mix(in srgb, var(--surface) 45%, transparent);
+    border: 1px solid var(--surface-outline-60);
+    flex-shrink: 0;
+}
+.tile-group-list { display: flex; flex-direction: column; gap: 8px; }
+.tile-group:empty { display: none; }
+.tile-group-header {
+    display: flex;
+    align-items: center;
+    padding: 2px 4px 0 10px;
+}
+.tile-group-title {
+    flex: 1;
+    font-size: 12.5px;
     font-weight: 600;
-    font-family: "Consolas", "Cascadia Code", monospace;
+    letter-spacing: 0.6px;
+    color: var(--text-muted);
 }
+.tile-group-add { width: 30px; height: 30px; font-size: 18px; }
+.tile-group-empty {
+    font-size: 13px;
+    color: var(--text-secondary);
+    padding: 6px 10px 10px;
+}
+/* Off: the relays stay in view - what turning it on would use - but faded. */
+.tile-group.dimmed .tile-group-list { opacity: 0.5; }
+.tile-group.dimmed .relay-card.selected::before { display: none; }
+
+/* A relay is picked, not switched on: one of them at a time, so a radio dot
+   rather than each tile's own switch. */
+.relay-radio {
+    width: 26px;
+    height: 26px;
+    flex-shrink: 0;
+    border-radius: 50%;
+    border: 2px solid var(--text-muted);
+    background: transparent;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    padding: 0;
+    margin: 0 8px 0 4px;
+    transition: border-color 0.2s ease;
+}
+.relay-radio:hover { border-color: var(--text-secondary); }
+.relay-radio-dot {
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+    background: var(--brand-gradient);
+    transform: scale(0);
+    transition: transform 0.2s ease;
+}
+.relay-card.selected .relay-radio { border-color: var(--primary); }
+.relay-card.selected .relay-radio-dot { transform: scale(1); }
+/* The picked relay carries the same ring as a connected config - only while
+   relays are in use. */
+.relay-card.selected { border-color: transparent; }
+.relay-card.selected::before {
+    content: '';
+    position: absolute;
+    inset: -1px;
+    border-radius: inherit;
+    padding: 1px;
+    background: var(--brand-gradient);
+    -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+    -webkit-mask-composite: xor;
+    mask-composite: exclude;
+    pointer-events: none;
+}
+.tile-group.dimmed .relay-card.selected { border-color: var(--surface-outline-60); }
+.relay-delete { margin-right: auto; }
 .relay-dialog { max-width: 400px; }
 .relay-intro,
 .relay-hint { font-size: 13.5px; line-height: 1.5; color: var(--text-secondary); }

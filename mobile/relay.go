@@ -3,9 +3,11 @@
 package mobile
 
 import (
+	"encoding/json"
 	"sync"
 
 	"phantom/internal/config"
+	"phantom/internal/pingcheck"
 )
 
 // The app's "use a relay" setting, held here so every path into the core -
@@ -55,4 +57,21 @@ func withRelay(configYAML string) string {
 		return configYAML
 	}
 	return out
+}
+
+// PingRelay times a TCP connect to a relay, around the VPN: a JSON blob
+// {"ip":"1.2.3.4","latency_ms":12}, the same shape as Ping's.
+func PingRelay(addr string) (string, error) {
+	result, err := pingcheck.PingRelay(addr, pingOptions())
+	if err != nil {
+		return "", err
+	}
+	data, err := json.Marshal(struct {
+		IP        string `json:"ip"`
+		LatencyMs int64  `json:"latency_ms"`
+	}{IP: result.IP, LatencyMs: result.LatencyMs})
+	if err != nil {
+		return "", err
+	}
+	return string(data), nil
 }

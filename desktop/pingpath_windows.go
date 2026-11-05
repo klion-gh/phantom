@@ -57,6 +57,11 @@ func pingConfig(configYAML string) (pingcheck.Result, error) {
 	return pingcheck.PingWith(withRelaySetting(configYAML), pingOptions())
 }
 
+// pingRelay times a relay's TCP port around the tunnel - see pingOptions.
+func pingRelay(address string) (pingcheck.Result, error) {
+	return pingcheck.PingRelay(address, pingOptions())
+}
+
 // provisionProtect is the hook server setup dials with - the same physical
 // interface binding as pings, nil while no tunnel is up.
 func provisionProtect() func(fd int) bool { return pingOptions().ProtectFD }

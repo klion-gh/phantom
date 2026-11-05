@@ -47,20 +47,30 @@
               <button id="auto-toggle" class="toggle-switch"><span class="toggle-switch-thumb"></span></button>
             </div>
 
-            <!-- One relay for every config below: while it's on they all
-                 connect through it. Its own row rather than a field in each
-                 config, because it's about the network the user is on, not
-                 about any one server. -->
+            <!-- The switch alone: which relay is picked, and each relay's
+                 address, live on the relay tiles below it. -->
             <div id="relay-tile" class="routing-tile routing-tile-row relay-tile hidden">
               <div class="routing-tile-text">
                 <div class="routing-tile-title" data-i18n="relay">Использовать ретранслятор</div>
-                <div id="relay-sub" class="routing-tile-hint"></div>
+                <div class="routing-tile-hint" data-i18n="relay_hint">Подключаться ко всем конфигурациям через свой сервер-ретранслятор</div>
               </div>
-              <button id="relay-edit" class="config-edit-btn icon-btn-gear" data-i18n-title="relay_edit" title="Адрес ретранслятора"></button>
               <button id="relay-toggle" class="toggle-switch"><span class="toggle-switch-thumb"></span></button>
             </div>
 
-            <div id="config-list" class="config-list"></div>
+            <!-- Two blocks in one scroller: relays (shown once there is one,
+                 or the switch is on) and the configs. Each reads as one group,
+                 so a relay is never mistaken for one more server. -->
+            <div id="configs-scroll" class="config-list">
+              <div id="relay-group" class="tile-group hidden">
+                <div class="tile-group-header">
+                  <span class="tile-group-title" data-i18n="relays">Ретрансляторы</span>
+                  <button id="btn-add-relay" class="icon-btn tile-group-add" data-i18n-title="relay_add" title="Добавить ретранслятор">&#43;</button>
+                </div>
+                <div id="relay-list" class="tile-group-list"></div>
+                <div id="relay-empty" class="tile-group-empty hidden" data-i18n="relay_empty">Добавьте свой ретранслятор кнопкой +</div>
+              </div>
+              <div id="config-list" class="tile-group tile-group-list"></div>
+            </div>
 
             <div id="empty-state" class="empty-state hidden">
               <div class="empty-state-circle">
@@ -352,15 +362,16 @@
       <!-- Add resource overlay -->
       <div id="relay-overlay" class="overlay hidden">
         <div class="dialog relay-dialog">
-          <div class="dialog-title" data-i18n="relay_title">Ретранслятор</div>
+          <div id="relay-dialog-title" class="dialog-title" data-i18n="relay_title">Ретранслятор</div>
           <div class="relay-intro" data-i18n="relay_intro">Сервер, через который пойдут подключения ко всем конфигурациям. Ставьте его там, где ваша сеть его пропускает, — обычно в своей стране. Ключей он не знает и трафик не расшифровывает.</div>
           <input id="relay-input" class="text-input" placeholder="203.0.113.10:443" spellcheck="false" autocomplete="off" />
           <div id="relay-error" class="relay-error hidden" data-i18n="relay_bad_address">Это не похоже на адрес. Пример: 203.0.113.10:443</div>
           <div class="relay-hint" data-i18n="relay_install_hint">Установить ретранслятор на свой сервер:</div>
           <code class="relay-cmd">curl -fsSL https://raw.githubusercontent.com/klion-gh/phantom/main/scripts/install-relay.sh | sh</code>
           <div class="dialog-row">
+            <button id="btn-relay-delete" class="btn btn-danger relay-delete hidden" data-i18n="delete">Удалить</button>
             <button id="btn-relay-cancel" class="btn btn-outline" data-i18n="cancel">Отмена</button>
-            <button id="btn-relay-save" class="btn btn-primary" data-i18n="relay_save">Включить</button>
+            <button id="btn-relay-save" class="btn btn-primary" data-i18n="save">Сохранить</button>
           </div>
         </div>
       </div>

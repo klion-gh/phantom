@@ -43,6 +43,9 @@ import androidx.compose.material.icons.filled.Description
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.blur
@@ -945,80 +948,233 @@ private fun AutoConfigTile(enabled: Boolean, onToggle: (Boolean) -> Unit) {
     }
 }
 
-// "Использовать ретранслятор": every config connects through one relay while
-// it's on - see RelayStore. The gear edits the address; switching on without
-// one asks for it first.
+// "Использовать ретранслятор" and the relays it uses - see RelayStore. The
+// switch has a tile of its own; the relays below it are a block of tiles
+// like the configs', each picked with a dot (one is used at a time) and
+// edited from its own gear. Switching on with no relay asks for one first.
 @Composable
-private fun RelayTile() {
+private fun RelaysSection() {
     val context = LocalContext.current
-    var editing by remember { mutableStateOf(false) }
-    val shape = RoundedCornerShape(18.dp)
-    Tile(
-        modifier = Modifier.fillMaxWidth(),
-        color = Surface,
-        shape = shape,
-        borderColor = SurfaceOutline.copy(alpha = 0.6f),
-    ) {
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            modifier = Modifier.fillMaxWidth().padding(start = 16.dp, end = 12.dp, top = 12.dp, bottom = 12.dp),
-        ) {
-            Column(modifier = Modifier.weight(1f)) {
+    // null: closed; "" : adding a relay; an id: editing that one.
+    var dialogFor by remember { mutableStateOf<String?>(null) }
+    var enableAfterAdd by remember { mutableStateOf(false) }
+
+    RelaySwitchTile(
+        enabled = RelayStore.enabled,
+        onToggle = { on ->
+            if (on && RelayStore.relays.isEmpty()) {
+                enableAfterAdd = true
+                dialogFor = ""
+            } else {
+                RelayStore.setEnabled(context, on)
+            }
+        },
+    )
+
+    if (RelayStore.relays.isNotEmpty() || RelayStore.enabled) {
+        Spacer(modifier = Modifier.height(12.dp))
+        TileGroup {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.fillMaxWidth().padding(start = 10.dp),
+            ) {
                 Text(
-                    I18n.t("relay"),
-                    color = TextPrimary,
-                    fontSize = 15.5.sp,
-                    fontWeight = FontWeight.SemiBold,
-                )
-                Spacer(Modifier.height(3.dp))
-                val on = RelayStore.enabled
-                Text(
-                    when {
-                        on -> RelayStore.address
-                        RelayStore.address.isNotEmpty() -> I18n.t("relay_off").replace("{address}", RelayStore.address)
-                        else -> I18n.t("relay_hint")
-                    },
-                    color = if (on) Primary else TextSecondary,
+                    I18n.t("relays"),
+                    color = TextMuted,
                     fontSize = 12.5.sp,
-                    lineHeight = 17.sp,
-                    fontWeight = if (on) FontWeight.SemiBold else FontWeight.Normal,
-                    fontFamily = if (on) FontFamily.Monospace else FontFamily.Default,
+                    fontWeight = FontWeight.SemiBold,
+                    modifier = Modifier.weight(1f),
+                )
+                IconButton(onClick = { enableAfterAdd = false; dialogFor = "" }, modifier = Modifier.size(34.dp)) {
+                    Text("+", color = TextSecondary, fontSize = 20.sp)
+                }
+            }
+            if (RelayStore.relays.isEmpty()) {
+                Text(
+                    I18n.t("relay_empty"),
+                    color = TextSecondary,
+                    fontSize = 13.sp,
+                    modifier = Modifier.padding(start = 10.dp, bottom = 8.dp),
                 )
             }
-            IconButton(onClick = { editing = true }) {
-                Image(
-                    painter = painterResource(R.drawable.ic_settings_gear),
-                    contentDescription = I18n.t("relay_edit"),
-                    colorFilter = ColorFilter.tint(TextSecondary),
-                    modifier = Modifier.size(20.dp),
-                )
+            // Off: the relays stay in view - what turning it on would use - but faded.
+            Column(
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+                modifier = Modifier.alpha(if (RelayStore.enabled) 1f else 0.5f),
+            ) {
+                RelayStore.relays.forEach { relay ->
+                    RelayCard(
+                        relay = relay,
+                        selected = relay.id == RelayStore.selectedId,
+                        active = RelayStore.enabled,
+                        onSelect = { RelayStore.select(context, relay.id) },
+                        onEdit = { dialogFor = relay.id },
+                    )
+                }
             }
-            Spacer(Modifier.width(4.dp))
-            GradientSwitch(
-                checked = RelayStore.enabled,
-                onCheckedChange = { on ->
-                    if (on && RelayStore.address.isEmpty()) editing = true
-                    else RelayStore.set(context, on, RelayStore.address)
-                },
-            )
         }
     }
-    if (editing) {
+
+    val editing = dialogFor
+    if (editing != null) {
+        val relay = RelayStore.relays.firstOrNull { it.id == editing }
         RelayDialog(
-            initial = RelayStore.address,
-            onDismiss = { editing = false },
-            onSave = { addr -> RelayStore.set(context, true, addr).also { if (it) editing = false } },
+            relay = relay,
+            onDismiss = { dialogFor = null; enableAfterAdd = false },
+            onSave = { addr ->
+                val ok = if (relay != null) RelayStore.update(context, relay.id, addr) else RelayStore.add(context, addr)
+                if (ok) {
+                    if (relay == null && enableAfterAdd) RelayStore.setEnabled(context, true)
+                    enableAfterAdd = false
+                    dialogFor = null
+                }
+                ok
+            },
+            onDelete = { RelayStore.delete(context, editing); dialogFor = null },
         )
     }
 }
 
 @Composable
+private fun RelaySwitchTile(enabled: Boolean, onToggle: (Boolean) -> Unit) {
+    Tile(
+        modifier = Modifier.fillMaxWidth(),
+        color = Surface,
+        shape = RoundedCornerShape(18.dp),
+        borderColor = SurfaceOutline.copy(alpha = 0.6f),
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 14.dp),
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(I18n.t("relay"), color = TextPrimary, fontSize = 15.5.sp, fontWeight = FontWeight.SemiBold)
+                Spacer(Modifier.height(3.dp))
+                Text(I18n.t("relay_hint"), color = TextSecondary, fontSize = 12.5.sp, lineHeight = 17.sp)
+            }
+            Spacer(Modifier.width(12.dp))
+            GradientSwitch(checked = enabled, onCheckedChange = onToggle)
+        }
+    }
+}
+
+/** A block of tiles - the relays, or the configs - on a faint panel of its
+ * own, so the two kinds never read as one list. */
+@Composable
+private fun TileGroup(modifier: Modifier = Modifier, content: @Composable ColumnScope.() -> Unit) {
+    val shape = RoundedCornerShape(24.dp)
+    Column(
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+        modifier = modifier
+            .fillMaxWidth()
+            .clip(shape)
+            .background(Surface.copy(alpha = 0.45f))
+            .border(1.dp, SurfaceOutline.copy(alpha = 0.6f), shape)
+            .padding(8.dp),
+        content = content,
+    )
+}
+
+// A relay's tile: laid out like a config's - address, IP, ping, country - with
+// a dot in place of the switch, since a relay is picked rather than switched on.
+@Composable
+private fun RelayCard(
+    relay: SavedRelay,
+    selected: Boolean,
+    active: Boolean,
+    onSelect: () -> Unit,
+    onEdit: () -> Unit,
+) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val info = RelayPings[relay.id]
+    val checking = RelayPings.isChecking(relay.id)
+    val idle = SurfaceOutline.copy(alpha = 0.6f)
+    Tile(
+        modifier = Modifier.fillMaxWidth(),
+        color = Surface,
+        shape = RoundedCornerShape(18.dp),
+        borderBrush = if (selected && active) Brush.linearGradient(BrandGradient) else Brush.linearGradient(listOf(idle, idle)),
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 12.dp),
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    relay.address,
+                    color = TextPrimary,
+                    fontSize = 16.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Spacer(Modifier.height(2.dp))
+                Text(
+                    info?.ip ?: relay.ip ?: "—",
+                    color = TextSecondary,
+                    fontSize = 13.sp,
+                    fontFamily = FontFamily.Monospace,
+                )
+                Spacer(Modifier.height(4.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    PingPill(
+                        label = pingLabel(info, checking),
+                        tone = relayPingTone(info, checking),
+                        checking = checking,
+                    ) { scope.launch { RelayPings.check(context, relay) } }
+                    val country = relay.country ?: relay.countryCode
+                    if (!country.isNullOrBlank()) {
+                        val flag = relay.countryCode?.let { countryCodeToFlag(it) }.orEmpty()
+                        Spacer(Modifier.width(8.dp))
+                        Text(if (flag.isNotEmpty()) "$flag $country" else country, color = TextSecondary, fontSize = 13.sp)
+                    }
+                }
+            }
+            Spacer(Modifier.width(4.dp))
+            IconButton(onClick = onEdit) {
+                Image(
+                    painter = painterResource(R.drawable.ic_settings_gear),
+                    contentDescription = I18n.t("edit"),
+                    colorFilter = ColorFilter.tint(TextSecondary),
+                    modifier = Modifier.size(20.dp),
+                )
+            }
+            RadioDot(selected = selected, onClick = onSelect)
+        }
+    }
+}
+
+@Composable
+private fun RadioDot(selected: Boolean, onClick: () -> Unit) {
+    Box(
+        contentAlignment = Alignment.Center,
+        modifier = Modifier
+            .padding(start = 4.dp, end = 6.dp)
+            .size(26.dp)
+            .clip(CircleShape)
+            .border(2.dp, if (selected) Primary else TextMuted, CircleShape)
+            .clickable(role = Role.RadioButton, onClickLabel = I18n.t("relay_pick"), onClick = onClick),
+    ) {
+        if (selected) {
+            Box(
+                Modifier
+                    .size(12.dp)
+                    .clip(CircleShape)
+                    .background(Brush.linearGradient(BrandGradient)),
+            )
+        }
+    }
+}
+
+@Composable
 private fun RelayDialog(
-    initial: String,
+    relay: SavedRelay?,
     onDismiss: () -> Unit,
     onSave: (String) -> Boolean,
+    onDelete: () -> Unit,
 ) {
-    var address by remember { mutableStateOf(initial) }
+    var address by remember { mutableStateOf(relay?.address.orEmpty()) }
     var bad by remember { mutableStateOf(false) }
     val fieldColors = OutlinedTextFieldDefaults.colors(
         focusedTextColor = TextPrimary,
@@ -1030,7 +1186,13 @@ private fun RelayDialog(
     AlertDialog(
         onDismissRequest = onDismiss,
         shape = RoundedCornerShape(24.dp),
-        title = { Text(I18n.t("relay_title"), fontSize = 19.sp, fontWeight = FontWeight.SemiBold) },
+        title = {
+            Text(
+                I18n.t(if (relay != null) "relay_title" else "relay_new"),
+                fontSize = 19.sp,
+                fontWeight = FontWeight.SemiBold,
+            )
+        },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 Text(I18n.t("relay_intro"), fontSize = 13.5.sp, lineHeight = 19.sp)
@@ -1062,11 +1224,16 @@ private fun RelayDialog(
                             .padding(horizontal = 10.dp, vertical = 8.dp),
                     )
                 }
+                if (relay != null) {
+                    TextButton(onClick = onDelete, contentPadding = PaddingValues(0.dp)) {
+                        Text(I18n.t("delete"), color = Danger)
+                    }
+                }
             }
         },
         confirmButton = {
             TextButton(onClick = { if (!onSave(address)) bad = true }) {
-                Text(I18n.t("relay_save"), color = Primary)
+                Text(I18n.t("save"), color = Primary)
             }
         },
         dismissButton = {
@@ -1176,8 +1343,8 @@ private fun ConfigsPage(
         // Not under any overlay: the relay applies to every mode alike - a
         // config, "Выбирать лучшую" and Умный VPN all connect through it.
         if (configs.isNotEmpty()) {
-            RelayTile()
-            Spacer(modifier = Modifier.height(14.dp))
+            RelaysSection()
+            Spacer(modifier = Modifier.height(12.dp))
         }
 
         if (configs.isNotEmpty()) {
@@ -1193,12 +1360,13 @@ private fun ConfigsPage(
             // this overlay (see the + button in the header above).
             InactiveOverlay(
                 inactive = autoEnabled || RoutingStore.smartEnabled,
-                modifier = Modifier.weight(1f),
+                modifier = Modifier.weight(1f, fill = false),
             ) {
+                TileGroup {
                 LazyColumn(
                     state = listState,
-                    modifier = Modifier.fillMaxSize(),
-                    verticalArrangement = Arrangement.spacedBy(14.dp),
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
                     items(configs, key = { it.id }) { config ->
                         val cardStatus = when {
@@ -1252,6 +1420,7 @@ private fun ConfigsPage(
                                 },
                         )
                     }
+                }
                 }
             }
 

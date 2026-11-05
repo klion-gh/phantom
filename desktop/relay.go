@@ -6,57 +6,109 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
+
+	"github.com/google/uuid"
 
 	"phantom/internal/config"
 )
 
-// The "use a relay" setting on the configs screen: one relay (cmd/relay) that
-// every saved config connects through while it's on. It is the app's setting,
-// not part of any config - the configs stay exactly as imported, and the relay
-// is added to each on its way to the core (withRelaySetting).
-const (
-	relayEnabledFileName = "relay_enabled"
-	relayAddressFileName = "relay_address"
-)
+// Relays (cmd/relay) on the configs screen: a list of them, one picked, and
+// a "use a relay" switch. While it's on, every saved config connects through
+// the picked relay. That's the app's setting, not part of any config - the
+// configs stay exactly as imported, and the relay is added to each on its way
+// to the core (withRelaySetting).
 
-func loadRelay() (enabled bool, address string) {
-	enabled = loadSetting(relayEnabledFileName, "0", "1", "0") == "1"
-	dir, err := configDir()
-	if err != nil {
-		return enabled, ""
-	}
-	data, err := os.ReadFile(filepath.Join(dir, relayAddressFileName))
-	if err != nil {
-		return enabled, ""
-	}
-	address, err = config.NormalizeRelayAddr(string(data))
-	if err != nil {
-		return enabled, ""
-	}
-	return enabled, address
+// SavedRelay is one relay in the list. IP/country are what its tile shows,
+// cached the same way a config's are.
+type SavedRelay struct {
+	ID          string `json:"id"`
+	Address     string `json:"address"`
+	IP          string `json:"ip,omitempty"`
+	Country     string `json:"country,omitempty"`
+	CountryCode string `json:"countryCode,omitempty"`
 }
 
-func saveRelay(enabled bool, address string) {
-	value := "0"
-	if enabled {
-		value = "1"
+type relaySettings struct {
+	Enabled  bool         `json:"enabled"`
+	Selected string       `json:"selected"`
+	Relays   []SavedRelay `json:"relays"`
+}
+
+const (
+	relaysFileName = "relays.json"
+	// 2.5.0-beta.3 kept a single relay in these two files.
+	legacyRelayEnabledFileName = "relay_enabled"
+	legacyRelayAddressFileName = "relay_address"
+)
+
+var relayMu sync.Mutex
+
+func loadRelays() relaySettings {
+	relayMu.Lock()
+	defer relayMu.Unlock()
+	return loadRelaysLocked()
+}
+
+func loadRelaysLocked() relaySettings {
+	var s relaySettings
+	dir, err := configDir()
+	if err != nil {
+		return s
 	}
-	saveSetting(relayEnabledFileName, value, "0", "1", "0")
-	if dir, err := configDir(); err == nil {
-		_ = os.WriteFile(filepath.Join(dir, relayAddressFileName), []byte(address), 0600)
+	data, err := os.ReadFile(filepath.Join(dir, relaysFileName))
+	if err == nil {
+		_ = json.Unmarshal(data, &s)
+		return s
 	}
+	// The single relay of 2.5.0-beta.3 becomes the first in the list.
+	if old, err := os.ReadFile(filepath.Join(dir, legacyRelayAddressFileName)); err == nil {
+		if addr, err := config.NormalizeRelayAddr(string(old)); err == nil {
+			r := SavedRelay{ID: uuid.NewString(), Address: addr}
+			s.Relays = []SavedRelay{r}
+			s.Selected = r.ID
+			s.Enabled = loadSetting(legacyRelayEnabledFileName, "0", "1", "0") == "1"
+			_ = saveRelaysLocked(s)
+		}
+	}
+	return s
+}
+
+func saveRelaysLocked(s relaySettings) error {
+	dir, err := configDir()
+	if err != nil {
+		return err
+	}
+	data, err := json.MarshalIndent(s, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(filepath.Join(dir, relaysFileName), data, 0600)
+}
+
+// activeAddress is the relay connections go through: the picked one while
+// the switch is on, "" otherwise.
+func (s relaySettings) activeAddress() string {
+	if !s.Enabled {
+		return ""
+	}
+	for _, r := range s.Relays {
+		if r.ID == s.Selected {
+			return r.Address
+		}
+	}
+	return ""
 }
 
 // withRelaySetting returns configYAML as the core should get it: with the
-// relay added while the setting is on, otherwise unchanged. A config the
-// relay can't be added to goes through as it is - connecting directly beats
-// not connecting.
+// active relay added, otherwise unchanged. A config the relay can't be added
+// to goes through as it is - connecting directly beats not connecting.
 func withRelaySetting(configYAML string) string {
-	enabled, address := loadRelay()
-	if !enabled || address == "" {
+	addr := loadRelays().activeAddress()
+	if addr == "" {
 		return configYAML
 	}
-	out, err := config.WithRelay(configYAML, address)
+	out, err := config.WithRelay(configYAML, addr)
 	if err != nil {
 		log.Printf("[relay] could not add the relay to a config, connecting directly: %v", err)
 		return configYAML
@@ -64,36 +116,24 @@ func withRelaySetting(configYAML string) string {
 	return out
 }
 
-// GetRelay returns the relay setting as {"enabled":bool,"address":string}.
-func (a *App) GetRelay() string {
-	enabled, address := loadRelay()
-	data, _ := json.Marshal(struct {
-		Enabled bool   `json:"enabled"`
-		Address string `json:"address"`
-	}{enabled, address})
-	return string(data)
-}
-
-// SetRelay saves the relay setting and, when a tunnel is up, rebuilds it so
-// the change applies at once. Returns "" or "bad_address" (an i18n key) when
-// address can't be one; turning the relay off never needs a valid address.
-func (a *App) SetRelay(enabled bool, address string) string {
-	normalized := ""
-	if strings.TrimSpace(address) != "" {
-		var err error
-		if normalized, err = config.NormalizeRelayAddr(address); err != nil {
-			return "bad_address"
-		}
+// updateRelays applies change under the lock, saves, and - when that moved
+// the active relay - rebuilds a running tunnel so the change applies at once.
+func (a *App) updateRelays(change func(*relaySettings) string) string {
+	relayMu.Lock()
+	s := loadRelaysLocked()
+	before := s.activeAddress()
+	if msg := change(&s); msg != "" {
+		relayMu.Unlock()
+		return msg
 	}
-	if enabled && normalized == "" {
-		return "bad_address"
+	err := saveRelaysLocked(s)
+	after := s.activeAddress()
+	relayMu.Unlock()
+	if err != nil {
+		return err.Error()
 	}
-	oldEnabled, oldAddress := loadRelay()
-	saveRelay(enabled, normalized)
-	diag(diagCatVPN, "setRelay", "enabled", enabled)
-
-	changed := oldEnabled != enabled || (enabled && oldAddress != normalized)
-	if changed {
+	if before != after {
+		diag(diagCatVPN, "relayChanged", "active", after != "")
 		go func() {
 			if msg := a.ReconnectActive(); msg != "" {
 				log.Printf("[relay] reconnect after the relay changed: %s", msg)
@@ -101,4 +141,128 @@ func (a *App) SetRelay(enabled bool, address string) string {
 		}()
 	}
 	return ""
+}
+
+// GetRelays returns {"enabled","selected","relays":[...]}.
+func (a *App) GetRelays() string {
+	s := loadRelays()
+	if s.Relays == nil {
+		s.Relays = []SavedRelay{}
+	}
+	data, _ := json.Marshal(s)
+	return string(data)
+}
+
+// SetRelayEnabled turns "use a relay" on or off. Returns "" or an error.
+func (a *App) SetRelayEnabled(enabled bool) string {
+	return a.updateRelays(func(s *relaySettings) string {
+		s.Enabled = enabled
+		return ""
+	})
+}
+
+// SelectRelay picks the relay connections go through.
+func (a *App) SelectRelay(id string) string {
+	return a.updateRelays(func(s *relaySettings) string {
+		for _, r := range s.Relays {
+			if r.ID == id {
+				s.Selected = id
+				return ""
+			}
+		}
+		return "not_found"
+	})
+}
+
+// AddRelay adds a relay - picked straight away when it's the first - and
+// returns its id, or "error:bad_address".
+func (a *App) AddRelay(address string) string {
+	addr, err := config.NormalizeRelayAddr(address)
+	if err != nil {
+		return "error:bad_address"
+	}
+	id := uuid.NewString()
+	if msg := a.updateRelays(func(s *relaySettings) string {
+		s.Relays = append(s.Relays, SavedRelay{ID: id, Address: addr})
+		if s.Selected == "" || len(s.Relays) == 1 {
+			s.Selected = id
+		}
+		return ""
+	}); msg != "" {
+		return "error:" + msg
+	}
+	return id
+}
+
+// UpdateRelay changes a relay's address. Returns "" or "bad_address".
+func (a *App) UpdateRelay(id, address string) string {
+	addr, err := config.NormalizeRelayAddr(address)
+	if err != nil {
+		return "bad_address"
+	}
+	return a.updateRelays(func(s *relaySettings) string {
+		for i := range s.Relays {
+			if s.Relays[i].ID == id {
+				if s.Relays[i].Address != addr {
+					// A different relay: what was cached about the old one is not about it.
+					s.Relays[i] = SavedRelay{ID: id, Address: addr}
+				}
+				return ""
+			}
+		}
+		return "not_found"
+	})
+}
+
+// DeleteRelay removes a relay. Deleting the picked one picks the first left.
+func (a *App) DeleteRelay(id string) string {
+	return a.updateRelays(func(s *relaySettings) string {
+		kept := s.Relays[:0]
+		for _, r := range s.Relays {
+			if r.ID != id {
+				kept = append(kept, r)
+			}
+		}
+		s.Relays = kept
+		if s.Selected == id {
+			s.Selected = ""
+			if len(kept) > 0 {
+				s.Selected = kept[0].ID
+			}
+		}
+		return ""
+	})
+}
+
+// SetRelayGeo caches a relay's IP and country for its tile.
+func (a *App) SetRelayGeo(id, ip, country, countryCode string) string {
+	relayMu.Lock()
+	defer relayMu.Unlock()
+	s := loadRelaysLocked()
+	for i := range s.Relays {
+		if s.Relays[i].ID == id {
+			s.Relays[i].IP = strings.TrimSpace(ip)
+			s.Relays[i].Country = country
+			s.Relays[i].CountryCode = countryCode
+			if err := saveRelaysLocked(s); err != nil {
+				return err.Error()
+			}
+			return ""
+		}
+	}
+	return "not_found"
+}
+
+// PingRelay times a TCP connect to a relay, around the tunnel:
+// {"ip":...,"latency_ms":...}, or "{}" when it doesn't answer.
+func (a *App) PingRelay(address string) string {
+	result, err := pingRelay(address)
+	if err != nil {
+		return "{}"
+	}
+	data, _ := json.Marshal(struct {
+		IP        string `json:"ip"`
+		LatencyMs int64  `json:"latency_ms"`
+	}{result.IP, result.LatencyMs})
+	return string(data)
 }

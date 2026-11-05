@@ -85,6 +85,30 @@ fun pingLabel(info: PingInfo?, checking: Boolean): String = when {
     else -> "${I18n.t("ping")}: —"
 }
 
+/** The ping pill a config or relay tile shows: tap to measure, neutral until
+ * a result is in, then tinted by [tone]. */
+@Composable
+fun PingPill(label: String, tone: Color?, checking: Boolean, onClick: () -> Unit) {
+    val pillShape = RoundedCornerShape(50)
+    Text(
+        text = label,
+        color = tone ?: if (checking) TextMuted else TextSecondary,
+        fontSize = 12.5.sp,
+        fontWeight = FontWeight.Medium,
+        modifier = Modifier
+            .clip(pillShape)
+            .background((tone ?: SurfaceHigh).copy(alpha = if (tone != null) 0.16f else 1f))
+            .border(1.dp, (tone ?: SurfaceOutline).copy(alpha = if (tone != null) 0.45f else 1f), pillShape)
+            .clickable(
+                enabled = !checking,
+                onClickLabel = I18n.t("check_ping"),
+                role = Role.Button,
+                onClick = onClick,
+            )
+            .padding(horizontal = 10.dp, vertical = 3.dp),
+    )
+}
+
 /**
  * Reads a top-level `key: value` line out of a raw client.yaml string. No YAML dependency
  * is pulled in for this - the app never needs to touch anything but a couple of scalar
@@ -204,24 +228,11 @@ fun ConfigInfoCard(
                 // neutral until a result is in, then takes the result's colour
                 // (pingTone): green, amber, or red for slow or no answer.
                 Spacer(modifier = Modifier.height(2.dp))
-                val tone = pingTone(info, checking)
-                val pillShape = RoundedCornerShape(50)
-                Text(
-                    text = pingLabel(info, checking),
-                    color = tone ?: if (checking) TextMuted else TextSecondary,
-                    fontSize = 12.5.sp,
-                    fontWeight = FontWeight.Medium,
-                    modifier = Modifier
-                        .clip(pillShape)
-                        .background((tone ?: SurfaceHigh).copy(alpha = if (tone != null) 0.16f else 1f))
-                        .border(1.dp, (tone ?: SurfaceOutline).copy(alpha = if (tone != null) 0.45f else 1f), pillShape)
-                        .clickable(
-                            enabled = !checking,
-                            onClickLabel = I18n.t("check_ping"),
-                            role = Role.Button,
-                        ) { scope.launch { PingStore.check(config) } }
-                        .padding(horizontal = 10.dp, vertical = 3.dp),
-                )
+                PingPill(
+                    label = pingLabel(info, checking),
+                    tone = pingTone(info, checking),
+                    checking = checking,
+                ) { scope.launch { PingStore.check(config) } }
                 Spacer(modifier = Modifier.height(2.dp))
                 val countryLabel = config.country ?: config.countryCode
                 if (!countryLabel.isNullOrBlank()) {

@@ -8,7 +8,7 @@ import './style.css';
 // install ever shows, so the app's own footprint grows by the whole set
 // (~2.4MB) once, not per flag shown.
 import 'flag-icons/css/flag-icons.min.css';
-import { Connect, Disconnect, Status, ReadLog, ListConfigs, AddConfig, UpdateConfig, DeleteConfig, SetConfigGeo, ClearConfigCountry, Ping, ListResources, AddResource, DeleteResource, ApplyUpdate, GetLanguage, SetLanguage, Version, LookupCountry, GetAppearance, SetAppearance, GetBetaUpdates, SetBetaUpdates, ReadFullLog, GetRoutingState, SetSmartEnabled, SetSmartSites, SetSmartConfigs, SetAutoEnabled, SetAutoConfigs, GetRelay, SetRelay, ReconnectActive, RoutingHealth, PopularResources, GetBrowserBridge, SetBrowserBridgeEnabled, RevokeBrowserClients, AnswerBrowserPairing, ProvisionServer, CancelProvision, ForgetServerKey } from '../wailsjs/go/main/App';
+import { Connect, Disconnect, Status, ReadLog, ListConfigs, AddConfig, UpdateConfig, DeleteConfig, SetConfigGeo, ClearConfigCountry, Ping, ListResources, AddResource, DeleteResource, ApplyUpdate, GetLanguage, SetLanguage, Version, LookupCountry, GetAppearance, SetAppearance, GetBetaUpdates, SetBetaUpdates, ReadFullLog, GetRoutingState, SetSmartEnabled, SetSmartSites, SetSmartConfigs, SetAutoEnabled, SetAutoConfigs, GetRelays, SetRelayEnabled, SelectRelay, AddRelay, UpdateRelay, DeleteRelay, SetRelayGeo, PingRelay, ReconnectActive, RoutingHealth, PopularResources, GetBrowserBridge, SetBrowserBridgeEnabled, RevokeBrowserClients, AnswerBrowserPairing, ProvisionServer, CancelProvision, ForgetServerKey } from '../wailsjs/go/main/App';
 import { t, getLang, setLang, applyStaticTranslations } from './i18n.js';
 import { BACKGROUNDS, initBackground, initMiniBackground } from './background.js';
 import { PALETTES } from './palettes.js';
@@ -95,8 +95,12 @@ const pingsInFlight = new Set(); // ids with a check running, so a second click 
 let resources = [];
 const resourceTimers = new Map(); // id -> interval handle
 
-// The relay setting - see "Использовать ретранслятор" below.
-let relayState = { enabled: false, address: '' };
+// The relays - see "Использовать ретранслятор" below.
+let relayState = { enabled: false, selected: '', relays: [] };
+const relayPing = new Map(); // relay id -> { ip, latencyMs, failed }, like pingData
+const relayPingsInFlight = new Set();
+let editingRelayId = null; // the relay the dialog edits; null adds one
+let enableAfterAdd = false; // the switch was turned on with no relay to use yet
 const relayOverlay = document.getElementById('relay-overlay');
 const relayInput = document.getElementById('relay-input');
 const relayError = document.getElementById('relay-error');
@@ -1152,7 +1156,7 @@ setInterval(refreshStatus, 4000);
   }
   document.getElementById('beta-updates-toggle').classList.toggle('active', betaUpdates);
   try {
-    relayState = JSON.parse(await GetRelay());
+    relayState = JSON.parse(await GetRelays());
   } catch (e) {
     // off stays if the Go call fails
   }
@@ -1515,55 +1519,207 @@ document.getElementById('auto-toggle').addEventListener('click', async () => {
 });
 
 // --- "Использовать ретранслятор" -----------------------------------------
-// One relay every config connects through while it's on (desktop/relay.go).
-// The address is kept when it's switched off, so turning it back on is one
-// click; the gear is where it's changed.
+// Relays (desktop/relay.go) are a block of their own above the configs: each
+// a tile like a config's - address, IP, ping, country - picked with a dot,
+// since only one is used at a time, and edited from its own gear. The switch
+// above them says whether they're used at all.
+
+const relayList = document.getElementById('relay-list');
+
+// What a relay ping is: one TCP connect, no handshake - so a healthy one
+// reads far lower than a server's.
+const RELAY_PING_GOOD_MS = 150;
+const RELAY_PING_SLOW_MS = 400;
+
+function relayPingTone(id) {
+  if (relayPingsInFlight.has(id)) return '';
+  const info = relayPing.get(id) || {};
+  if (info.failed) return 'bad';
+  if (info.latencyMs == null) return '';
+  if (info.latencyMs <= RELAY_PING_GOOD_MS) return 'good';
+  return info.latencyMs <= RELAY_PING_SLOW_MS ? 'slow' : 'bad';
+}
+
+function relayPingLabel(id) {
+  if (relayPingsInFlight.has(id)) return `${t('ping')}: …`;
+  const info = relayPing.get(id) || {};
+  if (info.latencyMs != null) return `${t('ping')}: ${info.latencyMs} ${t('ms')}`;
+  return info.failed ? `${t('ping')}: ${t('no_answer')}` : `${t('ping')}: —`;
+}
 
 function renderRelay() {
+  const any = relayState.relays.length > 0;
   document.getElementById('relay-tile').classList.toggle('hidden', configs.length === 0);
   document.getElementById('relay-toggle').classList.toggle('active', relayState.enabled);
-  const sub = document.getElementById('relay-sub');
-  sub.classList.toggle('set', relayState.enabled);
-  sub.textContent = relayState.enabled
-    ? relayState.address
-    : relayState.address ? t('relay_off', { address: relayState.address }) : t('relay_hint');
+
+  const group = document.getElementById('relay-group');
+  group.classList.toggle('hidden', configs.length === 0 || (!any && !relayState.enabled));
+  group.classList.toggle('dimmed', !relayState.enabled);
+  document.getElementById('relay-empty').classList.toggle('hidden', any);
+
+  for (const id of [...relayPing.keys()]) {
+    if (!relayState.relays.some((r) => r.id === id)) relayPing.delete(id);
+  }
+  relayList.innerHTML = '';
+  for (const relay of relayState.relays) {
+    const card = document.createElement('div');
+    card.className = 'config-card relay-card';
+    card.dataset.id = relay.id;
+    card.innerHTML = `
+      <div class="config-info">
+        <div class="config-domain">${escapeHtml(relay.address)}</div>
+        <div class="config-ip"></div>
+        <div class="config-meta">
+          <button type="button" class="ping-btn" title="${t('check_ping')}">${t('ping')}: —</button>
+          <span class="geo-flag fi hidden"></span>
+          <span class="geo-text"></span>
+        </div>
+      </div>
+      <button class="config-edit-btn icon-btn-gear" title="${t('edit')}"></button>
+      <button class="relay-radio" title="${t('relay_pick')}"><span class="relay-radio-dot"></span></button>
+    `;
+    card.querySelector('.config-edit-btn').addEventListener('click', () => openRelayDialog(relay));
+    card.querySelector('.relay-radio').addEventListener('click', () => pickRelay(relay.id));
+    card.querySelector('.ping-btn').addEventListener('click', () => pingRelayNow(relay));
+    relayList.appendChild(card);
+    updateRelayMeta(relay.id);
+  }
 }
 
-async function applyRelay(enabled, address) {
-  const err = await SetRelay(enabled, address);
-  if (err) return err;
-  relayState = JSON.parse(await GetRelay());
-  // Every ping so far measured the other path; a stale number next to the
-  // new setting would read as a measurement of it.
+function updateRelayMeta(id) {
+  const card = relayList.querySelector(`[data-id="${id}"]`);
+  const relay = relayState.relays.find((r) => r.id === id);
+  if (!card || !relay) return;
+  card.classList.toggle('selected', relayState.selected === id);
+
+  const info = relayPing.get(id) || {};
+  card.querySelector('.config-ip').textContent = info.ip || relay.ip || '—';
+  const pingBtn = card.querySelector('.ping-btn');
+  pingBtn.textContent = relayPingLabel(id);
+  pingBtn.disabled = relayPingsInFlight.has(id);
+  pingBtn.classList.remove('tone-good', 'tone-slow', 'tone-bad');
+  const tone = relayPingTone(id);
+  if (tone) pingBtn.classList.add(`tone-${tone}`);
+
+  card.querySelector('.geo-text').textContent = relay.country || relay.countryCode || '';
+  const flagEl = card.querySelector('.geo-flag');
+  const code = /^[A-Za-z]{2}$/.test(relay.countryCode || '') ? relay.countryCode.toLowerCase() : '';
+  for (const cls of [...flagEl.classList]) {
+    if (cls.startsWith('fi-')) flagEl.classList.remove(cls);
+  }
+  flagEl.classList.toggle('hidden', !code);
+  if (code) flagEl.classList.add(`fi-${code}`);
+}
+
+async function reloadRelays() {
+  relayState = JSON.parse(await GetRelays());
+  renderRelay();
+}
+
+// Whenever the path every config uses changes, their pings measured another
+// one; a stale number next to the new setting would read as a measurement of it.
+function forgetConfigPings() {
   pingData.clear();
   renderConfigList();
-  renderRelay();
-  return '';
 }
 
-function openRelayDialog() {
-  relayInput.value = relayState.address;
+async function pickRelay(id) {
+  if (relayState.selected === id) return;
+  await SelectRelay(id);
+  await reloadRelays();
+  if (relayState.enabled) forgetConfigPings();
+}
+
+// A relay's ping also tells where it is: its IP, and from that once, its
+// country (cached on the relay the same way a config's is).
+async function pingRelayNow(relay) {
+  if (relayPingsInFlight.has(relay.id)) return;
+  relayPingsInFlight.add(relay.id);
+  updateRelayMeta(relay.id);
+  const prev = relayPing.get(relay.id) || {};
+  let ip = '';
+  try {
+    const json = JSON.parse(await PingRelay(relay.address));
+    ip = json.ip || '';
+    relayPing.set(relay.id, ip ? { ip, latencyMs: json.latency_ms, failed: false } : { ...prev, latencyMs: null, failed: true });
+  } catch (e) {
+    relayPing.set(relay.id, { ...prev, latencyMs: null, failed: true });
+  } finally {
+    relayPingsInFlight.delete(relay.id);
+  }
+  updateRelayMeta(relay.id);
+  if (ip && (ip !== relay.ip || !relay.countryCode)) {
+    try {
+      const raw = await LookupCountry(ip);
+      const geo = raw ? JSON.parse(raw) : {};
+      await SetRelayGeo(relay.id, ip, geo.country || '', geo.country_code || '');
+      await reloadRelays();
+    } catch (e) {
+      console.error(e);
+    }
+  }
+}
+
+function openRelayDialog(relay) {
+  editingRelayId = relay ? relay.id : null;
+  document.getElementById('relay-dialog-title').textContent = t(relay ? 'relay_title' : 'relay_new');
+  document.getElementById('btn-relay-delete').classList.toggle('hidden', !relay);
+  relayInput.value = relay ? relay.address : '';
   relayError.classList.add('hidden');
   showOverlay(relayOverlay);
   setTimeout(() => relayInput.focus(), 50);
 }
 
 document.getElementById('relay-toggle').addEventListener('click', async () => {
-  if (!relayState.enabled && !relayState.address) {
-    openRelayDialog();
+  if (!relayState.enabled && relayState.relays.length === 0) {
+    enableAfterAdd = true;
+    openRelayDialog(null);
     return;
   }
-  await applyRelay(!relayState.enabled, relayState.address);
+  await SetRelayEnabled(!relayState.enabled);
+  await reloadRelays();
+  forgetConfigPings();
 });
-document.getElementById('relay-edit').addEventListener('click', openRelayDialog);
-document.getElementById('btn-relay-cancel').addEventListener('click', () => hideOverlay(relayOverlay));
+document.getElementById('btn-add-relay').addEventListener('click', () => {
+  enableAfterAdd = false;
+  openRelayDialog(null);
+});
+document.getElementById('btn-relay-cancel').addEventListener('click', () => {
+  enableAfterAdd = false;
+  hideOverlay(relayOverlay);
+});
+document.getElementById('btn-relay-delete').addEventListener('click', async () => {
+  if (!editingRelayId) return;
+  const wasActive = relayState.enabled && relayState.selected === editingRelayId;
+  await DeleteRelay(editingRelayId);
+  hideOverlay(relayOverlay);
+  await reloadRelays();
+  if (wasActive) forgetConfigPings();
+});
+
 async function saveRelayFromDialog() {
-  const err = await applyRelay(true, relayInput.value);
-  if (err) {
-    relayError.classList.remove('hidden');
-    return;
+  if (editingRelayId) {
+    const wasActive = relayState.enabled && relayState.selected === editingRelayId;
+    if (await UpdateRelay(editingRelayId, relayInput.value)) {
+      relayError.classList.remove('hidden');
+      return;
+    }
+    relayPing.delete(editingRelayId);
+    if (wasActive) forgetConfigPings();
+  } else {
+    const id = await AddRelay(relayInput.value);
+    if (id.startsWith('error:')) {
+      relayError.classList.remove('hidden');
+      return;
+    }
+    if (enableAfterAdd) {
+      await SetRelayEnabled(true);
+      forgetConfigPings();
+    }
+    enableAfterAdd = false;
   }
   hideOverlay(relayOverlay);
+  await reloadRelays();
 }
 document.getElementById('btn-relay-save').addEventListener('click', saveRelayFromDialog);
 relayInput.addEventListener('keydown', (e) => {

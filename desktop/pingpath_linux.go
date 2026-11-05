@@ -28,6 +28,13 @@ func pingConfig(configYAML string) (pingcheck.Result, error) {
 	return pingcheck.Result{IP: reply.IP, LatencyMs: reply.LatencyMs}, nil
 }
 
+// pingRelay times a relay's TCP port. This process can't mark its sockets
+// (see pingConfig), so while the tunnel is up the connect may take the
+// tunnel's route and the number is only a rough one.
+func pingRelay(address string) (pingcheck.Result, error) {
+	return pingcheck.PingRelay(address, pingcheck.Options{})
+}
+
 // provisionProtect: server setup dials from this process, which can't step
 // around the tunnel on Linux - with a tunnel up its SSH session rides it
 // (reaching the new server through the current one, which works), and with

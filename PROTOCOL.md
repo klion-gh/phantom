@@ -576,7 +576,11 @@ relay (`DirectServerList()` keeps the server's own endpoints, which ping uses to
 the server's IP rather than the relay's). The apps don't store it in configs — the
 "Использовать ретранслятор" switch on the configs screen is an app setting, added to
 each config on its way into the core (`config.WithRelay`; desktop `withRelaySetting`,
-mobile `SetRelay`). Turning it on or off rebuilds a running tunnel.
+mobile `SetRelay`). The apps keep a list of relays, shown as a block of tiles above the
+configs and picked with a radio dot; a relay's ping is a bare TCP connect
+(`pingcheck.PingRelay`), since there is no handshake to make with it. Changing which
+relay is in use - the switch, the pick, or editing/deleting the picked one - rebuilds a
+running tunnel.
 
 Cost: one more TCP hop (the relay's own uplink caps throughput — ~60–70 Mbit/s on the
 first one), and the relay's IP serves the real domain's certificate, which an active

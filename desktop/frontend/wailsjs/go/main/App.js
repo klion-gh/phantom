@@ -6,6 +6,10 @@ export function AddConfig(arg1) {
   return window['go']['main']['App']['AddConfig'](arg1);
 }
 
+export function AddRelay(arg1) {
+  return window['go']['main']['App']['AddRelay'](arg1);
+}
+
 export function AddResource(arg1, arg2) {
   return window['go']['main']['App']['AddResource'](arg1, arg2);
 }
@@ -32,6 +36,10 @@ export function Connect(arg1, arg2) {
 
 export function DeleteConfig(arg1) {
   return window['go']['main']['App']['DeleteConfig'](arg1);
+}
+
+export function DeleteRelay(arg1) {
+  return window['go']['main']['App']['DeleteRelay'](arg1);
 }
 
 export function DeleteResource(arg1) {
@@ -62,8 +70,8 @@ export function GetLanguage() {
   return window['go']['main']['App']['GetLanguage']();
 }
 
-export function GetRelay() {
-  return window['go']['main']['App']['GetRelay']();
+export function GetRelays() {
+  return window['go']['main']['App']['GetRelays']();
 }
 
 export function GetRoutingState() {
@@ -84,6 +92,10 @@ export function LookupCountry(arg1) {
 
 export function Ping(arg1) {
   return window['go']['main']['App']['Ping'](arg1);
+}
+
+export function PingRelay(arg1) {
+  return window['go']['main']['App']['PingRelay'](arg1);
 }
 
 export function PopularResources() {
@@ -114,6 +126,10 @@ export function RoutingHealth() {
   return window['go']['main']['App']['RoutingHealth']();
 }
 
+export function SelectRelay(arg1) {
+  return window['go']['main']['App']['SelectRelay'](arg1);
+}
+
 export function SetAppearance(arg1, arg2) {
   return window['go']['main']['App']['SetAppearance'](arg1, arg2);
 }
@@ -142,8 +158,12 @@ export function SetLanguage(arg1) {
   return window['go']['main']['App']['SetLanguage'](arg1);
 }
 
-export function SetRelay(arg1, arg2) {
-  return window['go']['main']['App']['SetRelay'](arg1, arg2);
+export function SetRelayEnabled(arg1) {
+  return window['go']['main']['App']['SetRelayEnabled'](arg1);
+}
+
+export function SetRelayGeo(arg1, arg2, arg3, arg4) {
+  return window['go']['main']['App']['SetRelayGeo'](arg1, arg2, arg3, arg4);
 }
 
 export function SetSmartConfigs(arg1) {
@@ -172,6 +192,10 @@ export function UILog(arg1) {
 
 export function UpdateConfig(arg1, arg2) {
   return window['go']['main']['App']['UpdateConfig'](arg1, arg2);
+}
+
+export function UpdateRelay(arg1, arg2) {
+  return window['go']['main']['App']['UpdateRelay'](arg1, arg2);
 }
 
 export function Version() {

@@ -3,6 +3,8 @@
 
 export function AddConfig(arg1:string):Promise<string>;
 
+export function AddRelay(arg1:string):Promise<string>;
+
 export function AddResource(arg1:string,arg2:string):Promise<string>;
 
 export function AnswerBrowserPairing(arg1:string,arg2:boolean):Promise<void>;
@@ -16,6 +18,8 @@ export function ClearConfigCountry(arg1:string):Promise<string>;
 export function Connect(arg1:string,arg2:string):Promise<string>;
 
 export function DeleteConfig(arg1:string):Promise<string>;
+
+export function DeleteRelay(arg1:string):Promise<string>;
 
 export function DeleteResource(arg1:string):Promise<string>;
 
@@ -31,7 +35,7 @@ export function GetBrowserBridge():Promise<string>;
 
 export function GetLanguage():Promise<string>;
 
-export function GetRelay():Promise<string>;
+export function GetRelays():Promise<string>;
 
 export function GetRoutingState():Promise<string>;
 
@@ -42,6 +46,8 @@ export function ListResources():Promise<string>;
 export function LookupCountry(arg1:string):Promise<string>;
 
 export function Ping(arg1:string):Promise<string>;
+
+export function PingRelay(arg1:string):Promise<string>;
 
 export function PopularResources():Promise<string>;
 
@@ -57,6 +63,8 @@ export function RevokeBrowserClients():Promise<void>;
 
 export function RoutingHealth():Promise<string>;
 
+export function SelectRelay(arg1:string):Promise<string>;
+
 export function SetAppearance(arg1:string,arg2:string):Promise<void>;
 
 export function SetAutoConfigs(arg1:string):Promise<void>;
@@ -71,7 +79,9 @@ export function SetConfigGeo(arg1:string,arg2:string,arg3:string,arg4:string):Pr
 
 export function SetLanguage(arg1:string):Promise<void>;
 
-export function SetRelay(arg1:boolean,arg2:string):Promise<string>;
+export function SetRelayEnabled(arg1:boolean):Promise<string>;
+
+export function SetRelayGeo(arg1:string,arg2:string,arg3:string,arg4:string):Promise<string>;
 
 export function SetSmartConfigs(arg1:string):Promise<void>;
 
@@ -86,5 +96,7 @@ export function UIDiag(arg1:string,arg2:string,arg3:string):Promise<void>;
 export function UILog(arg1:string):Promise<void>;
 
 export function UpdateConfig(arg1:string,arg2:string):Promise<string>;
+
+export function UpdateRelay(arg1:string,arg2:string):Promise<string>;
 
 export function Version():Promise<string>;
