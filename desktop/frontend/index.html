@@ -14,6 +14,7 @@
           <div class="emblem-wrap"><img src="./src/assets/images/phantom-emblem.png" class="emblem" alt="" /></div>
           <div class="title">Phantom</div>
           <div class="spacer"></div>
+          <button id="btn-add" class="icon-btn add-btn" data-i18n-title="add_config" title="Добавить конфигурацию">&#43;</button>
           <button id="btn-update" class="icon-btn update-btn hidden" data-i18n-title="update_available" title="Доступно обновление"><span class="nav-icon nav-icon-update"></span></button>
           <button id="btn-gear" class="icon-btn icon-btn-gear" data-i18n-title="settings" title="Настройки"></button>
         </div>
@@ -26,11 +27,6 @@
              two apps are navigated the same way. -->
         <div class="main-body">
           <div id="section-configs" class="section-page">
-            <div class="panel-header">
-              <div class="panel-title" data-i18n="configs">Конфигурации</div>
-              <button id="btn-add" class="icon-btn" data-i18n-title="add_config" title="Добавить конфигурацию">&#43;</button>
-            </div>
-
             <!-- The whole page scrolls as one: the mode tiles at the top
                  move up with the relays and configs below them rather than
                  staying pinned, so a long list gets the full height. -->
@@ -41,23 +37,18 @@
                    discover it's inert by tapping first. -->
               <div id="smart-configs-warning" class="smart-configs-warning hidden" data-i18n="smart_vpn_configs_warning">Выключите Умный VPN если необходимо включить конфигурацию для всего устройства.</div>
 
-              <!-- Deliberately not styled like the config tiles below it: while
-                   this is on (or while Умный VPN is), it drives them, so it
-                   reads as a mode banner rather than one more item in the same
-                   list. -->
-              <div id="auto-tile" class="auto-tile hidden">
-                <div class="auto-tile-title" data-i18n="auto_config">Выбирать лучшую</div>
-                <div id="auto-tile-sub" class="auto-tile-sub"></div>
-                <button id="auto-toggle" class="toggle-switch"><span class="toggle-switch-thumb"></span></button>
+              <!-- "Подключиться к лучшей": a line of type, not a tile - while
+                   it's on (or while Умный VPN is) it drives the config tiles
+                   below, so it reads as the page's headline rather than one
+                   more item in the list. Lit with the brand gradient while on. -->
+              <div id="auto-tile" class="best-wrap hidden">
+                <button id="auto-toggle" class="best-btn" role="switch"><span data-i18n="auto_config">Подключиться к лучшей</span></button>
               </div>
 
-              <!-- The switch alone: which relay is picked, and each relay's
-                   address, live on the relay tiles below it. -->
-              <div id="relay-tile" class="routing-tile routing-tile-row relay-tile hidden">
-                <div class="routing-tile-text">
-                  <div class="routing-tile-title" data-i18n="relay">Использовать ретранслятор</div>
-                  <div class="routing-tile-hint" data-i18n="relay_hint">Подключаться ко всем конфигурациям через свой сервер-ретранслятор</div>
-                </div>
+              <!-- The switch alone, as a bare row: which relay is picked, and
+                   each relay's address, live on the relay tiles below it. -->
+              <div id="relay-tile" class="relay-row hidden">
+                <span class="relay-row-title" data-i18n="relay">Использовать ретранслятор</span>
                 <button id="relay-toggle" class="toggle-switch"><span class="toggle-switch-thumb"></span></button>
               </div>
 
@@ -69,7 +60,12 @@
                 <div id="relay-list" class="tile-group-list"></div>
                 <div id="relay-empty" class="tile-group-empty hidden" data-i18n="relay_empty">Добавьте свой ретранслятор кнопкой +</div>
               </div>
-              <div id="config-list" class="tile-group tile-group-list"></div>
+              <div id="config-group" class="tile-group hidden">
+                <div class="tile-group-header">
+                  <span class="tile-group-title" data-i18n="configs">Конфигурации</span>
+                </div>
+                <div id="config-list" class="tile-group-list"></div>
+              </div>
             </div>
 
             <div id="empty-state" class="empty-state hidden">

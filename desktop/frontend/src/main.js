@@ -1323,7 +1323,6 @@ function renderRouting() {
 
   document.getElementById('auto-tile').classList.toggle('hidden', configs.length === 0);
   document.getElementById('auto-toggle').classList.toggle('active', routingState.autoEnabled);
-  renderAutoBanner();
   renderRelay();
 
   renderSiteList();
@@ -1331,25 +1330,6 @@ function renderRouting() {
   renderRoutingConfigs();
 }
 
-
-// The banner's subtitle answers the one question automatic selection creates:
-// "so which server am I actually on?". Falls back to explaining the mode until
-// a server has actually been picked.
-function renderAutoBanner() {
-  const sub = document.getElementById('auto-tile-sub');
-  if (!sub) return;
-
-  const activeId = routingState.autoEnabled ? currentStatus.activeConfigId : '';
-  const active = activeId ? configs.find((c) => c.id === activeId) : null;
-  if (active) {
-    const domain = parseYamlField(active.yaml, 'domain') || parseYamlField(active.yaml, 'server') || '—';
-    sub.textContent = domain;
-    sub.classList.add('resolved');
-  } else {
-    sub.textContent = routingState.autoEnabled ? t('auto_config_picking') : t('auto_config_hint');
-    sub.classList.remove('resolved');
-  }
-}
 
 // Only worth showing while there's both a live tunnel (nothing to reconnect
 // otherwise) and an actual unapplied edit.
@@ -1549,6 +1529,7 @@ function relayPingLabel(id) {
 
 function renderRelay() {
   const any = relayState.relays.length > 0;
+  document.getElementById('config-group').classList.toggle('hidden', configs.length === 0);
   document.getElementById('relay-tile').classList.toggle('hidden', configs.length === 0);
   document.getElementById('relay-toggle').classList.toggle('active', relayState.enabled);
 

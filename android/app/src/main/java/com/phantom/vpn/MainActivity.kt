@@ -43,6 +43,9 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Description
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.*
+import androidx.compose.ui.graphics.CompositingStrategy
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.runtime.*
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.semantics.Role
@@ -730,6 +733,9 @@ private fun MainScreen(
                     )
                 }
             }
+            // Adding a config sits with the app's own controls, left of the
+            // gear, rather than on the configs page's title row.
+            AddConfigButton(onPaste = onAddConfig, onServer = onSetupServer)
             IconButton(onClick = onOpenSettings) {
                 Image(
                     painter = painterResource(R.drawable.ic_settings_gear),
@@ -912,40 +918,60 @@ private fun NavStyleIcon(iconRes: Int, tint: Color?) {
     }
 }
 
-// "Автоматически": the whole device goes through the VPN and Phantom keeps
-// the tunnel on whichever of the user's configs is actually reachable - see
-// internal/routing.Selector for when it considers a move worth making.
+// "Подключиться к лучшей": the whole device goes through the VPN and Phantom
+// keeps the tunnel on whichever of the user's configs is actually reachable -
+// see internal/routing.Selector for when it considers a move worth making.
+// Set as type alone, not a tile: small capitals, wide tracking, a hairline
+// either side - muted while off, the brand gradient while on.
 @Composable
-private fun AutoConfigTile(enabled: Boolean, onToggle: (Boolean) -> Unit) {
-    val shape = RoundedCornerShape(18.dp)
-    Tile(
-        modifier = Modifier.fillMaxWidth(),
-        color = Surface,
-        shape = shape,
-        borderColor = SurfaceOutline.copy(alpha = 0.6f),
+private fun BestConnectButton(enabled: Boolean, onToggle: (Boolean) -> Unit) {
+    val lineOff = TextMuted.copy(alpha = 0.7f)
+    val lineWidth = if (enabled) 44.dp else 32.dp
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.Center,
+        modifier = Modifier.fillMaxWidth().padding(top = 4.dp, bottom = 18.dp),
     ) {
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 14.dp),
-        ) {
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    I18n.t("auto_config"),
-                    color = TextPrimary,
-                    fontSize = 15.5.sp,
-                    fontWeight = FontWeight.SemiBold,
-                )
-                Spacer(Modifier.height(3.dp))
-                Text(
-                    I18n.t("auto_config_hint"),
-                    color = TextSecondary,
-                    fontSize = 12.5.sp,
-                    lineHeight = 17.sp,
-                )
-            }
-            Spacer(Modifier.width(12.dp))
-            GradientSwitch(checked = enabled, onCheckedChange = onToggle)
-        }
+        Box(
+            Modifier
+                .width(lineWidth)
+                .height(1.dp)
+                .background(Brush.horizontalGradient(listOf(Color.Transparent, if (enabled) Primary else lineOff))),
+        )
+        Text(
+            I18n.t("auto_config").uppercase(),
+            style = TextStyle(
+                fontSize = 13.sp,
+                fontWeight = if (enabled) FontWeight.SemiBold else FontWeight.Medium,
+                letterSpacing = 3.2.sp,
+                color = TextSecondary,
+            ),
+            modifier = Modifier
+                .clip(RoundedCornerShape(8.dp))
+                .toggleable(value = enabled, role = Role.Switch, onValueChange = onToggle)
+                .padding(horizontal = 14.dp, vertical = 10.dp)
+                // While on, the letters are painted with the brand gradient:
+                // drawn, then the gradient laid over them keeping only where
+                // they are (SrcAtop, on an offscreen layer).
+                .then(
+                    if (enabled) {
+                        Modifier
+                            .graphicsLayer(compositingStrategy = CompositingStrategy.Offscreen)
+                            .drawWithContent {
+                                drawContent()
+                                drawRect(Brush.linearGradient(BrandGradient), blendMode = BlendMode.SrcAtop)
+                            }
+                    } else {
+                        Modifier
+                    },
+                ),
+        )
+        Box(
+            Modifier
+                .width(lineWidth)
+                .height(1.dp)
+                .background(Brush.horizontalGradient(listOf(if (enabled) Accent else lineOff, Color.Transparent))),
+        )
     }
 }
 
@@ -1036,26 +1062,22 @@ private fun RelaysSection() {
     }
 }
 
+// The switch as a bare row - no tile, no explanation: the relays block right
+// under it says what it's about.
 @Composable
 private fun RelaySwitchTile(enabled: Boolean, onToggle: (Boolean) -> Unit) {
-    Tile(
-        modifier = Modifier.fillMaxWidth(),
-        color = Surface,
-        shape = RoundedCornerShape(18.dp),
-        borderColor = SurfaceOutline.copy(alpha = 0.6f),
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier.fillMaxWidth().padding(start = 18.dp, end = 8.dp),
     ) {
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 14.dp),
-        ) {
-            Column(modifier = Modifier.weight(1f)) {
-                Text(I18n.t("relay"), color = TextPrimary, fontSize = 15.5.sp, fontWeight = FontWeight.SemiBold)
-                Spacer(Modifier.height(3.dp))
-                Text(I18n.t("relay_hint"), color = TextSecondary, fontSize = 12.5.sp, lineHeight = 17.sp)
-            }
-            Spacer(Modifier.width(12.dp))
-            GradientSwitch(checked = enabled, onCheckedChange = onToggle)
-        }
+        Text(
+            I18n.t("relay"),
+            color = TextPrimary,
+            fontSize = 15.sp,
+            fontWeight = FontWeight.SemiBold,
+            modifier = Modifier.weight(1f),
+        )
+        GradientSwitch(checked = enabled, onCheckedChange = onToggle)
     }
 }
 
@@ -1251,7 +1273,8 @@ private const val RELAY_INSTALL_COMMAND =
 private const val HEADER_SMART_WARNING = "header:smart-warning"
 private const val HEADER_AUTO = "header:auto"
 private const val HEADER_RELAYS = "header:relays"
-private val HEADER_KEYS = setOf(HEADER_SMART_WARNING, HEADER_AUTO, HEADER_RELAYS)
+private const val HEADER_CONFIGS = "header:configs"
+private val HEADER_KEYS = setOf(HEADER_SMART_WARNING, HEADER_AUTO, HEADER_RELAYS, HEADER_CONFIGS)
 
 /** One config tile's slice of the configs block: the block's faint panel,
  * drawn tile by tile so the configs can stay items of the page's one list,
@@ -1301,7 +1324,7 @@ private fun ConfigsPage(
     val currentOnMove by rememberUpdatedState(onMoveConfig)
     // The configs follow the page's header items in the one list (see below):
     // their list index minus however many of those there are is their place.
-    val currentHeaderItems by rememberUpdatedState(if (RoutingStore.smartEnabled && !autoEnabled) 3 else 2)
+    val currentHeaderItems by rememberUpdatedState(if (RoutingStore.smartEnabled && !autoEnabled) 4 else 3)
     val reorder = remember(listState) {
         ReorderState(listState, reorderScope, isMovable = { it !in HEADER_KEYS }) { from, to ->
             currentOnMove(from - currentHeaderItems, to - currentHeaderItems)
@@ -1320,17 +1343,6 @@ private fun ConfigsPage(
     val smartDriving = RoutingStore.smartEnabled && !autoEnabled
 
     Column(modifier = Modifier.fillMaxSize()) {
-        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
-            Text(
-                I18n.t("configs"),
-                color = TextSecondary,
-                fontSize = 13.sp,
-                fontWeight = FontWeight.SemiBold,
-                modifier = Modifier.weight(1f),
-            )
-            AddConfigButton(onPaste = onAddConfig, onServer = onSetupServer)
-        }
-
         // Shown only when the Keystore refused to initialise and configs - which
         // hold the PSK and the server address - ended up in plain storage. It used
         // to happen silently; see ConfigStore.storageIsPlaintext.
@@ -1380,8 +1392,8 @@ private fun ConfigsPage(
                 // param) - each mode expresses a different idea of what the
                 // tunnel is for, so only one gets to hold it at a time.
                 item(key = HEADER_AUTO) {
-                    InactiveOverlay(inactive = smartDriving, modifier = Modifier.padding(bottom = 14.dp)) {
-                        AutoConfigTile(enabled = autoEnabled && !smartDriving, onToggle = onToggleAuto)
+                    InactiveOverlay(inactive = smartDriving) {
+                        BestConnectButton(enabled = autoEnabled && !smartDriving, onToggle = onToggleAuto)
                     }
                 }
 
@@ -1401,10 +1413,24 @@ private fun ConfigsPage(
                 // off from here kills whatever mode was actually driving it.
                 // Adding a config is unaffected: it doesn't touch the tunnel,
                 // so the + in the header above stays outside the overlay.
+                // The block's title rides at the top of its panel, the same
+                // place "Ретрансляторы" has in theirs.
+                item(key = HEADER_CONFIGS) {
+                    ConfigGroupSegment(first = true, last = false) {
+                        Text(
+                            I18n.t("configs"),
+                            color = TextMuted,
+                            fontSize = 12.5.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            modifier = Modifier.padding(start = 10.dp, top = 6.dp, bottom = 6.dp),
+                        )
+                    }
+                }
+
                 itemsIndexed(configs, key = { _, c -> c.id }) { index, config ->
                     val dragging = reorder.draggingKey == config.id
                     ConfigGroupSegment(
-                        first = index == 0,
+                        first = false,
                         last = index == configs.lastIndex,
                         modifier = if (dragging) Modifier.zIndex(1f) else Modifier.animateItemPlacement(),
                     ) {

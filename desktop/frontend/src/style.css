@@ -1537,60 +1537,6 @@ textarea::placeholder { color: var(--text-muted); }
     background-color: color-mix(in srgb, var(--primary) 65%, transparent);
 }
 
-/* --- "Выбирать автоматически" banner (Конфигурации section) ---------------
-   A mode banner, not a list item: while it's on it drives every config tile
-   below, so it deliberately looks unlike them - centred, gradient-outlined,
-   and wider-spaced. */
-.auto-tile {
-    position: relative;
-    /* Shrink-wrapped to its own text and centred in the column, rather than
-       stretching the full width like the config tiles: it is a mode switch
-       sitting above that list, not another row in it. */
-    align-self: center;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    gap: 6px;
-    padding: 12px 20px;
-    border-radius: 18px;
-    text-align: center;
-    background: var(--surface);
-    border: 1.5px solid transparent;
-    flex-shrink: 0;
-}
-/* Same mask-composite ::before ring as .config-card.connected - see its doc.
-   Unlike those, this tile carries the ring at all times rather than only
-   while active. */
-.auto-tile::before {
-    content: '';
-    position: absolute;
-    inset: -1.5px;
-    border-radius: inherit;
-    padding: 1.5px;
-    background: linear-gradient(135deg, var(--primary), var(--accent));
-    -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
-    -webkit-mask-composite: xor;
-    mask-composite: exclude;
-    pointer-events: none;
-}
-.auto-tile-title {
-    font-size: 15.5px;
-    font-weight: 600;
-    color: var(--text-primary);
-}
-/* Shows which server was picked once one has been - that is the single thing
-   the user gave up choosing manually, so it is the thing worth showing back. */
-.auto-tile-sub {
-    font-size: 13px;
-    color: var(--text-secondary);
-    line-height: 1.4;
-}
-.auto-tile-sub.resolved {
-    color: var(--primary);
-    font-weight: 600;
-    font-family: "Consolas", "Cascadia Code", monospace;
-}
-
 /* While automatic selection is on, the config tiles below are driven by it,
    not by the user - so they are dimmed and inert rather than silently
    ignoring clicks. */
@@ -1610,12 +1556,9 @@ textarea::placeholder { color: var(--text-muted); }
     transition: opacity 200ms ease, filter 200ms ease;
 }
 
-/* Same treatment, for the two other places a mode can go inactive: the
-   "Выбирать лучшую" banner itself, and the Умный VPN toggle row (its
-   settings below already use .routing-block.inactive - this covers the
-   switch + title + hint above them, which used to stay full-brightness even
-   while disabled). */
-.auto-tile.inactive,
+/* Same treatment for the Умный VPN toggle row (its settings below already
+   use .routing-block.inactive - this covers the switch + title + hint above
+   them, which used to stay full-brightness even while disabled). */
 .routing-tile-row.inactive {
     opacity: 0.4;
     pointer-events: none;
@@ -1636,10 +1579,71 @@ textarea::placeholder { color: var(--text-muted); }
 /* --- "Использовать ретранслятор" (Конфигурации section) ----------------------
    A setting about the user's network, so it reads as a settings row - the
    routing tiles' look - rather than as one more server in the list. */
-.relay-tile {
+.relay-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
     flex-shrink: 0;
-    padding: 12px 14px 12px 16px;
-    margin-bottom: 4px;
+    padding: 2px 6px 6px 18px;
+}
+.relay-row-title {
+    flex: 1;
+    font-size: 15px;
+    font-weight: 600;
+    color: var(--text-primary);
+}
+
+/* "Подключиться к лучшей": set as type alone - small capitals, wide
+   tracking, a hairline either side. Muted while off; while on, the words and
+   the hairlines take the brand gradient. */
+.best-wrap {
+    display: flex;
+    justify-content: center;
+    flex-shrink: 0;
+    padding: 10px 0 14px;
+}
+.best-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 16px;
+    background: none;
+    border: none;
+    padding: 10px 6px;
+    cursor: pointer;
+    font: inherit;
+    font-size: 13.5px;
+    font-weight: 500;
+    letter-spacing: 0.26em;
+    text-transform: uppercase;
+    color: var(--text-secondary);
+    transition: color 0.25s ease;
+}
+.best-btn::before,
+.best-btn::after {
+    content: '';
+    width: 40px;
+    height: 1px;
+    background: linear-gradient(90deg, transparent, var(--text-muted));
+    transition: width 0.3s ease;
+}
+.best-btn::after { background: linear-gradient(90deg, var(--text-muted), transparent); }
+.best-btn:hover { color: var(--text-primary); }
+.best-btn:hover::before,
+.best-btn:hover::after { width: 56px; }
+.best-btn span { margin-right: -0.26em; } /* the tracking after the last letter */
+.best-btn.active span {
+    background: var(--brand-gradient);
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+    font-weight: 600;
+}
+.best-btn.active::before { background: linear-gradient(90deg, transparent, var(--primary)); width: 56px; }
+.best-btn.active::after { background: linear-gradient(90deg, var(--accent), transparent); width: 56px; }
+.best-wrap.inactive {
+    opacity: 0.4;
+    pointer-events: none;
+    transition: opacity 200ms ease;
 }
 
 /* The relays and the configs each sit in one block of their own: a faint
@@ -1655,7 +1659,6 @@ textarea::placeholder { color: var(--text-muted); }
     flex-shrink: 0;
 }
 .tile-group-list { display: flex; flex-direction: column; gap: 8px; }
-.tile-group:empty { display: none; }
 .tile-group-header {
     display: flex;
     align-items: center;
