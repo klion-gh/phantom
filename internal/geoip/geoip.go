@@ -132,28 +132,7 @@ func Lookup(ctx context.Context, ip string) (Result, error) {
 }
 
 func query(ctx context.Context, p provider, ip string) (Result, error) {
-	ctx, cancel := context.WithTimeout(ctx, perProviderTimeout)
-	defer cancel()
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, p.url(ip), nil)
-	if err != nil {
-		return Result{}, err
-	}
-	// Plain and unremarkable: no custom User-Agent identifying this as a VPN
-	// client, which would tell the provider more than it already learns.
-	req.Header.Set("Accept", "application/json, text/plain, */*")
-
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return Result{}, err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return Result{}, fmt.Errorf("status %d", resp.StatusCode)
-	}
-
-	// Capped: this is untrusted input parsed before anything validates it.
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
+	body, err := fetch(ctx, p.url(ip))
 	if err != nil {
 		return Result{}, err
 	}
@@ -167,6 +146,33 @@ func query(ctx context.Context, p provider, ip string) (Result, error) {
 	}
 	res.CountryCode = strings.ToUpper(res.CountryCode)
 	return res, nil
+}
+
+// fetch GETs one provider URL with the per-provider timeout and returns the
+// body of a 200 response.
+func fetch(ctx context.Context, url string) ([]byte, error) {
+	ctx, cancel := context.WithTimeout(ctx, perProviderTimeout)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, err
+	}
+	// Plain and unremarkable: no custom User-Agent identifying this as a VPN
+	// client, which would tell the provider more than it already learns.
+	req.Header.Set("Accept", "application/json, text/plain, */*")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("status %d", resp.StatusCode)
+	}
+
+	// Capped: this is untrusted input parsed before anything validates it.
+	return io.ReadAll(io.LimitReader(resp.Body, 64<<10))
 }
 
 // validCode rejects anything that isn't a two-letter ISO code. Worth checking:
