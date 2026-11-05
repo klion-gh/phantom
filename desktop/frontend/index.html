@@ -31,36 +31,36 @@
               <button id="btn-add" class="icon-btn" data-i18n-title="add_config" title="Добавить конфигурацию">&#43;</button>
             </div>
 
-            <!-- Shown above "Выбирать лучшую" precisely because it explains
-                 why that tile (and the config list below it) is about to look
-                 inactive - the user should know before reaching it, not
-                 discover it's inert by tapping first. -->
-            <div id="smart-configs-warning" class="smart-configs-warning hidden" data-i18n="smart_vpn_configs_warning">Выключите Умный VPN если необходимо включить конфигурацию для всего устройства.</div>
-
-            <!-- Deliberately not styled like the config tiles below it: while
-                 this is on (or while Умный VPN is), it drives them, so it
-                 reads as a mode banner rather than one more item in the same
-                 list. -->
-            <div id="auto-tile" class="auto-tile hidden">
-              <div class="auto-tile-title" data-i18n="auto_config">Выбирать лучшую</div>
-              <div id="auto-tile-sub" class="auto-tile-sub"></div>
-              <button id="auto-toggle" class="toggle-switch"><span class="toggle-switch-thumb"></span></button>
-            </div>
-
-            <!-- The switch alone: which relay is picked, and each relay's
-                 address, live on the relay tiles below it. -->
-            <div id="relay-tile" class="routing-tile routing-tile-row relay-tile hidden">
-              <div class="routing-tile-text">
-                <div class="routing-tile-title" data-i18n="relay">Использовать ретранслятор</div>
-                <div class="routing-tile-hint" data-i18n="relay_hint">Подключаться ко всем конфигурациям через свой сервер-ретранслятор</div>
-              </div>
-              <button id="relay-toggle" class="toggle-switch"><span class="toggle-switch-thumb"></span></button>
-            </div>
-
-            <!-- Two blocks in one scroller: relays (shown once there is one,
-                 or the switch is on) and the configs. Each reads as one group,
-                 so a relay is never mistaken for one more server. -->
+            <!-- The whole page scrolls as one: the mode tiles at the top
+                 move up with the relays and configs below them rather than
+                 staying pinned, so a long list gets the full height. -->
             <div id="configs-scroll" class="config-list">
+              <!-- Shown above "Выбирать лучшую" precisely because it explains
+                   why that tile (and the config list below it) is about to look
+                   inactive - the user should know before reaching it, not
+                   discover it's inert by tapping first. -->
+              <div id="smart-configs-warning" class="smart-configs-warning hidden" data-i18n="smart_vpn_configs_warning">Выключите Умный VPN если необходимо включить конфигурацию для всего устройства.</div>
+
+              <!-- Deliberately not styled like the config tiles below it: while
+                   this is on (or while Умный VPN is), it drives them, so it
+                   reads as a mode banner rather than one more item in the same
+                   list. -->
+              <div id="auto-tile" class="auto-tile hidden">
+                <div class="auto-tile-title" data-i18n="auto_config">Выбирать лучшую</div>
+                <div id="auto-tile-sub" class="auto-tile-sub"></div>
+                <button id="auto-toggle" class="toggle-switch"><span class="toggle-switch-thumb"></span></button>
+              </div>
+
+              <!-- The switch alone: which relay is picked, and each relay's
+                   address, live on the relay tiles below it. -->
+              <div id="relay-tile" class="routing-tile routing-tile-row relay-tile hidden">
+                <div class="routing-tile-text">
+                  <div class="routing-tile-title" data-i18n="relay">Использовать ретранслятор</div>
+                  <div class="routing-tile-hint" data-i18n="relay_hint">Подключаться ко всем конфигурациям через свой сервер-ретранслятор</div>
+                </div>
+                <button id="relay-toggle" class="toggle-switch"><span class="toggle-switch-thumb"></span></button>
+              </div>
+
               <div id="relay-group" class="tile-group hidden">
                 <div class="tile-group-header">
                   <span class="tile-group-title" data-i18n="relays">Ретрансляторы</span>

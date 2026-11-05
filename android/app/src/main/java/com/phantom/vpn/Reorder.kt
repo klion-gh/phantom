@@ -26,6 +26,9 @@ import kotlinx.coroutines.launch
 class ReorderState(
     private val listState: LazyListState,
     private val scope: CoroutineScope,
+    // Whether an item may be dragged past or onto - the list can hold items
+    // that aren't part of the reorderable run (a page's header tiles).
+    private val isMovable: (key: Any) -> Boolean = { true },
     private val onMove: (from: Int, to: Int) -> Unit,
 ) {
     var draggingKey by mutableStateOf<Any?>(null)
@@ -53,7 +56,7 @@ class ReorderState(
 
         val middle = dragTop + current.size / 2f
         val target = items.firstOrNull {
-            it.key != key && middle > it.offset && middle < it.offset + it.size
+            it.key != key && isMovable(it.key) && middle > it.offset && middle < it.offset + it.size
         } ?: return
 
         // Moving the first visible item makes the column re-anchor its scroll

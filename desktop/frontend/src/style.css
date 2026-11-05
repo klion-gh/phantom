@@ -1639,7 +1639,7 @@ textarea::placeholder { color: var(--text-muted); }
 .relay-tile {
     flex-shrink: 0;
     padding: 12px 14px 12px 16px;
-    margin-bottom: 12px;
+    margin-bottom: 4px;
 }
 
 /* The relays and the configs each sit in one block of their own: a faint

@@ -30,6 +30,7 @@ import android.content.ClipData
 import androidx.core.content.FileProvider
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.PagerState
@@ -1068,8 +1069,7 @@ private fun TileGroup(modifier: Modifier = Modifier, content: @Composable Column
         modifier = modifier
             .fillMaxWidth()
             .clip(shape)
-            .background(Surface.copy(alpha = 0.45f))
-            .border(1.dp, SurfaceOutline.copy(alpha = 0.6f), shape)
+            .background(TileGroupColor)
             .padding(8.dp),
         content = content,
     )
@@ -1248,6 +1248,38 @@ private fun RelayDialog(
 private const val RELAY_INSTALL_COMMAND =
     "curl -fsSL https://raw.githubusercontent.com/klion-gh/phantom/main/scripts/install-relay.sh | sh"
 
+private const val HEADER_SMART_WARNING = "header:smart-warning"
+private const val HEADER_AUTO = "header:auto"
+private const val HEADER_RELAYS = "header:relays"
+private val HEADER_KEYS = setOf(HEADER_SMART_WARNING, HEADER_AUTO, HEADER_RELAYS)
+
+/** One config tile's slice of the configs block: the block's faint panel,
+ * drawn tile by tile so the configs can stay items of the page's one list,
+ * rounded at the block's top and bottom ends. */
+@Composable
+private fun ConfigGroupSegment(
+    first: Boolean,
+    last: Boolean,
+    modifier: Modifier = Modifier,
+    content: @Composable () -> Unit,
+) {
+    val r = 24.dp
+    val shape = RoundedCornerShape(
+        topStart = if (first) r else 0.dp,
+        topEnd = if (first) r else 0.dp,
+        bottomStart = if (last) r else 0.dp,
+        bottomEnd = if (last) r else 0.dp,
+    )
+    Box(
+        modifier = modifier
+            .fillMaxWidth()
+            .background(TileGroupColor, shape)
+            .padding(start = 8.dp, end = 8.dp, top = if (first) 8.dp else 4.dp, bottom = if (last) 8.dp else 4.dp),
+    ) { content() }
+}
+
+private val TileGroupColor: Color get() = Surface.copy(alpha = 0.45f)
+
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun ConfigsPage(
@@ -1267,7 +1299,14 @@ private fun ConfigsPage(
     val listState = rememberLazyListState()
     val reorderScope = rememberCoroutineScope()
     val currentOnMove by rememberUpdatedState(onMoveConfig)
-    val reorder = remember(listState) { ReorderState(listState, reorderScope) { from, to -> currentOnMove(from, to) } }
+    // The configs follow the page's header items in the one list (see below):
+    // their list index minus however many of those there are is their place.
+    val currentHeaderItems by rememberUpdatedState(if (RoutingStore.smartEnabled && !autoEnabled) 3 else 2)
+    val reorder = remember(listState) {
+        ReorderState(listState, reorderScope, isMovable = { it !in HEADER_KEYS }) { from, to ->
+            currentOnMove(from - currentHeaderItems, to - currentHeaderItems)
+        }
+    }
     val haptics = LocalHapticFeedback.current
 
     // Умный VPN never makes a config the whole-device VPN - it only ever
@@ -1307,120 +1346,118 @@ private fun ConfigsPage(
 
         Spacer(modifier = Modifier.height(10.dp))
 
-        // Explained before the tile it's about, not after - the user should
-        // know why "Выбирать лучшую" is dimmed before they reach it, not
-        // discover it's inert by tapping first.
-        if (configs.isNotEmpty() && smartDriving) {
-            Text(
-                I18n.t("smart_vpn_configs_warning"),
-                color = Accent,
-                fontSize = 12.5.sp,
-                lineHeight = 17.sp,
-                modifier = Modifier.fillMaxWidth(),
-            )
-            Spacer(modifier = Modifier.height(14.dp))
-        }
-
-        // Whole-device routing with the server picked automatically. Sits
-        // above the config tiles because it takes precedence over them: while
-        // it's on, the per-config switches below are what it drives, not what
-        // the user drives. Mutually exclusive with Умный VPN, the same way
-        // Умный VPN's own switch already goes inert while this is on (see
-        // SmartVpnHeaderTile's `overridden` param) - each mode expresses a
-        // different idea of what the tunnel is for, so only one gets to hold
-        // it at a time, and the switch that's already on is what decides
-        // which. Turning this on always means "whole device" for real, so
-        // unlike the config cards below, nothing here has to lie about status
-        // - it just needs to become unreachable while Умный VPN holds the
-        // tunnel for something else.
         if (configs.isNotEmpty()) {
-            InactiveOverlay(inactive = smartDriving) {
-                AutoConfigTile(enabled = autoEnabled && !smartDriving, onToggle = onToggleAuto)
-            }
-            Spacer(modifier = Modifier.height(14.dp))
-        }
-
-        // Not under any overlay: the relay applies to every mode alike - a
-        // config, "Выбирать лучшую" and Умный VPN all connect through it.
-        if (configs.isNotEmpty()) {
-            RelaysSection()
-            Spacer(modifier = Modifier.height(12.dp))
-        }
-
-        if (configs.isNotEmpty()) {
-            // Connecting a config here means "make this the whole-device VPN" -
-            // exactly what "Выбирать лучшую" or "Умный VPN" already have the one
-            // shared tunnel doing, for a different reason, whenever either is
-            // on. Without this, the config that mode is currently using shows
-            // up here as manually toggled on too (there's only one tunnel to
-            // reflect), and switching it off from here kills whatever mode was
-            // actually driving it - confusing, since nothing about this page
-            // suggested it was connected to anything else. Adding a config is
-            // unaffected: it doesn't touch the tunnel, so it stays outside
-            // this overlay (see the + button in the header above).
-            InactiveOverlay(
-                inactive = autoEnabled || RoutingStore.smartEnabled,
-                modifier = Modifier.weight(1f, fill = false),
+            // The whole page is one list: the mode tiles at the top move up
+            // with the relays and configs below them rather than staying
+            // pinned, so a long list gets the full height. The configs come
+            // after the header items, which reordering maps back out (see
+            // currentHeaderItems).
+            LazyColumn(
+                state = listState,
+                modifier = Modifier.weight(1f).fillMaxWidth(),
             ) {
-                TileGroup {
-                LazyColumn(
-                    state = listState,
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    items(configs, key = { it.id }) { config ->
-                        val cardStatus = when {
-                            smartDriving -> ConnectionStatus.IDLE
-                            activeConfigId == config.id -> status
-                            else -> ConnectionStatus.IDLE
-                        }
-                        val dragging = reorder.draggingKey == config.id
-                        // Long-press lifts the tile, dragging moves it past its
-                        // neighbours (see ReorderState); the order is saved on
-                        // release. Editing moved to the tile's gear.
-                        ConfigInfoCard(
-                            config = config,
-                            status = cardStatus,
-                            onToggle = { onToggle(config) },
-                            onEdit = { onEditConfig(config) },
-                            dragging = dragging,
-                            modifier = Modifier
-                                .then(
-                                    if (dragging) {
-                                        Modifier
-                                            .zIndex(1f)
-                                            .graphicsLayer {
+                // Explained before the tile it's about, not after - the user
+                // should know why "Выбирать лучшую" is dimmed before they
+                // reach it, not discover it's inert by tapping first.
+                if (smartDriving) {
+                    item(key = HEADER_SMART_WARNING) {
+                        Text(
+                            I18n.t("smart_vpn_configs_warning"),
+                            color = Accent,
+                            fontSize = 12.5.sp,
+                            lineHeight = 17.sp,
+                            modifier = Modifier.fillMaxWidth().padding(bottom = 14.dp),
+                        )
+                    }
+                }
+
+                // Whole-device routing with the server picked automatically.
+                // Sits above the config tiles because it takes precedence over
+                // them: while it's on, the per-config switches below are what
+                // it drives, not what the user drives. Mutually exclusive with
+                // Умный VPN, the same way Умный VPN's own switch already goes
+                // inert while this is on (see SmartVpnHeaderTile's `overridden`
+                // param) - each mode expresses a different idea of what the
+                // tunnel is for, so only one gets to hold it at a time.
+                item(key = HEADER_AUTO) {
+                    InactiveOverlay(inactive = smartDriving, modifier = Modifier.padding(bottom = 14.dp)) {
+                        AutoConfigTile(enabled = autoEnabled && !smartDriving, onToggle = onToggleAuto)
+                    }
+                }
+
+                // Not under any overlay: the relay applies to every mode alike
+                // - a config, "Выбирать лучшую" and Умный VPN all connect
+                // through it.
+                item(key = HEADER_RELAYS) {
+                    Column(modifier = Modifier.padding(bottom = 12.dp)) { RelaysSection() }
+                }
+
+                // Connecting a config here means "make this the whole-device
+                // VPN" - exactly what "Выбирать лучшую" or "Умный VPN" already
+                // have the one shared tunnel doing, for a different reason,
+                // whenever either is on. Without the overlay, the config that
+                // mode is currently using shows up here as manually toggled on
+                // too (there's only one tunnel to reflect), and switching it
+                // off from here kills whatever mode was actually driving it.
+                // Adding a config is unaffected: it doesn't touch the tunnel,
+                // so the + in the header above stays outside the overlay.
+                itemsIndexed(configs, key = { _, c -> c.id }) { index, config ->
+                    val dragging = reorder.draggingKey == config.id
+                    ConfigGroupSegment(
+                        first = index == 0,
+                        last = index == configs.lastIndex,
+                        modifier = if (dragging) Modifier.zIndex(1f) else Modifier.animateItemPlacement(),
+                    ) {
+                        InactiveOverlay(inactive = autoEnabled || RoutingStore.smartEnabled) {
+                            val cardStatus = when {
+                                smartDriving -> ConnectionStatus.IDLE
+                                activeConfigId == config.id -> status
+                                else -> ConnectionStatus.IDLE
+                            }
+                            // Long-press lifts the tile, dragging moves it past its
+                            // neighbours (see ReorderState); the order is saved on
+                            // release. Editing moved to the tile's gear.
+                            ConfigInfoCard(
+                                config = config,
+                                status = cardStatus,
+                                onToggle = { onToggle(config) },
+                                onEdit = { onEditConfig(config) },
+                                dragging = dragging,
+                                modifier = Modifier
+                                    .then(
+                                        if (dragging) {
+                                            Modifier.graphicsLayer {
                                                 translationY = reorder.translationFor(config.id)
                                                 scaleX = 1.02f
                                                 scaleY = 1.02f
                                             }
-                                    } else {
-                                        Modifier.animateItemPlacement()
-                                    },
-                                )
-                                .pointerInput(config.id) {
-                                    detectDragGesturesAfterLongPress(
-                                        onDragStart = {
-                                            haptics.performHapticFeedback(HapticFeedbackType.LongPress)
-                                            reorder.start(config.id)
-                                        },
-                                        onDrag = { change, amount ->
-                                            change.consume()
-                                            reorder.drag(amount.y)
-                                        },
-                                        onDragEnd = {
-                                            reorder.end()
-                                            onMoveConfigDone()
-                                        },
-                                        onDragCancel = {
-                                            reorder.end()
-                                            onMoveConfigDone()
+                                        } else {
+                                            Modifier
                                         },
                                     )
-                                },
-                        )
+                                    .pointerInput(config.id) {
+                                        detectDragGesturesAfterLongPress(
+                                            onDragStart = {
+                                                haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                                                reorder.start(config.id)
+                                            },
+                                            onDrag = { change, amount ->
+                                                change.consume()
+                                                reorder.drag(amount.y)
+                                            },
+                                            onDragEnd = {
+                                                reorder.end()
+                                                onMoveConfigDone()
+                                            },
+                                            onDragCancel = {
+                                                reorder.end()
+                                                onMoveConfigDone()
+                                            },
+                                        )
+                                    },
+                            )
+                        }
                     }
-                }
                 }
             }
 
