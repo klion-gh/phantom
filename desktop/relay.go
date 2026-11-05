@@ -27,6 +27,8 @@ type SavedRelay struct {
 	IP          string `json:"ip,omitempty"`
 	Country     string `json:"country,omitempty"`
 	CountryCode string `json:"countryCode,omitempty"`
+	City        string `json:"city,omitempty"`
+	Provider    string `json:"provider,omitempty"`
 }
 
 type relaySettings struct {
@@ -134,6 +136,8 @@ func (a *App) updateRelays(change func(*relaySettings) string) string {
 	}
 	if before != after {
 		diag(diagCatVPN, "relayChanged", "active", after != "")
+		// Every config's health was measured on the other path.
+		probeSelectorNow()
 		go func() {
 			if msg := a.ReconnectActive(); msg != "" {
 				log.Printf("[relay] reconnect after the relay changed: %s", msg)
@@ -234,8 +238,8 @@ func (a *App) DeleteRelay(id string) string {
 	})
 }
 
-// SetRelayGeo caches a relay's IP and country for its tile.
-func (a *App) SetRelayGeo(id, ip, country, countryCode string) string {
+// SetRelayGeo caches a relay's IP and place for its tile.
+func (a *App) SetRelayGeo(id, ip, country, countryCode, city, provider string) string {
 	relayMu.Lock()
 	defer relayMu.Unlock()
 	s := loadRelaysLocked()
@@ -244,6 +248,8 @@ func (a *App) SetRelayGeo(id, ip, country, countryCode string) string {
 			s.Relays[i].IP = strings.TrimSpace(ip)
 			s.Relays[i].Country = country
 			s.Relays[i].CountryCode = countryCode
+			s.Relays[i].City = city
+			s.Relays[i].Provider = provider
 			if err := saveRelaysLocked(s); err != nil {
 				return err.Error()
 			}

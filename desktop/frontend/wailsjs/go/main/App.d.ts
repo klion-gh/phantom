@@ -77,11 +77,13 @@ export function SetBrowserBridgeEnabled(arg1:boolean):Promise<void>;
 
 export function SetConfigGeo(arg1:string,arg2:string,arg3:string,arg4:string):Promise<string>;
 
+export function SetConfigPlace(arg1:string,arg2:string,arg3:string):Promise<string>;
+
 export function SetLanguage(arg1:string):Promise<void>;
 
 export function SetRelayEnabled(arg1:boolean):Promise<string>;
 
-export function SetRelayGeo(arg1:string,arg2:string,arg3:string,arg4:string):Promise<string>;
+export function SetRelayGeo(arg1:string,arg2:string,arg3:string,arg4:string,arg5:string,arg6:string):Promise<string>;
 
 export function SetSmartConfigs(arg1:string):Promise<void>;
 

@@ -27,6 +27,10 @@ data class SavedConfig(
     val ip: String? = null,
     val country: String? = null,
     val countryCode: String? = null,
+    // City and hosting provider, shown after the IP - from the same lookup as
+    // the country ([lookupPlace]), cached the same way.
+    val city: String? = null,
+    val provider: String? = null,
 )
 
 /**
@@ -144,6 +148,8 @@ object ConfigStore {
                     ip = obj.optString("ip").takeIf { it.isNotBlank() },
                     country = obj.optString("country").takeIf { it.isNotBlank() },
                     countryCode = obj.optString("countryCode").takeIf { it.isNotBlank() },
+                    city = obj.optString("city").takeIf { it.isNotBlank() },
+                    provider = obj.optString("provider").takeIf { it.isNotBlank() },
                 )
             }
         }.getOrDefault(emptyList())
@@ -158,6 +164,8 @@ object ConfigStore {
                 cfg.ip?.let { put("ip", it) }
                 cfg.country?.let { put("country", it) }
                 cfg.countryCode?.let { put("countryCode", it) }
+                cfg.city?.let { put("city", it) }
+                cfg.provider?.let { put("provider", it) }
             })
         }
         prefs(context).edit().putString(CONFIGS_KEY, arr.toString()).apply()
@@ -206,6 +214,13 @@ object ConfigStore {
     fun setCountry(context: Context, id: String, country: String?, countryCode: String?) {
         saveAll(context, loadAll(context).map {
             if (it.id == id) it.copy(country = country, countryCode = countryCode) else it
+        })
+    }
+
+    /** Persists the city and hosting provider shown after a config's IP. */
+    fun setPlace(context: Context, id: String, city: String?, provider: String?) {
+        saveAll(context, loadAll(context).map {
+            if (it.id == id) it.copy(city = city, provider = provider) else it
         })
     }
 

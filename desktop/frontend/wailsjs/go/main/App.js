@@ -154,6 +154,10 @@ export function SetConfigGeo(arg1, arg2, arg3, arg4) {
   return window['go']['main']['App']['SetConfigGeo'](arg1, arg2, arg3, arg4);
 }
 
+export function SetConfigPlace(arg1, arg2, arg3) {
+  return window['go']['main']['App']['SetConfigPlace'](arg1, arg2, arg3);
+}
+
 export function SetLanguage(arg1) {
   return window['go']['main']['App']['SetLanguage'](arg1);
 }
@@ -162,8 +166,8 @@ export function SetRelayEnabled(arg1) {
   return window['go']['main']['App']['SetRelayEnabled'](arg1);
 }
 
-export function SetRelayGeo(arg1, arg2, arg3, arg4) {
-  return window['go']['main']['App']['SetRelayGeo'](arg1, arg2, arg3, arg4);
+export function SetRelayGeo(arg1, arg2, arg3, arg4, arg5, arg6) {
+  return window['go']['main']['App']['SetRelayGeo'](arg1, arg2, arg3, arg4, arg5, arg6);
 }
 
 export function SetSmartConfigs(arg1) {

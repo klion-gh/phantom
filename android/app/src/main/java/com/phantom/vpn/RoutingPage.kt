@@ -179,6 +179,18 @@ private fun SmartVpnHeaderTile(
                         fontSize = 13.sp,
                         lineHeight = 18.sp,
                     )
+                    // Smart VPN connects through the picked relay like
+                    // everything else; said here so it isn't a surprise.
+                    val relay = RelayStore.activeAddress
+                    if (relay.isNotEmpty()) {
+                        Spacer(Modifier.height(4.dp))
+                        Text(
+                            I18n.t("smart_vpn_relay").replace("{address}", relay),
+                            color = Primary,
+                            fontSize = 12.5.sp,
+                            fontWeight = FontWeight.SemiBold,
+                        )
+                    }
                 }
                 Spacer(Modifier.width(12.dp))
                 GradientSwitch(

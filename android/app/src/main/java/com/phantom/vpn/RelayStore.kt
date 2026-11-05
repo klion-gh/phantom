@@ -20,6 +20,8 @@ data class SavedRelay(
     val ip: String? = null,
     val country: String? = null,
     val countryCode: String? = null,
+    val city: String? = null,
+    val provider: String? = null,
 )
 
 /**
@@ -69,6 +71,8 @@ object RelayStore {
                         ip = r.optString("ip").ifEmpty { null },
                         country = r.optString("country").ifEmpty { null },
                         countryCode = r.optString("countryCode").ifEmpty { null },
+                        city = r.optString("city").ifEmpty { null },
+                        provider = r.optString("provider").ifEmpty { null },
                     )
                 }
             }
@@ -120,8 +124,14 @@ object RelayStore {
         RelayPings.forget(id)
     }
 
-    fun setGeo(context: Context, id: String, ip: String, country: String?, countryCode: String?) {
-        relays = relays.map { if (it.id == id) it.copy(ip = ip, country = country, countryCode = countryCode) else it }
+    fun setGeo(context: Context, id: String, ip: String, place: Place?) {
+        relays = relays.map {
+            if (it.id == id) {
+                it.copy(ip = ip, country = place?.country, countryCode = place?.countryCode, city = place?.city, provider = place?.provider)
+            } else {
+                it
+            }
+        }
         save(context)
     }
 
@@ -160,6 +170,8 @@ object RelayStore {
                 r.ip?.let { put("ip", it) }
                 r.country?.let { put("country", it) }
                 r.countryCode?.let { put("countryCode", it) }
+                r.city?.let { put("city", it) }
+                r.provider?.let { put("provider", it) }
             })
         }
         val o = JSONObject().apply {
@@ -204,9 +216,8 @@ object RelayPings {
             } else {
                 PingInfo(ip = results[relay.id]?.ip, failed = true)
             }
-            if (ip != null && (ip != relay.ip || relay.countryCode.isNullOrEmpty())) {
-                val geo = lookupCountry(ip)
-                RelayStore.setGeo(context, relay.id, ip, geo?.first, geo?.second)
+            if (ip != null && (ip != relay.ip || relay.countryCode.isNullOrEmpty() || relay.city.isNullOrEmpty())) {
+                RelayStore.setGeo(context, relay.id, ip, lookupPlace(ip))
             }
         } finally {
             inFlight.remove(relay.id)

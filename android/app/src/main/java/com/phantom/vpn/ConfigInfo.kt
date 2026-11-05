@@ -36,6 +36,9 @@ import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.withStyle
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
@@ -157,12 +160,71 @@ suspend fun fetchPing(yaml: String): Pair<String, Long>? = withContext(Dispatche
  * user's server. Done once per saved config and pinned - never on a timer, which
  * is what made the earlier version of this worth removing.
  */
-suspend fun lookupCountry(ip: String): Pair<String, String>? = withContext(Dispatchers.IO) {
+suspend fun lookupPlace(ip: String): Place? = withContext(Dispatchers.IO) {
     runCatching {
         val json = JSONObject(Mobile.lookupCountry(ip))
         val code = json.optString("country_code").takeIf { it.isNotBlank() } ?: return@withContext null
-        json.optString("country").takeIf { it.isNotBlank() }.orEmpty() to code
+        Place(
+            country = json.optString("country").takeIf { it.isNotBlank() }.orEmpty(),
+            countryCode = code,
+            city = json.optString("city").takeIf { it.isNotBlank() },
+            provider = json.optString("provider").takeIf { it.isNotBlank() },
+        )
     }.getOrNull()
+}
+
+/** Where a server is, as a tile shows it: country, then city and provider. */
+data class Place(val country: String, val countryCode: String, val city: String?, val provider: String?)
+
+/** " · city · provider" after a tile's IP. */
+fun placeSuffix(city: String?, provider: String?): String =
+    listOfNotNull(city, provider).filter { it.isNotBlank() }.joinToString("") { " · $it" }
+
+/**
+ * The first two lines of a config or relay tile: the name with its flag and
+ * country after it, then the IP with city and provider after that.
+ */
+@Composable
+fun TileHeading(
+    title: String,
+    countryCode: String?,
+    country: String?,
+    ip: String,
+    city: String?,
+    provider: String?,
+) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Text(
+            text = title,
+            color = TextPrimary,
+            fontSize = 16.sp,
+            fontWeight = FontWeight.SemiBold,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f, fill = false),
+        )
+        val label = country ?: countryCode
+        if (!label.isNullOrBlank()) {
+            val flag = countryCode?.let { countryCodeToFlag(it) }.orEmpty()
+            Spacer(modifier = Modifier.width(7.dp))
+            Text(
+                text = if (flag.isNotEmpty()) "$flag $label" else label,
+                color = TextMuted,
+                fontSize = 12.5.sp,
+                maxLines = 1,
+            )
+        }
+    }
+    Spacer(modifier = Modifier.height(2.dp))
+    Text(
+        text = buildAnnotatedString {
+            withStyle(SpanStyle(fontFamily = FontFamily.Monospace, color = TextSecondary)) { append(ip) }
+            withStyle(SpanStyle(color = TextMuted, fontSize = 12.5.sp)) { append(placeSuffix(city, provider)) }
+        },
+        fontSize = 13.sp,
+        maxLines = 1,
+        overflow = TextOverflow.Ellipsis,
+    )
 }
 
 /**
@@ -206,44 +268,23 @@ fun ConfigInfoCard(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = domain.ifBlank { server.ifBlank { "—" } },
-                    color = TextPrimary,
-                    fontSize = 16.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
+                TileHeading(
+                    title = domain.ifBlank { server.ifBlank { "—" } },
+                    countryCode = config.countryCode,
+                    country = config.country,
+                    ip = info?.ip ?: config.ip ?: server,
+                    city = config.city,
+                    provider = config.provider,
                 )
-                Spacer(modifier = Modifier.height(2.dp))
-                Text(
-                    text = info?.ip ?: config.ip ?: server,
-                    color = TextSecondary,
-                    fontSize = 13.sp,
-                    fontFamily = FontFamily.Monospace,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-                Spacer(modifier = Modifier.height(2.dp))
                 // The ping is a pill you tap - there is no automatic ping. It is
                 // neutral until a result is in, then takes the result's colour
                 // (pingTone): green, amber, or red for slow or no answer.
-                Spacer(modifier = Modifier.height(2.dp))
+                Spacer(modifier = Modifier.height(6.dp))
                 PingPill(
                     label = pingLabel(info, checking),
                     tone = pingTone(info, checking),
                     checking = checking,
                 ) { scope.launch { PingStore.check(config) } }
-                Spacer(modifier = Modifier.height(2.dp))
-                val countryLabel = config.country ?: config.countryCode
-                if (!countryLabel.isNullOrBlank()) {
-                    Spacer(modifier = Modifier.height(4.dp))
-                    val flag = config.countryCode?.let { countryCodeToFlag(it) } ?: ""
-                    Text(
-                        text = if (flag.isNotEmpty()) "$flag $countryLabel" else countryLabel,
-                        color = TextSecondary,
-                        fontSize = 13.sp,
-                    )
-                }
             }
             Spacer(modifier = Modifier.width(4.dp))
             IconButton(onClick = onEdit) {

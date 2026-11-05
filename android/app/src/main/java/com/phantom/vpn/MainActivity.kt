@@ -364,13 +364,15 @@ private fun PhantomApp(
                         if (!invalidated) {
                             ConfigStore.setServerIP(context, id, ip)
                             ConfigStore.setCountry(context, id, null, null)
+                            ConfigStore.setPlace(context, id, null, null)
                             refreshConfigs()
                             invalidated = true
                         }
                         if (hasExplicitCountry) return@launch
-                        val geo = lookupCountry(ip)
+                        val geo = lookupPlace(ip)
                         if (geo != null) {
-                            ConfigStore.setCountry(context, id, geo.first, geo.second)
+                            ConfigStore.setCountry(context, id, geo.country, geo.countryCode)
+                            ConfigStore.setPlace(context, id, geo.city, geo.provider)
                             refreshConfigs()
                             return@launch
                         }
@@ -405,6 +407,16 @@ private fun PhantomApp(
         configs
             .filter { it.ip == null || it.countryCode.isNullOrBlank() }
             .forEach { resolveTileMetadataInBackground(it.id, it.yaml, explicit[it.id] == true) }
+        // Configs saved before tiles showed a city and provider have only the
+        // country: look the rest up once per IP, skipping configs whose
+        // country the yaml spells out - those are never looked up at all.
+        for (cfg in configs) {
+            val ip = cfg.ip ?: continue
+            if (cfg.city != null || cfg.provider != null || explicit[cfg.id] == true) continue
+            val geo = lookupPlace(ip) ?: continue
+            ConfigStore.setPlace(context, cfg.id, geo.city, geo.provider)
+        }
+        refreshConfigs()
     }
 
     Box(modifier = modifier.fillMaxSize()) {
@@ -733,9 +745,6 @@ private fun MainScreen(
                     )
                 }
             }
-            // Adding a config sits with the app's own controls, left of the
-            // gear, rather than on the configs page's title row.
-            AddConfigButton(onPaste = onAddConfig, onServer = onSetupServer)
             IconButton(onClick = onOpenSettings) {
                 Image(
                     painter = painterResource(R.drawable.ic_settings_gear),
@@ -946,10 +955,20 @@ private fun BestConnectButton(enabled: Boolean, onToggle: (Boolean) -> Unit) {
                 letterSpacing = 3.2.sp,
                 color = TextSecondary,
             ),
+            // In a thin pill - the brand gradient ring while on. Its end padding
+            // is short by the tracking after the last letter, so the words are
+            // optically centred.
             modifier = Modifier
-                .clip(RoundedCornerShape(8.dp))
+                .padding(horizontal = 10.dp)
+                .clip(RoundedCornerShape(50))
+                .background(Surface.copy(alpha = if (enabled) 1f else 0.55f))
+                .border(
+                    1.dp,
+                    if (enabled) Brush.linearGradient(BrandGradient) else Brush.linearGradient(listOf(SurfaceOutline, SurfaceOutline)),
+                    RoundedCornerShape(50),
+                )
                 .toggleable(value = enabled, role = Role.Switch, onValueChange = onToggle)
-                .padding(horizontal = 14.dp, vertical = 10.dp)
+                .padding(start = 20.dp, end = 17.dp, top = 9.dp, bottom = 9.dp)
                 // While on, the letters are painted with the brand gradient:
                 // drawn, then the gradient laid over them keeping only where
                 // they are (SrcAtop, on an offscreen layer).
@@ -1123,35 +1142,20 @@ private fun RelayCard(
             modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 12.dp),
         ) {
             Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    relay.address,
-                    color = TextPrimary,
-                    fontSize = 16.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
+                TileHeading(
+                    title = relay.address,
+                    countryCode = relay.countryCode,
+                    country = relay.country,
+                    ip = info?.ip ?: relay.ip ?: "—",
+                    city = relay.city,
+                    provider = relay.provider,
                 )
-                Spacer(Modifier.height(2.dp))
-                Text(
-                    info?.ip ?: relay.ip ?: "—",
-                    color = TextSecondary,
-                    fontSize = 13.sp,
-                    fontFamily = FontFamily.Monospace,
-                )
-                Spacer(Modifier.height(4.dp))
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    PingPill(
-                        label = pingLabel(info, checking),
-                        tone = relayPingTone(info, checking),
-                        checking = checking,
-                    ) { scope.launch { RelayPings.check(context, relay) } }
-                    val country = relay.country ?: relay.countryCode
-                    if (!country.isNullOrBlank()) {
-                        val flag = relay.countryCode?.let { countryCodeToFlag(it) }.orEmpty()
-                        Spacer(Modifier.width(8.dp))
-                        Text(if (flag.isNotEmpty()) "$flag $country" else country, color = TextSecondary, fontSize = 13.sp)
-                    }
-                }
+                Spacer(Modifier.height(6.dp))
+                PingPill(
+                    label = pingLabel(info, checking),
+                    tone = relayPingTone(info, checking),
+                    checking = checking,
+                ) { scope.launch { RelayPings.check(context, relay) } }
             }
             Spacer(Modifier.width(4.dp))
             IconButton(onClick = onEdit) {
@@ -1417,13 +1421,17 @@ private fun ConfigsPage(
                 // place "Ретрансляторы" has in theirs.
                 item(key = HEADER_CONFIGS) {
                     ConfigGroupSegment(first = true, last = false) {
-                        Text(
-                            I18n.t("configs"),
-                            color = TextMuted,
-                            fontSize = 12.5.sp,
-                            fontWeight = FontWeight.SemiBold,
-                            modifier = Modifier.padding(start = 10.dp, top = 6.dp, bottom = 6.dp),
-                        )
+                        // Its + adds a config, as the relays block's adds a relay.
+                        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+                            Text(
+                                I18n.t("configs"),
+                                color = TextMuted,
+                                fontSize = 12.5.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                modifier = Modifier.weight(1f).padding(start = 10.dp),
+                            )
+                            AddConfigButton(onPaste = onAddConfig, onServer = onSetupServer)
+                        }
                     }
                 }
 

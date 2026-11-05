@@ -334,19 +334,25 @@ func (a *App) UpdateConfig(id string, configYAML string) string {
 // user's server - see internal/geoip for the trade-off and the constraints:
 // resolved once per saved config and pinned, never polled.
 func (a *App) LookupCountry(ip string) string {
-	res, err := geoip.Lookup(context.Background(), ip)
+	place, err := geoip.LookupPlace(context.Background(), ip)
 	if err != nil {
 		log.Printf("country lookup for a saved config failed: %v", err)
 		return ""
 	}
-	data, err := json.Marshal(struct {
-		Country     string `json:"country"`
-		CountryCode string `json:"country_code"`
-	}{Country: res.Country, CountryCode: res.CountryCode})
+	data, err := json.Marshal(place)
 	if err != nil {
 		return ""
 	}
 	return string(data)
+}
+
+// SetConfigPlace caches a saved config's city and hosting provider, from the
+// same lookup as its country (LookupCountry).
+func (a *App) SetConfigPlace(id string, city string, provider string) string {
+	if err := setConfigPlace(id, city, provider); err != nil {
+		return err.Error()
+	}
+	return ""
 }
 
 // Version is the running build's version string, shown at the bottom of the

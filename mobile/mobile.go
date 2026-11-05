@@ -420,14 +420,11 @@ func Ping(configYAML string) (string, error) {
 // it is made under: callers resolve once per saved config and pin the result,
 // they do not poll it.
 func LookupCountry(ip string) (string, error) {
-	res, err := geoip.Lookup(context.Background(), ip)
+	place, err := geoip.LookupPlace(context.Background(), ip)
 	if err != nil {
 		return "", err
 	}
-	data, err := json.Marshal(struct {
-		Country     string `json:"country"`
-		CountryCode string `json:"country_code"`
-	}{Country: res.Country, CountryCode: res.CountryCode})
+	data, err := json.Marshal(place)
 	if err != nil {
 		return "", err
 	}

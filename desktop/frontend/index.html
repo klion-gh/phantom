@@ -14,7 +14,6 @@
           <div class="emblem-wrap"><img src="./src/assets/images/phantom-emblem.png" class="emblem" alt="" /></div>
           <div class="title">Phantom</div>
           <div class="spacer"></div>
-          <button id="btn-add" class="icon-btn add-btn" data-i18n-title="add_config" title="Добавить конфигурацию">&#43;</button>
           <button id="btn-update" class="icon-btn update-btn hidden" data-i18n-title="update_available" title="Доступно обновление"><span class="nav-icon nav-icon-update"></span></button>
           <button id="btn-gear" class="icon-btn icon-btn-gear" data-i18n-title="settings" title="Настройки"></button>
         </div>
@@ -42,7 +41,7 @@
                    below, so it reads as the page's headline rather than one
                    more item in the list. Lit with the brand gradient while on. -->
               <div id="auto-tile" class="best-wrap hidden">
-                <button id="auto-toggle" class="best-btn" role="switch"><span data-i18n="auto_config">Подключиться к лучшей</span></button>
+                <button id="auto-toggle" class="best-btn" role="switch"><span><b data-i18n="auto_config">Подключиться к лучшей</b></span></button>
               </div>
 
               <!-- The switch alone, as a bare row: which relay is picked, and
@@ -60,9 +59,10 @@
                 <div id="relay-list" class="tile-group-list"></div>
                 <div id="relay-empty" class="tile-group-empty hidden" data-i18n="relay_empty">Добавьте свой ретранслятор кнопкой +</div>
               </div>
-              <div id="config-group" class="tile-group hidden">
+              <div id="config-group" class="tile-group">
                 <div class="tile-group-header">
                   <span class="tile-group-title" data-i18n="configs">Конфигурации</span>
+                  <button id="btn-add" class="icon-btn tile-group-add" data-i18n-title="add_config" title="Добавить конфигурацию">&#43;</button>
                 </div>
                 <div id="config-list" class="tile-group-list"></div>
               </div>
@@ -89,6 +89,9 @@
                   <div class="routing-tile-text">
                     <div class="routing-tile-title" data-i18n="smart_vpn">Умный VPN</div>
                     <div id="smart-hint" class="routing-tile-hint" data-i18n="smart_vpn_hint">Через VPN пойдут только перечисленные сайты. Остальной трафик — напрямую, как обычно.</div>
+                    <!-- Smart VPN connects through the picked relay like
+                         everything else; said here so it isn't a surprise. -->
+                    <div id="smart-relay-note" class="smart-relay-note hidden"></div>
                   </div>
                   <button id="smart-toggle" class="toggle-switch"><span class="toggle-switch-thumb"></span></button>
                 </div>

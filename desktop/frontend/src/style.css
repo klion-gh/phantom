@@ -351,20 +351,38 @@ html, body {
 
 .config-info { flex: 1; min-width: 0; }
 
+/* Domain, then where it is - flag and country on the same line. */
+.config-title {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    min-width: 0;
+}
 .config-domain {
     font-size: 16px;
     font-weight: 600;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
+    min-width: 0;
+}
+.config-title .geo-text {
+    font-size: 12.5px;
+    color: var(--text-muted);
+    white-space: nowrap;
 }
 
+/* IP, then city and provider: "34.88.191.124 · Lappeenranta · Google LLC". */
 .config-ip {
     font-size: 13px;
     color: var(--text-secondary);
-    font-family: "Consolas", "Cascadia Code", monospace;
     margin-top: 3px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
 }
+.config-ip .ip-addr { font-family: "Consolas", "Cascadia Code", monospace; }
+.config-ip .ip-place { color: var(--text-muted); font-size: 12.5px; }
 
 .config-meta {
     display: flex;
@@ -1603,6 +1621,7 @@ textarea::placeholder { color: var(--text-muted); }
     padding: 10px 0 14px;
 }
 .best-btn {
+    position: relative;
     display: inline-flex;
     align-items: center;
     gap: 16px;
@@ -1630,8 +1649,28 @@ textarea::placeholder { color: var(--text-muted); }
 .best-btn:hover { color: var(--text-primary); }
 .best-btn:hover::before,
 .best-btn:hover::after { width: 56px; }
-.best-btn span { margin-right: -0.26em; } /* the tracking after the last letter */
+/* The words sit in a thin pill. Its padding is uneven by exactly the
+   tracking after the last letter, so the text is optically centred. */
+.best-btn span {
+    position: relative;
+    padding: 9px calc(22px - 0.26em) 9px 22px;
+    border-radius: 999px;
+    border: 1px solid var(--surface-outline);
+    background: color-mix(in srgb, var(--surface) 55%, transparent);
+    transition: border-color 0.25s ease, box-shadow 0.25s ease;
+}
+.best-btn:hover span { border-color: var(--text-muted); }
+/* On: gradient letters, a gradient ring (border-box layer under a padding-box
+   fill) and a soft glow. */
 .best-btn.active span {
+    border-color: transparent;
+    background:
+        linear-gradient(var(--surface), var(--surface)) padding-box,
+        var(--brand-gradient) border-box;
+    box-shadow: 0 0 22px color-mix(in srgb, var(--primary) 28%, transparent);
+    font-weight: 600;
+}
+.best-btn.active span b {
     background: var(--brand-gradient);
     -webkit-background-clip: text;
     background-clip: text;
@@ -1726,6 +1765,11 @@ textarea::placeholder { color: var(--text-muted); }
 }
 .tile-group.dimmed .relay-card.selected { border-color: var(--surface-outline-60); }
 .relay-delete { margin-right: auto; }
+.smart-relay-note {
+    font-size: 12.5px;
+    color: var(--primary);
+    font-weight: 600;
+}
 .relay-dialog { max-width: 400px; }
 .relay-intro,
 .relay-hint { font-size: 13.5px; line-height: 1.5; color: var(--text-secondary); }

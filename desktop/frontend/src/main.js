@@ -8,7 +8,7 @@ import './style.css';
 // install ever shows, so the app's own footprint grows by the whole set
 // (~2.4MB) once, not per flag shown.
 import 'flag-icons/css/flag-icons.min.css';
-import { Connect, Disconnect, Status, ReadLog, ListConfigs, AddConfig, UpdateConfig, DeleteConfig, SetConfigGeo, ClearConfigCountry, Ping, ListResources, AddResource, DeleteResource, ApplyUpdate, GetLanguage, SetLanguage, Version, LookupCountry, GetAppearance, SetAppearance, GetBetaUpdates, SetBetaUpdates, ReadFullLog, GetRoutingState, SetSmartEnabled, SetSmartSites, SetSmartConfigs, SetAutoEnabled, SetAutoConfigs, GetRelays, SetRelayEnabled, SelectRelay, AddRelay, UpdateRelay, DeleteRelay, SetRelayGeo, PingRelay, ReconnectActive, RoutingHealth, PopularResources, GetBrowserBridge, SetBrowserBridgeEnabled, RevokeBrowserClients, AnswerBrowserPairing, ProvisionServer, CancelProvision, ForgetServerKey } from '../wailsjs/go/main/App';
+import { Connect, Disconnect, Status, ReadLog, ListConfigs, AddConfig, UpdateConfig, DeleteConfig, SetConfigGeo, SetConfigPlace, ClearConfigCountry, Ping, ListResources, AddResource, DeleteResource, ApplyUpdate, GetLanguage, SetLanguage, Version, LookupCountry, GetAppearance, SetAppearance, GetBetaUpdates, SetBetaUpdates, ReadFullLog, GetRoutingState, SetSmartEnabled, SetSmartSites, SetSmartConfigs, SetAutoEnabled, SetAutoConfigs, GetRelays, SetRelayEnabled, SelectRelay, AddRelay, UpdateRelay, DeleteRelay, SetRelayGeo, PingRelay, ReconnectActive, RoutingHealth, PopularResources, GetBrowserBridge, SetBrowserBridgeEnabled, RevokeBrowserClients, AnswerBrowserPairing, ProvisionServer, CancelProvision, ForgetServerKey } from '../wailsjs/go/main/App';
 import { t, getLang, setLang, applyStaticTranslations } from './i18n.js';
 import { BACKGROUNDS, initBackground, initMiniBackground } from './background.js';
 import { PALETTES } from './palettes.js';
@@ -175,6 +175,7 @@ async function resolveTileMetadata(id, yaml, hasExplicitCountry) {
           if (raw) {
             const geo = JSON.parse(raw);
             await SetConfigGeo(id, '', geo.country, geo.country_code);
+            await SetConfigPlace(id, geo.city || '', geo.provider || '');
             await reloadConfigs();
             return;
           }
@@ -248,13 +249,39 @@ function updateRoutingPing(id) {
   if (el) el.textContent = pingLabel(id);
 }
 
+// " · city · provider" after a tile's IP, from the cached place lookup.
+function placeSuffix(item) {
+  return [item.city, item.provider].filter(Boolean).map((v) => ` · ${v}`).join('');
+}
+
+// Configs saved before tiles showed a city and provider have only the
+// country: look the rest up once per IP (the same one lookup per server the
+// country took), skipping configs whose country the yaml spells out - those
+// are never looked up at all.
+async function backfillPlaces() {
+  for (const config of configs) {
+    if (!config.ip || config.city || config.provider) continue;
+    if (parseYamlField(config.yaml, 'country') || parseYamlField(config.yaml, 'country_code')) continue;
+    try {
+      const raw = await LookupCountry(config.ip);
+      if (!raw) continue;
+      const geo = JSON.parse(raw);
+      await SetConfigPlace(config.id, geo.city || '', geo.provider || '');
+    } catch (e) {
+      console.error(e);
+    }
+  }
+  await reloadConfigs();
+}
+
 function updateTileMeta(id) {
   const card = configList.querySelector(`[data-id="${id}"]`);
   const config = configs.find((c) => c.id === id);
   if (!card || !config) return;
 
   const info = pingData.get(id) || {};
-  card.querySelector('.config-ip').textContent = info.ip || config.ip || parseYamlField(config.yaml, 'server') || '—';
+  card.querySelector('.ip-addr').textContent = info.ip || config.ip || parseYamlField(config.yaml, 'server') || '—';
+  card.querySelector('.ip-place').textContent = placeSuffix(config);
   const pingBtn = card.querySelector('.ping-btn');
   pingBtn.textContent = pingLabel(id);
   pingBtn.disabled = pingsInFlight.has(id);
@@ -408,12 +435,14 @@ function renderConfigList() {
     card.dataset.id = config.id;
     card.innerHTML = `
       <div class="config-info">
-        <div class="config-domain">${escapeHtml(domain)}</div>
-        <div class="config-ip"></div>
-        <div class="config-meta">
-          <button type="button" class="ping-btn" title="${t('check_ping')}">${t('ping')}: —</button>
+        <div class="config-title">
+          <span class="config-domain">${escapeHtml(domain)}</span>
           <span class="geo-flag fi hidden"></span>
           <span class="geo-text"></span>
+        </div>
+        <div class="config-ip"><span class="ip-addr"></span><span class="ip-place"></span></div>
+        <div class="config-meta">
+          <button type="button" class="ping-btn" title="${t('check_ping')}">${t('ping')}: —</button>
         </div>
       </div>
       <button class="config-edit-btn icon-btn-gear" title="${t('edit')}"></button>
@@ -1190,6 +1219,7 @@ setInterval(refreshStatus, 4000);
       resolveTileMetadata(config.id, config.yaml, explicit.get(config.id));
     }
   }
+  backfillPlaces();
 
   // Version at the bottom of the settings panel. The app updates itself from
   // GitHub releases, so "what am I actually running" is the first thing anyone
@@ -1527,9 +1557,16 @@ function relayPingLabel(id) {
   return info.failed ? `${t('ping')}: ${t('no_answer')}` : `${t('ping')}: —`;
 }
 
+function renderSmartRelayNote() {
+  const note = document.getElementById('smart-relay-note');
+  const active = relayState.enabled && relayState.relays.find((r) => r.id === relayState.selected);
+  note.classList.toggle('hidden', !active);
+  if (active) note.textContent = t('smart_vpn_relay', { address: active.address });
+}
+
 function renderRelay() {
+  renderSmartRelayNote();
   const any = relayState.relays.length > 0;
-  document.getElementById('config-group').classList.toggle('hidden', configs.length === 0);
   document.getElementById('relay-tile').classList.toggle('hidden', configs.length === 0);
   document.getElementById('relay-toggle').classList.toggle('active', relayState.enabled);
 
@@ -1548,12 +1585,14 @@ function renderRelay() {
     card.dataset.id = relay.id;
     card.innerHTML = `
       <div class="config-info">
-        <div class="config-domain">${escapeHtml(relay.address)}</div>
-        <div class="config-ip"></div>
-        <div class="config-meta">
-          <button type="button" class="ping-btn" title="${t('check_ping')}">${t('ping')}: —</button>
+        <div class="config-title">
+          <span class="config-domain">${escapeHtml(relay.address)}</span>
           <span class="geo-flag fi hidden"></span>
           <span class="geo-text"></span>
+        </div>
+        <div class="config-ip"><span class="ip-addr"></span><span class="ip-place"></span></div>
+        <div class="config-meta">
+          <button type="button" class="ping-btn" title="${t('check_ping')}">${t('ping')}: —</button>
         </div>
       </div>
       <button class="config-edit-btn icon-btn-gear" title="${t('edit')}"></button>
@@ -1574,7 +1613,8 @@ function updateRelayMeta(id) {
   card.classList.toggle('selected', relayState.selected === id);
 
   const info = relayPing.get(id) || {};
-  card.querySelector('.config-ip').textContent = info.ip || relay.ip || '—';
+  card.querySelector('.ip-addr').textContent = info.ip || relay.ip || '—';
+  card.querySelector('.ip-place').textContent = placeSuffix(relay);
   const pingBtn = card.querySelector('.ping-btn');
   pingBtn.textContent = relayPingLabel(id);
   pingBtn.disabled = relayPingsInFlight.has(id);
@@ -1629,11 +1669,11 @@ async function pingRelayNow(relay) {
     relayPingsInFlight.delete(relay.id);
   }
   updateRelayMeta(relay.id);
-  if (ip && (ip !== relay.ip || !relay.countryCode)) {
+  if (ip && (ip !== relay.ip || !relay.countryCode || !relay.city)) {
     try {
       const raw = await LookupCountry(ip);
       const geo = raw ? JSON.parse(raw) : {};
-      await SetRelayGeo(relay.id, ip, geo.country || '', geo.country_code || '');
+      await SetRelayGeo(relay.id, ip, geo.country || '', geo.country_code || '', geo.city || '', geo.provider || '');
       await reloadRelays();
     } catch (e) {
       console.error(e);

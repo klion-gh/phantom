@@ -25,6 +25,10 @@ type SavedConfig struct {
 	IP          string `json:"ip,omitempty"`
 	Country     string `json:"country,omitempty"`
 	CountryCode string `json:"countryCode,omitempty"`
+	// City and hosting provider, shown on the tile beside the IP - looked up
+	// with the country (geoip.LookupPlace) and cached the same way.
+	City     string `json:"city,omitempty"`
+	Provider string `json:"provider,omitempty"`
 }
 
 const (
@@ -168,6 +172,25 @@ func setConfigGeo(id, ip, country, countryCode string) error {
 	return saveConfigs(dir, configs)
 }
 
+// setConfigPlace caches a saved config's city and hosting provider.
+func setConfigPlace(id, city, provider string) error {
+	dir, err := configDir()
+	if err != nil {
+		return err
+	}
+	configs, err := loadConfigs()
+	if err != nil {
+		return err
+	}
+	for i := range configs {
+		if configs[i].ID == id {
+			configs[i].City = city
+			configs[i].Provider = provider
+		}
+	}
+	return saveConfigs(dir, configs)
+}
+
 // clearConfigCountry blanks a saved config's cached country/ISO code - called
 // by the frontend right before re-resolving them once resolveTileMetadata
 // notices the config's dialed IP has changed, so a label from the old server
@@ -187,6 +210,8 @@ func clearConfigCountry(id string) error {
 		if configs[i].ID == id {
 			configs[i].Country = ""
 			configs[i].CountryCode = ""
+			configs[i].City = ""
+			configs[i].Provider = ""
 		}
 	}
 	return saveConfigs(dir, configs)
