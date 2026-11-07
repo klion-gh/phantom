@@ -81,18 +81,33 @@ jobs:
         env:
           GOOS: linux
           GOARCH: ${{ matrix.arch }}
+          # Pure Go, statically linked: with cgo the amd64 build pulled in C
+          # compiled for newer CPUs and died with SIGILL on a VPS whose
+          # virtual CPU offers little beyond SSE2 - and it tied the binary to
+          # the runner's glibc. None of these needs C.
+          CGO_ENABLED: "0"
         run: go build -o "phantom-server-linux-${{ matrix.arch }}" ./cmd/server
 
       - name: Build phantom-keygen
         env:
           GOOS: linux
           GOARCH: ${{ matrix.arch }}
+          # Pure Go, statically linked: with cgo the amd64 build pulled in C
+          # compiled for newer CPUs and died with SIGILL on a VPS whose
+          # virtual CPU offers little beyond SSE2 - and it tied the binary to
+          # the runner's glibc. None of these needs C.
+          CGO_ENABLED: "0"
         run: go build -o "phantom-keygen-linux-${{ matrix.arch }}" ./cmd/keygen
 
       - name: Build phantom-relay
         env:
           GOOS: linux
           GOARCH: ${{ matrix.arch }}
+          # Pure Go, statically linked: with cgo the amd64 build pulled in C
+          # compiled for newer CPUs and died with SIGILL on a VPS whose
+          # virtual CPU offers little beyond SSE2 - and it tied the binary to
+          # the runner's glibc. None of these needs C.
+          CGO_ENABLED: "0"
         run: go build -o "phantom-relay-linux-${{ matrix.arch }}" ./cmd/relay
 
       - uses: actions/upload-artifact@v4
