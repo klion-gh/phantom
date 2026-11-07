@@ -201,6 +201,7 @@ func StartWindows(configYAML string, onNetworkChanged func()) (*WinTunnel, error
 		Fingerprint: cfg.Fingerprint,
 		ServerAddr:  cfg.Server,
 		ServerAddrs: dialAddrs,
+		RelayDomain: cfg.RelayDomain(),
 		PSK:         psk,
 		ServerPub:   serverPub,
 	}

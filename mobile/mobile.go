@@ -191,6 +191,7 @@ func Start(configYAML string, tunFD int, mtu int, protector Protector) (*Tunnel,
 		Fingerprint: cfg.Fingerprint,
 		ServerAddr:  cfg.Server,
 		ServerAddrs: cfg.ServerList(),
+		RelayDomain: cfg.RelayDomain(),
 		PSK:         psk,
 		ServerPub:   serverPub,
 	}

@@ -22,8 +22,11 @@ import (
 // SavedRelay is one relay in the list. IP/country are what its tile shows,
 // cached the same way a config's are.
 type SavedRelay struct {
-	ID          string `json:"id"`
-	Address     string `json:"address"`
+	ID      string `json:"id"`
+	Address string `json:"address"`
+	// Prefix is the label of the servers' relay-facing names through this
+	// relay ("msk" -> msk.<domain>); "" presents the domain itself.
+	Prefix      string `json:"prefix,omitempty"`
 	IP          string `json:"ip,omitempty"`
 	Country     string `json:"country,omitempty"`
 	CountryCode string `json:"countryCode,omitempty"`
@@ -88,16 +91,25 @@ func saveRelaysLocked(s relaySettings) error {
 	return os.WriteFile(filepath.Join(dir, relaysFileName), data, 0600)
 }
 
-// activeAddress is the relay connections go through: the picked one while
-// the switch is on, "" otherwise.
-func (s relaySettings) activeAddress() string {
+// active is the relay connections go through: the picked one while the
+// switch is on, nil otherwise.
+func (s relaySettings) active() *SavedRelay {
 	if !s.Enabled {
-		return ""
+		return nil
 	}
-	for _, r := range s.Relays {
-		if r.ID == s.Selected {
-			return r.Address
+	for i := range s.Relays {
+		if s.Relays[i].ID == s.Selected {
+			return &s.Relays[i]
 		}
+	}
+	return nil
+}
+
+// activeKey says what connections go through, for telling whether a change
+// moved it: address and prefix, "" for no relay.
+func (s relaySettings) activeKey() string {
+	if r := s.active(); r != nil {
+		return r.Address + "|" + r.Prefix
 	}
 	return ""
 }
@@ -106,11 +118,11 @@ func (s relaySettings) activeAddress() string {
 // active relay added, otherwise unchanged. A config the relay can't be added
 // to goes through as it is - connecting directly beats not connecting.
 func withRelaySetting(configYAML string) string {
-	addr := loadRelays().activeAddress()
-	if addr == "" {
+	r := loadRelays().active()
+	if r == nil {
 		return configYAML
 	}
-	out, err := config.WithRelay(configYAML, addr)
+	out, err := config.WithRelay(configYAML, r.Address, r.Prefix)
 	if err != nil {
 		log.Printf("[relay] could not add the relay to a config, connecting directly: %v", err)
 		return configYAML
@@ -123,13 +135,13 @@ func withRelaySetting(configYAML string) string {
 func (a *App) updateRelays(change func(*relaySettings) string) string {
 	relayMu.Lock()
 	s := loadRelaysLocked()
-	before := s.activeAddress()
+	before := s.activeKey()
 	if msg := change(&s); msg != "" {
 		relayMu.Unlock()
 		return msg
 	}
 	err := saveRelaysLocked(s)
-	after := s.activeAddress()
+	after := s.activeKey()
 	relayMu.Unlock()
 	if err != nil {
 		return err.Error()
@@ -179,15 +191,19 @@ func (a *App) SelectRelay(id string) string {
 }
 
 // AddRelay adds a relay - picked straight away when it's the first - and
-// returns its id, or "error:bad_address".
-func (a *App) AddRelay(address string) string {
+// returns its id, or "error:bad_address" / "error:bad_prefix".
+func (a *App) AddRelay(address, prefix string) string {
 	addr, err := config.NormalizeRelayAddr(address)
 	if err != nil {
 		return "error:bad_address"
 	}
+	pfx, err := config.NormalizeRelayPrefix(prefix)
+	if err != nil {
+		return "error:bad_prefix"
+	}
 	id := uuid.NewString()
 	if msg := a.updateRelays(func(s *relaySettings) string {
-		s.Relays = append(s.Relays, SavedRelay{ID: id, Address: addr})
+		s.Relays = append(s.Relays, SavedRelay{ID: id, Address: addr, Prefix: pfx})
 		if s.Selected == "" || len(s.Relays) == 1 {
 			s.Selected = id
 		}
@@ -198,11 +214,16 @@ func (a *App) AddRelay(address string) string {
 	return id
 }
 
-// UpdateRelay changes a relay's address. Returns "" or "bad_address".
-func (a *App) UpdateRelay(id, address string) string {
+// UpdateRelay changes a relay's address and prefix. Returns "",
+// "bad_address" or "bad_prefix".
+func (a *App) UpdateRelay(id, address, prefix string) string {
 	addr, err := config.NormalizeRelayAddr(address)
 	if err != nil {
 		return "bad_address"
+	}
+	pfx, err := config.NormalizeRelayPrefix(prefix)
+	if err != nil {
+		return "bad_prefix"
 	}
 	return a.updateRelays(func(s *relaySettings) string {
 		for i := range s.Relays {
@@ -211,6 +232,7 @@ func (a *App) UpdateRelay(id, address string) string {
 					// A different relay: what was cached about the old one is not about it.
 					s.Relays[i] = SavedRelay{ID: id, Address: addr}
 				}
+				s.Relays[i].Prefix = pfx
 				return ""
 			}
 		}

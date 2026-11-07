@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"errors"
 	"fmt"
 	"net"
 	"sync"
@@ -13,6 +14,7 @@ import (
 	utls "github.com/refraction-networking/utls"
 
 	"phantom/internal/handshake"
+	"phantom/internal/logx"
 	"phantom/internal/protocol"
 )
 
@@ -23,6 +25,11 @@ type TLSClientConfig struct {
 	ServerAddrs []string // optional multi-endpoint failover list (see NewFailoverDialer); all share Domain/PSK/ServerPub
 	PSK         []byte
 	ServerPub   []byte // server's static X25519 public key
+
+	// RelayDomain, if set, is the name presented instead of Domain - the
+	// server's relay-facing name (see config.ClientConfig.RelayPrefix). A
+	// server without a certificate for it is retried with Domain.
+	RelayDomain string
 
 	// ProtectFD, if set, is called with the raw socket fd right after it's
 	// created and before connect(). On Android, once a VpnService routes
@@ -114,6 +121,25 @@ func newFailoverDialer(addrs []string, dialOne dialOneFn) func(context.Context) 
 // self-signed-cert masquerade), then performs the disguised handshake
 // (internal/handshake) to authenticate and derive per-session keys.
 func dialAddr(ctx context.Context, cfg *TLSClientConfig, addr string) (net.Conn, *protocol.SessionCrypto, error) {
+	if cfg.RelayDomain == "" {
+		return dialName(ctx, cfg, addr)
+	}
+	relayed := *cfg
+	relayed.Domain, relayed.RelayDomain = cfg.RelayDomain, ""
+	conn, crypto, err := dialName(ctx, &relayed, addr)
+	if err == nil || errors.Is(err, errTCPDial) || ctx.Err() != nil {
+		return conn, crypto, err
+	}
+	// The relay reached the server but the relay-facing name didn't work -
+	// a server with no certificate for it yet. Its own domain does.
+	logx.Infof("[client] %s through the relay failed (%v), trying %s", cfg.RelayDomain, err, cfg.Domain)
+	return dialName(ctx, cfg, addr)
+}
+
+// errTCPDial marks a failure before TLS began: no point trying another name.
+var errTCPDial = errors.New("tcp dial")
+
+func dialName(ctx context.Context, cfg *TLSClientConfig, addr string) (net.Conn, *protocol.SessionCrypto, error) {
 	dialer := &net.Dialer{Timeout: defaultTimeout}
 	if cfg.ProtectFD != nil {
 		dialer.Control = func(network, address string, c syscall.RawConn) error {
@@ -133,7 +159,7 @@ func dialAddr(ctx context.Context, cfg *TLSClientConfig, addr string) (net.Conn,
 	// cfg.Resolver and fall back to the last good address - see resolve.go.
 	targets, err := resolveServer(ctx, cfg.Resolver, addr)
 	if err != nil {
-		return nil, nil, fmt.Errorf("tcp dial: %w", err)
+		return nil, nil, fmt.Errorf("%w: %w", errTCPDial, err)
 	}
 	var conn net.Conn
 	for _, target := range targets {
@@ -143,7 +169,7 @@ func dialAddr(ctx context.Context, cfg *TLSClientConfig, addr string) (net.Conn,
 		}
 	}
 	if err != nil {
-		return nil, nil, fmt.Errorf("tcp dial: %w", err)
+		return nil, nil, fmt.Errorf("%w: %w", errTCPDial, err)
 	}
 	if host, _, splitErr := net.SplitHostPort(addr); splitErr == nil && net.ParseIP(host) == nil {
 		if tcpAddr, ok := conn.RemoteAddr().(*net.TCPAddr); ok {

@@ -104,6 +104,8 @@ let enableAfterAdd = false; // the switch was turned on with no relay to use yet
 const relayOverlay = document.getElementById('relay-overlay');
 const relayInput = document.getElementById('relay-input');
 const relayError = document.getElementById('relay-error');
+const relayPrefixInput = document.getElementById('relay-prefix-input');
+const relayPrefixError = document.getElementById('relay-prefix-error');
 
 function escapeHtml(text) {
   const div = document.createElement('div');
@@ -1587,6 +1589,7 @@ function renderRelay() {
       <div class="config-info">
         <div class="config-title">
           <span class="config-domain">${escapeHtml(relay.address)}</span>
+          ${relay.prefix ? `<span class="relay-prefix-tag">${escapeHtml(relay.prefix)}.*</span>` : ''}
           <span class="geo-flag fi hidden"></span>
           <span class="geo-text"></span>
         </div>
@@ -1686,7 +1689,9 @@ function openRelayDialog(relay) {
   document.getElementById('relay-dialog-title').textContent = t(relay ? 'relay_title' : 'relay_new');
   document.getElementById('btn-relay-delete').classList.toggle('hidden', !relay);
   relayInput.value = relay ? relay.address : '';
+  relayPrefixInput.value = relay ? relay.prefix || '' : '';
   relayError.classList.add('hidden');
+  relayPrefixError.classList.add('hidden');
   showOverlay(relayOverlay);
   setTimeout(() => relayInput.focus(), 50);
 }
@@ -1721,16 +1726,17 @@ document.getElementById('btn-relay-delete').addEventListener('click', async () =
 async function saveRelayFromDialog() {
   if (editingRelayId) {
     const wasActive = relayState.enabled && relayState.selected === editingRelayId;
-    if (await UpdateRelay(editingRelayId, relayInput.value)) {
-      relayError.classList.remove('hidden');
+    const err = await UpdateRelay(editingRelayId, relayInput.value, relayPrefixInput.value);
+    if (err) {
+      (err === 'bad_prefix' ? relayPrefixError : relayError).classList.remove('hidden');
       return;
     }
     relayPing.delete(editingRelayId);
     if (wasActive) forgetConfigPings();
   } else {
-    const id = await AddRelay(relayInput.value);
+    const id = await AddRelay(relayInput.value, relayPrefixInput.value);
     if (id.startsWith('error:')) {
-      relayError.classList.remove('hidden');
+      (id === 'error:bad_prefix' ? relayPrefixError : relayError).classList.remove('hidden');
       return;
     }
     if (enableAfterAdd) {

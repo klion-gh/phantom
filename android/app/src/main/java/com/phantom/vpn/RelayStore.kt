@@ -17,6 +17,9 @@ import java.util.UUID
 data class SavedRelay(
     val id: String,
     val address: String,
+    /** Label of the servers' relay-facing names through this relay ("msk" ->
+     * msk.<domain>); "" presents the domain itself. */
+    val prefix: String = "",
     val ip: String? = null,
     val country: String? = null,
     val countryCode: String? = null,
@@ -48,9 +51,13 @@ object RelayStore {
     var relays by mutableStateOf<List<SavedRelay>>(emptyList())
         private set
 
-    /** The relay connections go through right now, or "" for none. */
+    /** The relay connections go through right now, or null for none. */
+    val active: SavedRelay?
+        get() = if (enabled) relays.firstOrNull { it.id == selectedId } else null
+
+    /** Its address, or "" for none. */
     val activeAddress: String
-        get() = if (enabled) relays.firstOrNull { it.id == selectedId }?.address.orEmpty() else ""
+        get() = active?.address.orEmpty()
 
     /** Reads the setting and hands it to the core. Called from
      * [PhantomApplication.onCreate], before anything can start a tunnel. */
@@ -68,6 +75,7 @@ object RelayStore {
                     SavedRelay(
                         id = r.getString("id"),
                         address = r.getString("address"),
+                        prefix = r.optString("prefix"),
                         ip = r.optString("ip").ifEmpty { null },
                         country = r.optString("country").ifEmpty { null },
                         countryCode = r.optString("countryCode").ifEmpty { null },
@@ -95,22 +103,28 @@ object RelayStore {
 
     /** Adds a relay - picked straight away when it's the first. Returns false,
      * changing nothing, when [address] isn't an address. */
-    fun add(context: Context, address: String): Boolean {
+    fun add(context: Context, address: String, prefix: String): Boolean {
         val normalized = normalize(address) ?: return false
+        val pfx = normalizePrefix(prefix) ?: return false
         change(context) {
-            val r = SavedRelay(UUID.randomUUID().toString(), normalized)
+            val r = SavedRelay(UUID.randomUUID().toString(), normalized, pfx)
             relays = relays + r
             if (selectedId == null || relays.none { it.id == selectedId }) selectedId = r.id
         }
         return true
     }
 
-    fun update(context: Context, id: String, address: String): Boolean {
+    fun update(context: Context, id: String, address: String, prefix: String): Boolean {
         val normalized = normalize(address) ?: return false
+        val pfx = normalizePrefix(prefix) ?: return false
         change(context) {
             relays = relays.map {
-                // A different relay: what was cached about the old one is not about it.
-                if (it.id == id && it.address != normalized) SavedRelay(id, normalized) else it
+                when {
+                    it.id != id -> it
+                    // A different relay: what was cached about the old one is not about it.
+                    it.address != normalized -> SavedRelay(id, normalized, pfx)
+                    else -> it.copy(prefix = pfx)
+                }
             }
         }
         RelayPings.forget(id)
@@ -138,13 +152,13 @@ object RelayStore {
     /** Applies [block], saves, and - when that moved the active relay -
      * rebuilds a running tunnel so the change applies at once. */
     private fun change(context: Context, block: () -> Unit) {
-        val before = activeAddress
+        val before = active?.let { it.address to it.prefix }
         block()
         save(context)
-        val after = activeAddress
+        val after = active?.let { it.address to it.prefix }
         if (before != after) {
             applyToCore()
-            Diag.log(Diag.Cat.VPN, "relayChanged", "active" to after.isNotEmpty())
+            Diag.log(Diag.Cat.VPN, "relayChanged", "active" to (after != null))
             // Every ping so far measured the other path.
             PingStore.forgetAll()
             RoutingController.reconnectActive(context)
@@ -155,10 +169,14 @@ object RelayStore {
     private fun normalize(address: String): String? =
         runCatching { Mobile.normalizeRelayAddr(address) }.getOrNull()
 
+    /** "" for no prefix, null when it isn't one. */
+    private fun normalizePrefix(prefix: String): String? =
+        runCatching { Mobile.normalizeRelayPrefix(prefix) }.getOrNull()
+
     private fun applyToCore() {
-        val effective = activeAddress
-        runCatching { Mobile.setRelay(effective) }
-            .onFailure { FileLog.e("relay: the core refused $effective", it) }
+        val r = active
+        runCatching { Mobile.setRelay(r?.address.orEmpty(), r?.prefix.orEmpty()) }
+            .onFailure { FileLog.e("relay: the core refused ${r?.address}", it) }
     }
 
     private fun save(context: Context) {
@@ -167,6 +185,7 @@ object RelayStore {
             arr.put(JSONObject().apply {
                 put("id", r.id)
                 put("address", r.address)
+                if (r.prefix.isNotEmpty()) put("prefix", r.prefix)
                 r.ip?.let { put("ip", it) }
                 r.country?.let { put("country", it) }
                 r.countryCode?.let { put("countryCode", it) }

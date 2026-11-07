@@ -6,8 +6,8 @@ export function AddConfig(arg1) {
   return window['go']['main']['App']['AddConfig'](arg1);
 }
 
-export function AddRelay(arg1) {
-  return window['go']['main']['App']['AddRelay'](arg1);
+export function AddRelay(arg1, arg2) {
+  return window['go']['main']['App']['AddRelay'](arg1, arg2);
 }
 
 export function AddResource(arg1, arg2) {
@@ -198,8 +198,8 @@ export function UpdateConfig(arg1, arg2) {
   return window['go']['main']['App']['UpdateConfig'](arg1, arg2);
 }
 
-export function UpdateRelay(arg1, arg2) {
-  return window['go']['main']['App']['UpdateRelay'](arg1, arg2);
+export function UpdateRelay(arg1, arg2, arg3) {
+  return window['go']['main']['App']['UpdateRelay'](arg1, arg2, arg3);
 }
 
 export function Version() {

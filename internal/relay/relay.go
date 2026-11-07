@@ -46,6 +46,23 @@ type Config struct {
 	// reaches its server over a private network (the same cloud VPC, or the
 	// same machine on another port).
 	AllowPrivate bool `yaml:"allow_private"`
+	// SNIPrefix, if set, is the label a server's relay-facing name starts
+	// with: with "msk", a connection for msk.vpn.example goes to vpn.example.
+	// That name's DNS points at the relay, so a client coming through it
+	// presents a name that matches the address it connects to; the server
+	// holds a certificate for it too (its extra_domains), so TLS stays end to
+	// end. The connection goes to the name with the prefix taken off - the
+	// server's own domain, which still points at the server.
+	SNIPrefix string `yaml:"sni_prefix"`
+	// HTTPListen is where the relay takes plain HTTP (port 80) and passes it
+	// on by Host header, the same way as TLS by SNI - so Let's Encrypt can
+	// reach the server for the relay-facing name's certificate.
+	HTTPListen []string `yaml:"http_listen"`
+	// Fallback, if set, is "host:port" a TLS connection goes to when the
+	// relay has nowhere for it: no SNI, a name it doesn't forward, a server
+	// that doesn't answer. A probe then reaches a site instead of a closed
+	// connection - which no ordinary web server gives.
+	Fallback string `yaml:"fallback"`
 	// MaxConns caps connections in flight; past it new ones are refused.
 	MaxConns int    `yaml:"max_conns"`
 	LogLevel string `yaml:"log_level"`
@@ -73,6 +90,12 @@ func ParseConfig(data []byte) (*Config, error) {
 			return nil, fmt.Errorf("route for %s must be host:port: %w", domain, err)
 		}
 	}
+	if cfg.Fallback != "" {
+		if _, _, err := net.SplitHostPort(cfg.Fallback); err != nil {
+			return nil, fmt.Errorf("fallback must be host:port: %w", err)
+		}
+	}
+	cfg.SNIPrefix = strings.ToLower(strings.Trim(cfg.SNIPrefix, ". "))
 	if cfg.MaxConns <= 0 {
 		cfg.MaxConns = 4096
 	}
@@ -97,12 +120,14 @@ type Relay struct {
 	// to this machine. Tests swap out lookup.
 	lookup  func(ctx context.Context, host string) ([]net.IP, error)
 	isLocal func(net.IP) bool
+	// httpPort is where plain HTTP goes on the server: 80, a test's own.
+	httpPort string
 }
 
 // New returns a relay for cfg.
 func New(cfg *Config) *Relay {
 	own := map[string]bool{}
-	for _, l := range cfg.Listen {
+	for _, l := range append(append([]string{}, cfg.Listen...), cfg.HTTPListen...) {
 		if _, port, err := net.SplitHostPort(l); err == nil {
 			own[port] = true
 		}
@@ -114,12 +139,22 @@ func New(cfg *Config) *Relay {
 		lookup: func(ctx context.Context, host string) ([]net.IP, error) {
 			return net.DefaultResolver.LookupIP(ctx, "ip", host)
 		},
-		isLocal: isLocalIP,
+		isLocal:  isLocalIP,
+		httpPort: "80",
 	}
 }
 
-// Serve accepts on ln until ctx is done or ln fails.
+// Serve accepts TLS connections on ln until ctx is done or ln fails.
 func (r *Relay) Serve(ctx context.Context, ln net.Listener) error {
+	return r.serve(ctx, ln, r.handle)
+}
+
+// ServeHTTP accepts plain HTTP on ln, passed on by Host header.
+func (r *Relay) ServeHTTP(ctx context.Context, ln net.Listener) error {
+	return r.serve(ctx, ln, r.handleHTTP)
+}
+
+func (r *Relay) serve(ctx context.Context, ln net.Listener, handle func(context.Context, net.Conn)) error {
 	go func() {
 		<-ctx.Done()
 		ln.Close()
@@ -145,7 +180,7 @@ func (r *Relay) Serve(ctx context.Context, ln net.Listener) error {
 		}
 		go func() {
 			defer func() { <-r.slots }()
-			r.handle(ctx, c)
+			handle(ctx, c)
 		}()
 	}
 }
@@ -162,20 +197,26 @@ func (r *Relay) handle(ctx context.Context, c net.Conn) {
 		return
 	}
 
-	target, err := r.target(ctx, sni)
+	d := net.Dialer{Timeout: dialTimeout, KeepAlive: keepAlive}
+	var up net.Conn
+	target, err := r.target(ctx, sni, false)
 	if err != nil {
 		logx.Infof("[relay] %s: not forwarding %q: %v", c.RemoteAddr(), sni, err)
-		return
-	}
-
-	d := net.Dialer{Timeout: dialTimeout, KeepAlive: keepAlive}
-	up, err := d.DialContext(ctx, "tcp", target)
-	if err != nil {
+	} else if up, err = d.DialContext(ctx, "tcp", target); err != nil {
 		logx.Infof("[relay] %s -> %s (%s): %v", c.RemoteAddr(), sni, target, err)
-		return
+	}
+	if up == nil {
+		if r.cfg.Fallback == "" {
+			return
+		}
+		if up, err = d.DialContext(ctx, "tcp", r.cfg.Fallback); err != nil {
+			logx.Infof("[relay] %s: fallback %s: %v", c.RemoteAddr(), r.cfg.Fallback, err)
+			return
+		}
+		target = r.cfg.Fallback + " (fallback)"
 	}
 	defer up.Close()
-	logx.Debugf("[relay] %s -> %s (%s)", c.RemoteAddr(), sni, target)
+	logx.Debugf("[relay] %s -> %q (%s)", c.RemoteAddr(), sni, target)
 
 	if _, err := up.Write(hello); err != nil {
 		return
@@ -183,16 +224,64 @@ func (r *Relay) handle(ctx context.Context, c net.Conn) {
 	pipe(c, up)
 }
 
-// target picks where a connection for sni goes: its route if it has one,
-// otherwise sni:target_port at the first public address sni resolves to.
-func (r *Relay) target(ctx context.Context, sni string) (string, error) {
-	sni = strings.ToLower(strings.TrimSuffix(sni, "."))
-	if !r.allowed(sni) {
+// handleHTTP passes a plain-HTTP connection on by its Host header - the
+// ACME HTTP-01 challenge for a server's relay-facing name arrives here.
+func (r *Relay) handleHTTP(ctx context.Context, c net.Conn) {
+	defer c.Close()
+	setKeepAlive(c)
+
+	c.SetReadDeadline(time.Now().Add(helloTimeout))
+	host, head, err := readHTTPHost(c)
+	c.SetReadDeadline(time.Time{})
+	if err != nil {
+		logx.Debugf("[relay] %s: no usable HTTP request: %v", c.RemoteAddr(), err)
+		return
+	}
+	target, err := r.target(ctx, host, true)
+	if err != nil {
+		logx.Infof("[relay] %s: not forwarding http %q: %v", c.RemoteAddr(), host, err)
+		return
+	}
+	d := net.Dialer{Timeout: dialTimeout, KeepAlive: keepAlive}
+	up, err := d.DialContext(ctx, "tcp", target)
+	if err != nil {
+		logx.Infof("[relay] %s -> http %s (%s): %v", c.RemoteAddr(), host, target, err)
+		return
+	}
+	defer up.Close()
+	if _, err := up.Write(head); err != nil {
+		return
+	}
+	pipe(c, up)
+}
+
+// target picks where a connection for name goes: its route if it has one,
+// otherwise the name - less the relay prefix, if it carries it - at its first
+// usable address, on target_port (or 80, for plain HTTP).
+func (r *Relay) target(ctx context.Context, name string, http bool) (string, error) {
+	name = strings.ToLower(strings.TrimSuffix(name, "."))
+	if name == "" {
+		return "", errors.New("no name")
+	}
+	host := name
+	if r.cfg.SNIPrefix != "" {
+		if rest, ok := strings.CutPrefix(name, r.cfg.SNIPrefix+"."); ok && rest != "" {
+			host = rest
+		}
+	}
+	if !r.allowed(host) {
 		return "", errors.New("not in allow")
 	}
-	host, port := sni, strconv.Itoa(r.cfg.TargetPort)
-	if route, ok := r.cfg.Routes[sni]; ok {
+	port := strconv.Itoa(r.cfg.TargetPort)
+	route, ok := r.cfg.Routes[name]
+	if !ok {
+		route, ok = r.cfg.Routes[host]
+	}
+	if ok {
 		host, port, _ = net.SplitHostPort(route)
+	}
+	if http {
+		port = r.httpPort
 	}
 
 	ips := []net.IP{net.ParseIP(host)}
@@ -257,10 +346,37 @@ func readClientHello(c net.Conn) (string, []byte, error) {
 		}
 		return "", nil, err
 	}
-	if sni == "" {
-		return "", nil, errors.New("no SNI")
-	}
+	// No SNI is returned as "" with the bytes: it has nowhere to go but the
+	// fallback, which still needs them.
 	return sni, rec.buf.Bytes(), nil
+}
+
+// readHTTPHost reads an HTTP request's head and returns its Host (without a
+// port) along with every byte read.
+func readHTTPHost(c net.Conn) (string, []byte, error) {
+	var buf []byte
+	tmp := make([]byte, 2048)
+	for len(buf) < 16<<10 {
+		n, err := c.Read(tmp)
+		buf = append(buf, tmp[:n]...)
+		if i := bytes.Index(buf, []byte("\r\n\r\n")); i >= 0 {
+			for _, line := range strings.Split(string(buf[:i]), "\r\n")[1:] {
+				k, v, ok := strings.Cut(line, ":")
+				if ok && strings.EqualFold(strings.TrimSpace(k), "host") {
+					host := strings.TrimSpace(v)
+					if h, _, err := net.SplitHostPort(host); err == nil {
+						host = h
+					}
+					return host, buf, nil
+				}
+			}
+			return "", nil, errors.New("no Host header")
+		}
+		if err != nil {
+			return "", nil, err
+		}
+	}
+	return "", nil, errors.New("request head too long")
 }
 
 // recordingConn keeps a copy of everything read and drops every write, so

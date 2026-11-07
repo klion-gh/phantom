@@ -67,6 +67,7 @@ func PingWith(configYAML string, opts Options) (Result, error) {
 		PSK:         psk,
 		ServerPub:   serverPub,
 		ProtectFD:   opts.ProtectFD,
+		RelayDomain: cfg.RelayDomain(),
 	}
 	resolver := resolverFor(opts.ProtectFD)
 

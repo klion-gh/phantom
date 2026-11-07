@@ -62,6 +62,7 @@ func main() {
 	serverCfg := &transport.TLSServerConfig{
 		ListenAddr:          cfg.Listen,
 		Domain:              cfg.Domain,
+		ExtraDomains:        cfg.ExtraDomains,
 		ACMEEmail:           cfg.ACMEEmail,
 		ACMECacheDir:        cfg.ACMECacheDir,
 		CertFile:            cfg.CertFile,

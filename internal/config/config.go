@@ -37,6 +37,21 @@ type ClientConfig struct {
 	// it in the config: they add it on the way in (WithRelay) from their own
 	// "use a relay" setting, so one relay serves every saved config.
 	Relay string `yaml:"relay"`
+	// Optional label of the server's relay-facing name: with "msk", a
+	// connection through the relay presents msk.<domain> - a name whose DNS
+	// points at the relay, so name and address agree - instead of <domain>,
+	// whose DNS points at the server. The server holds a certificate for it
+	// (extra_domains); a server that doesn't yet is reached with <domain>.
+	RelayPrefix string `yaml:"relay_prefix"`
+}
+
+// RelayDomain is the name presented through the relay - <relay_prefix>.<domain> -
+// or "" when there is no relay or no prefix.
+func (c *ClientConfig) RelayDomain() string {
+	if c.Relay == "" || c.RelayPrefix == "" {
+		return ""
+	}
+	return c.RelayPrefix + "." + c.Domain
 }
 
 type ServerConfig struct {
@@ -49,6 +64,11 @@ type ServerConfig struct {
 	PrivateKey   string `yaml:"private_key"`    // server's static X25519 private key (hex, 32 bytes) - for real per-session ECDH
 	PSK          string `yaml:"psk"`            // shared secret (hex, 32 bytes), must match every client's psk
 	DecoySiteDir string `yaml:"decoy_site_dir"` // directory of static files served to connections that fail/skip the embedded auth check; empty = built-in minimal page
+	// More names this server holds a certificate for - typically the
+	// subdomain a relay is reached under ("msk.vpn.example" pointing at the
+	// relay), so a client coming through the relay presents a name whose DNS
+	// matches the address it connects to. ACME only.
+	ExtraDomains []string `yaml:"extra_domains"`
 	// Per-IP anti-enumeration throttle on auth-handshake attempts (see
 	// internal/transport/ratelimit.go). Both 0 = use defaults (2/s sustained,
 	// 60 burst); an over-budget IP is served the decoy without an auth attempt,
@@ -134,10 +154,11 @@ func (c *ClientConfig) Validate() error {
 	return nil
 }
 
-// WithRelay returns configYAML with its relay set to addr, or with any relay
-// removed when addr is empty. It edits the document rather than the text, so
-// the rest of the config - comments, key order, quoting - comes back as it was.
-func WithRelay(configYAML, addr string) (string, error) {
+// WithRelay returns configYAML with its relay set to addr and its relay
+// prefix to prefix, or with both removed when addr is empty. It edits the
+// document rather than the text, so the rest of the config - comments, key
+// order, quoting - comes back as it was.
+func WithRelay(configYAML, addr, prefix string) (string, error) {
 	var doc yaml.Node
 	if err := yaml.Unmarshal([]byte(configYAML), &doc); err != nil {
 		return "", err
@@ -146,16 +167,23 @@ func WithRelay(configYAML, addr string) (string, error) {
 		return "", errors.New("config is not a mapping")
 	}
 	m := doc.Content[0]
-	for i := 0; i+1 < len(m.Content); i += 2 {
-		if m.Content[i].Value == "relay" {
+	for i := 0; i+1 < len(m.Content); {
+		if k := m.Content[i].Value; k == "relay" || k == "relay_prefix" {
 			m.Content = append(m.Content[:i], m.Content[i+2:]...)
-			break
+			continue
 		}
+		i += 2
+	}
+	add := func(k, v string) {
+		m.Content = append(m.Content,
+			&yaml.Node{Kind: yaml.ScalarNode, Value: k},
+			&yaml.Node{Kind: yaml.ScalarNode, Value: v, Style: yaml.DoubleQuotedStyle})
 	}
 	if addr != "" {
-		m.Content = append(m.Content,
-			&yaml.Node{Kind: yaml.ScalarNode, Value: "relay"},
-			&yaml.Node{Kind: yaml.ScalarNode, Value: addr, Style: yaml.DoubleQuotedStyle})
+		add("relay", addr)
+		if prefix != "" {
+			add("relay_prefix", prefix)
+		}
 	}
 	var out bytes.Buffer
 	enc := yaml.NewEncoder(&out)
@@ -234,6 +262,25 @@ func decodeKey(hexStr string) ([]byte, error) {
 		return nil, errors.New("key must be 32 bytes (64 hex characters)")
 	}
 	return b, nil
+}
+
+// NormalizeRelayPrefix checks a relay prefix as typed: one DNS label, lower
+// case, dots around it dropped ("msk", " .MSK. " -> "msk"). "" stays "".
+func NormalizeRelayPrefix(s string) (string, error) {
+	s = strings.ToLower(strings.Trim(strings.TrimSpace(s), "."))
+	if s == "" {
+		return "", nil
+	}
+	if len(s) > 63 {
+		return "", errors.New("too long")
+	}
+	for i, r := range s {
+		ok := r >= 'a' && r <= 'z' || r >= '0' && r <= '9' || r == '-' && i > 0 && i < len(s)-1
+		if !ok {
+			return "", fmt.Errorf("not a DNS label: %q", s)
+		}
+	}
+	return s, nil
 }
 
 // NormalizeRelayAddr turns what a user typed as a relay address into the

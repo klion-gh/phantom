@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -24,6 +25,7 @@ import (
 type TLSServerConfig struct {
 	ListenAddr   string
 	Domain       string
+	ExtraDomains []string // more names to hold a certificate for (ACME only)
 	ACMEEmail    string
 	ACMECacheDir string
 	CertFile     string // static cert+key pair instead of ACME - see certReloader
@@ -72,7 +74,7 @@ func ListenAndServe(ctx context.Context, cfg *TLSServerConfig, handler func(net.
 		certManager := &autocert.Manager{
 			Prompt:     autocert.AcceptTOS,
 			Cache:      autocert.DirCache(cfg.ACMECacheDir),
-			HostPolicy: autocert.HostWhitelist(cfg.Domain),
+			HostPolicy: autocert.HostWhitelist(append([]string{cfg.Domain}, cfg.ExtraDomains...)...),
 			Email:      cfg.ACMEEmail,
 		}
 
@@ -92,6 +94,19 @@ func ListenAndServe(ctx context.Context, cfg *TLSServerConfig, handler func(net.
 		}()
 
 		tlsConfig = certManager.TLSConfig()
+		// A ClientHello without SNI gets the main domain's certificate, as a
+		// web server answers with its default site - rather than a failed
+		// handshake, which an ordinary site never gives. Probes of an address
+		// by IP alone, through a relay's fallback or directly, see a site.
+		getCert := tlsConfig.GetCertificate
+		tlsConfig.GetCertificate = func(hello *tls.ClientHelloInfo) (*tls.Certificate, error) {
+			if hello.ServerName == "" {
+				h := *hello
+				h.ServerName = cfg.Domain
+				return getCert(&h)
+			}
+			return getCert(hello)
+		}
 		// acme.ALPNProto stays in the list because autocert.Manager.GetCertificate
 		// answers tls-alpn-01 challenge probes itself (see the acme-tls/1 check in
 		// handleConnection); a client offering only that still gets it.
@@ -112,7 +127,7 @@ func ListenAndServe(ctx context.Context, cfg *TLSServerConfig, handler func(net.
 	}
 	defer listener.Close()
 
-	logx.Infof("[server] listening on %s (domain=%s)", cfg.ListenAddr, cfg.Domain)
+	logx.Infof("[server] listening on %s (domain=%s)", cfg.ListenAddr, strings.Join(append([]string{cfg.Domain}, cfg.ExtraDomains...), ", "))
 
 	// Accept blocks until the next client, so checking ctx between accepts
 	// let a stop wait for someone to connect: every `systemctl restart` sat

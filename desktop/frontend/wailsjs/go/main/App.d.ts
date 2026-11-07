@@ -3,7 +3,7 @@
 
 export function AddConfig(arg1:string):Promise<string>;
 
-export function AddRelay(arg1:string):Promise<string>;
+export function AddRelay(arg1:string,arg2:string):Promise<string>;
 
 export function AddResource(arg1:string,arg2:string):Promise<string>;
 
@@ -99,6 +99,6 @@ export function UILog(arg1:string):Promise<void>;
 
 export function UpdateConfig(arg1:string,arg2:string):Promise<string>;
 
-export function UpdateRelay(arg1:string,arg2:string):Promise<string>;
+export function UpdateRelay(arg1:string,arg2:string,arg3:string):Promise<string>;
 
 export function Version():Promise<string>;

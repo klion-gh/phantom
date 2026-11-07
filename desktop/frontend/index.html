@@ -365,6 +365,12 @@
           <div class="relay-intro" data-i18n="relay_intro">Сервер, через который пойдут подключения ко всем конфигурациям. Ставьте его там, где ваша сеть его пропускает, — обычно в своей стране. Ключей он не знает и трафик не расшифровывает.</div>
           <input id="relay-input" class="text-input" placeholder="203.0.113.10:443" spellcheck="false" autocomplete="off" />
           <div id="relay-error" class="relay-error hidden" data-i18n="relay_bad_address">Это не похоже на адрес. Пример: 203.0.113.10:443</div>
+          <label class="relay-prefix-row">
+            <span class="relay-prefix-label" data-i18n="relay_prefix">Поддомен серверов</span>
+            <input id="relay-prefix-input" class="text-input relay-prefix-input" placeholder="msk" spellcheck="false" autocomplete="off" />
+          </label>
+          <div class="relay-hint" data-i18n="relay_prefix_hint">Необязательно. С «msk» подключение через ретранслятор идёт к msk.&lt;домен сервера&gt; — запишите такой поддомен в DNS на адрес ретранслятора, и имя будет совпадать с адресом. Серверы без поддомена работают по-старому.</div>
+          <div id="relay-prefix-error" class="relay-error hidden" data-i18n="relay_bad_prefix">Поддомен — одно слово из латинских букв, цифр и дефисов, например msk</div>
           <div class="relay-hint" data-i18n="relay_install_hint">Установить ретранслятор на свой сервер:</div>
           <code class="relay-cmd">curl -fsSL https://raw.githubusercontent.com/klion-gh/phantom/main/scripts/install-relay.sh | sh</code>
           <div class="dialog-row">

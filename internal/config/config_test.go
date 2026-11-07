@@ -76,7 +76,7 @@ server_public_key: "bb"
 `
 
 func TestWithRelaySetsReplacesAndRemoves(t *testing.T) {
-	withRelay, err := WithRelay(relayTestYAML, "203.0.113.7:443")
+	withRelay, err := WithRelay(relayTestYAML, "203.0.113.7:443", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -89,7 +89,7 @@ func TestWithRelaySetsReplacesAndRemoves(t *testing.T) {
 	}
 
 	// Setting it again replaces rather than duplicates (a duplicate key would not parse).
-	again, err := WithRelay(withRelay, "198.51.100.1:8443")
+	again, err := WithRelay(withRelay, "198.51.100.1:8443", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -97,7 +97,7 @@ func TestWithRelaySetsReplacesAndRemoves(t *testing.T) {
 		t.Fatalf("replace: relay=%q err=%v", cfg.Relay, err)
 	}
 
-	removed, err := WithRelay(again, "")
+	removed, err := WithRelay(again, "", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -107,7 +107,7 @@ func TestWithRelaySetsReplacesAndRemoves(t *testing.T) {
 }
 
 func TestRelayMustBeHostPort(t *testing.T) {
-	bad, err := WithRelay(relayTestYAML, "203.0.113.7")
+	bad, err := WithRelay(relayTestYAML, "203.0.113.7", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -131,6 +131,35 @@ func TestNormalizeRelayAddr(t *testing.T) {
 	for _, bad := range []string{"", "   ", "1.2.3.4:0", "1.2.3.4:99999", "host:abc", "http://x/y", ":443"} {
 		if got, err := NormalizeRelayAddr(bad); err == nil {
 			t.Errorf("NormalizeRelayAddr(%q) = %q, want an error", bad, got)
+		}
+	}
+}
+
+func TestRelayPrefix(t *testing.T) {
+	y, err := WithRelay(relayTestYAML, "203.0.113.7:443", "msk")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := ParseClientConfig([]byte(y))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := cfg.RelayDomain(); got != "msk.vpn.example" {
+		t.Fatalf("RelayDomain = %q", got)
+	}
+	// Off again: both keys go.
+	y, _ = WithRelay(y, "", "")
+	if cfg, _ = ParseClientConfig([]byte(y)); cfg.Relay != "" || cfg.RelayPrefix != "" || cfg.RelayDomain() != "" {
+		t.Fatalf("relay left behind: %+v", cfg)
+	}
+	for in, want := range map[string]string{"msk": "msk", " .MSK. ": "msk", "": "", "ru-1": "ru-1"} {
+		if got, err := NormalizeRelayPrefix(in); err != nil || got != want {
+			t.Errorf("NormalizeRelayPrefix(%q) = %q, %v", in, got, err)
+		}
+	}
+	for _, bad := range []string{"a.b", "-x", "x-", "мск", "a b"} {
+		if _, err := NormalizeRelayPrefix(bad); err == nil {
+			t.Errorf("NormalizeRelayPrefix(%q) accepted", bad)
 		}
 	}
 }

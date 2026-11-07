@@ -19,6 +19,9 @@
 #   PHANTOM_VERSION   install this release tag (e.g. v2.3.0-beta.2) instead of the latest
 #                     stable one - for trying a beta server on one machine first
 #   PHANTOM_NO_TUNE=1 leave the kernel's TCP settings alone (see tune_network)
+#   PHANTOM_EXTRA_DOMAINS  more names to hold a certificate for, space-separated - e.g.
+#                     "msk.vpn.example", the name clients use through a relay (see
+#                     install-relay.sh). Each must already point at this server or a relay.
 #   PHANTOM_APP=1     run on behalf of the Phantom apps ("Подключить свой сервер"): never
 #                     prompts, and prints "@@PHANTOM ..." marker lines - steps, an error code
 #                     on failure, and the finished client.yaml between client-begin/client-end -
@@ -338,6 +341,10 @@ PSK=$(echo "$KEYGEN_OUT" | grep '^PSK:' | grep -oE '[0-9a-f]{64}')
     echo "private_key: \"$SERVER_PRIV\""
     echo "psk: \"$PSK\""
     echo "decoy_site_dir: \"\""
+    if [ -n "${PHANTOM_EXTRA_DOMAINS:-}" ]; then
+        echo "extra_domains:"
+        for d in $PHANTOM_EXTRA_DOMAINS; do echo "  - \"$d\""; done
+    fi
     echo "log_level: \"info\""
 } > "$INSTALL_DIR/server.yaml"
 log "Wrote $INSTALL_DIR/server.yaml"

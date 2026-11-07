@@ -167,20 +167,20 @@ func TestRelayWontLoopOrGoPrivate(t *testing.T) {
 	r.lookup = func(context.Context, string) ([]net.IP, error) {
 		return []net.IP{net.ParseIP("10.0.0.5"), net.ParseIP("127.0.0.1")}, nil
 	}
-	if _, err := r.target(context.Background(), "vpn.test"); err == nil {
+	if _, err := r.target(context.Background(), "vpn.test", false); err == nil {
 		t.Fatal("a domain resolving only to private addresses got a target")
 	}
 
 	// Private allowed, but the target is this machine on the relay's own port.
 	r = New(&Config{Listen: []string{":8443"}, TargetPort: 8443, AllowPrivate: true, MaxConns: 1})
 	r.lookup = func(context.Context, string) ([]net.IP, error) { return []net.IP{net.ParseIP("127.0.0.1")}, nil }
-	if _, err := r.target(context.Background(), "vpn.test"); err == nil {
+	if _, err := r.target(context.Background(), "vpn.test", false); err == nil {
 		t.Fatal("a target that is the relay itself was accepted")
 	}
 	// The same machine on another port is a server next to the relay: fine.
 	r = New(&Config{Listen: []string{":443"}, TargetPort: 8443, AllowPrivate: true, MaxConns: 1})
 	r.lookup = func(context.Context, string) ([]net.IP, error) { return []net.IP{net.ParseIP("127.0.0.1")}, nil }
-	if got, err := r.target(context.Background(), "vpn.test"); err != nil || got != "127.0.0.1:8443" {
+	if got, err := r.target(context.Background(), "vpn.test", false); err != nil || got != "127.0.0.1:8443" {
 		t.Fatalf("server beside the relay: %q, %v", got, err)
 	}
 }
@@ -195,5 +195,99 @@ func TestParseConfigDefaults(t *testing.T) {
 	}
 	if _, err := ParseConfig([]byte("routes: {a.example: \"nope\"}\n")); err == nil {
 		t.Fatal("a route without a port was accepted")
+	}
+}
+
+// msk.vpn.test, with sni_prefix "msk", goes to vpn.test's own address - the
+// name the client presents points at the relay, the server keeps its domain.
+func TestRelayStripsThePrefix(t *testing.T) {
+	r := New(&Config{TargetPort: 8443, SNIPrefix: "msk", MaxConns: 1})
+	asked := ""
+	r.lookup = func(_ context.Context, host string) ([]net.IP, error) {
+		asked = host
+		return []net.IP{net.ParseIP("203.0.113.9")}, nil
+	}
+	got, err := r.target(context.Background(), "MSK.vpn.test.", false)
+	if err != nil || got != "203.0.113.9:8443" || asked != "vpn.test" {
+		t.Fatalf("target = %q, %v (looked up %q)", got, err, asked)
+	}
+	if got, _ := r.target(context.Background(), "msk.vpn.test", true); got != "203.0.113.9:80" {
+		t.Fatalf("plain HTTP target = %q, want port 80", got)
+	}
+	// Without the prefix the name is used as it is.
+	if _, _ = r.target(context.Background(), "other.test", false); asked != "other.test" {
+		t.Fatalf("looked up %q for a name without the prefix", asked)
+	}
+}
+
+// Plain HTTP goes on by its Host header, the request head untouched.
+func TestRelayPassesHTTPByHost(t *testing.T) {
+	srv, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer srv.Close()
+	got := make(chan string, 1)
+	go func() {
+		c, err := srv.Accept()
+		if err != nil {
+			return
+		}
+		defer c.Close()
+		buf := make([]byte, 512)
+		n, _ := c.Read(buf)
+		got <- string(buf[:n])
+		c.Write([]byte("HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok"))
+	}()
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := New(&Config{TargetPort: 8443, SNIPrefix: "msk", HTTPListen: []string{ln.Addr().String()},
+		Routes: map[string]string{"vpn.test": srv.Addr().String()}, AllowPrivate: true, MaxConns: 4})
+	_, r.httpPort, _ = net.SplitHostPort(srv.Addr().String())
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go r.ServeHTTP(ctx, ln)
+	c, err := net.Dial("tcp", ln.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	req := "GET /.well-known/acme-challenge/x HTTP/1.1\r\nHost: msk.vpn.test\r\n\r\n"
+	c.Write([]byte(req))
+	c.SetReadDeadline(time.Now().Add(3 * time.Second))
+	select {
+	case head := <-got:
+		if head != req {
+			t.Fatalf("server got %q", head)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("the request never reached the server")
+	}
+}
+
+// With a fallback, a ClientHello the relay has nowhere for still reaches a
+// TLS server - a probe sees a site, not a closed connection.
+func TestRelayFallback(t *testing.T) {
+	port, pool, snis := testServer(t, "vpn.test")
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := New(&Config{Listen: []string{ln.Addr().String()}, TargetPort: 1, Allow: []string{"only.test"},
+		Fallback: "127.0.0.1:" + strconv.Itoa(port), MaxConns: 4})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go r.Serve(ctx, ln)
+
+	c, err := tls.Dial("tcp", ln.Addr().String(), &tls.Config{ServerName: "vpn.test", RootCAs: pool})
+	if err != nil {
+		t.Fatalf("an unforwarded name did not reach the fallback: %v", err)
+	}
+	c.Close()
+	if got := <-snis; got != "vpn.test" {
+		t.Fatalf("fallback server saw SNI %q", got)
 	}
 }

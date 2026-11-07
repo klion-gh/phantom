@@ -121,6 +121,7 @@ func phantomSession(rec *recorder, domain, configsPath string, iface, conns int)
 		Fingerprint: cfg.Fingerprint,
 		ServerAddr:  cfg.Server,
 		ServerAddrs: cfg.ServerList(),
+		RelayDomain: cfg.RelayDomain(),
 		PSK:         psk,
 		ServerPub:   pub,
 		ProtectFD:   bindFD(iface),

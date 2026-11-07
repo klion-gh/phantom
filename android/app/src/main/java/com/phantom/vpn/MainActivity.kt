@@ -1067,8 +1067,8 @@ private fun RelaysSection() {
         RelayDialog(
             relay = relay,
             onDismiss = { dialogFor = null; enableAfterAdd = false },
-            onSave = { addr ->
-                val ok = if (relay != null) RelayStore.update(context, relay.id, addr) else RelayStore.add(context, addr)
+            onSave = { addr, prefix ->
+                val ok = if (relay != null) RelayStore.update(context, relay.id, addr, prefix) else RelayStore.add(context, addr, prefix)
                 if (ok) {
                     if (relay == null && enableAfterAdd) RelayStore.setEnabled(context, true)
                     enableAfterAdd = false
@@ -1143,7 +1143,7 @@ private fun RelayCard(
         ) {
             Column(modifier = Modifier.weight(1f)) {
                 TileHeading(
-                    title = relay.address,
+                    title = if (relay.prefix.isNotEmpty()) "${relay.address} · ${relay.prefix}.*" else relay.address,
                     countryCode = relay.countryCode,
                     country = relay.country,
                     ip = info?.ip ?: relay.ip ?: "—",
@@ -1197,10 +1197,11 @@ private fun RadioDot(selected: Boolean, onClick: () -> Unit) {
 private fun RelayDialog(
     relay: SavedRelay?,
     onDismiss: () -> Unit,
-    onSave: (String) -> Boolean,
+    onSave: (address: String, prefix: String) -> Boolean,
     onDelete: () -> Unit,
 ) {
     var address by remember { mutableStateOf(relay?.address.orEmpty()) }
+    var prefix by remember { mutableStateOf(relay?.prefix.orEmpty()) }
     var bad by remember { mutableStateOf(false) }
     val fieldColors = OutlinedTextFieldDefaults.colors(
         focusedTextColor = TextPrimary,
@@ -1233,8 +1234,19 @@ private fun RelayDialog(
                     modifier = Modifier.fillMaxWidth(),
                 )
                 if (bad) {
-                    Text(I18n.t("relay_bad_address"), color = Danger, fontSize = 12.5.sp)
+                    Text(I18n.t("relay_bad_address_or_prefix"), color = Danger, fontSize = 12.5.sp)
                 }
+                OutlinedTextField(
+                    value = prefix,
+                    onValueChange = { prefix = it; bad = false },
+                    label = { Text(I18n.t("relay_prefix")) },
+                    placeholder = { Text("msk", color = TextSecondary) },
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
+                    colors = fieldColors,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                Text(I18n.t("relay_prefix_hint"), fontSize = 12.sp, lineHeight = 16.sp)
                 Text(I18n.t("relay_install_hint"), fontSize = 12.5.sp)
                 SelectionContainer {
                     Text(
@@ -1258,7 +1270,7 @@ private fun RelayDialog(
             }
         },
         confirmButton = {
-            TextButton(onClick = { if (!onSave(address)) bad = true }) {
+            TextButton(onClick = { if (!onSave(address, prefix)) bad = true }) {
                 Text(I18n.t("save"), color = Primary)
             }
         },

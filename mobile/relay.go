@@ -15,14 +15,16 @@ import (
 // without each call site carrying it. The configs themselves stay as
 // imported; the relay is added on the way in. See internal/relay.
 var (
-	relayMu   sync.Mutex
-	relayAddr string
+	relayMu     sync.Mutex
+	relayAddr   string
+	relayPrefix string
 )
 
-// SetRelay sets the relay every config connects through, or turns it off
-// with "". The app calls it at startup and whenever the setting changes;
-// a tunnel already up keeps its path until it is rebuilt.
-func SetRelay(addr string) error {
+// SetRelay sets the relay every config connects through - and the label of
+// the servers' relay-facing names through it ("msk", or "" for none) - or
+// turns it off with addr "". The app calls it at startup and whenever the
+// setting changes; a tunnel already up keeps its path until it is rebuilt.
+func SetRelay(addr, prefix string) error {
 	normalized := ""
 	if addr != "" {
 		var err error
@@ -30,10 +32,20 @@ func SetRelay(addr string) error {
 			return err
 		}
 	}
+	pfx, err := config.NormalizeRelayPrefix(prefix)
+	if err != nil {
+		return err
+	}
 	relayMu.Lock()
-	relayAddr = normalized
+	relayAddr, relayPrefix = normalized, pfx
 	relayMu.Unlock()
 	return nil
+}
+
+// NormalizeRelayPrefix checks what the user typed as a relay prefix and
+// returns it as one lower-case DNS label ("" for none).
+func NormalizeRelayPrefix(prefix string) (string, error) {
+	return config.NormalizeRelayPrefix(prefix)
 }
 
 // NormalizeRelayAddr checks what the user typed as a relay address and
@@ -47,12 +59,12 @@ func NormalizeRelayAddr(addr string) (string, error) {
 // connecting directly beats not connecting.
 func withRelay(configYAML string) string {
 	relayMu.Lock()
-	addr := relayAddr
+	addr, prefix := relayAddr, relayPrefix
 	relayMu.Unlock()
 	if addr == "" {
 		return configYAML
 	}
-	out, err := config.WithRelay(configYAML, addr)
+	out, err := config.WithRelay(configYAML, addr, prefix)
 	if err != nil {
 		return configYAML
 	}

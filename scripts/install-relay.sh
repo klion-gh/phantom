@@ -17,6 +17,12 @@
 #   PHANTOM_RELAY_PORTS  ports the relay accepts clients on (default "443 8443")
 #   PHANTOM_RELAY_ALLOW  space-separated domains it forwards to ("vpn.example *.example.org");
 #                        default: any domain, on port 8443 of whatever it resolves to
+#   PHANTOM_RELAY_PREFIX label of the servers' relay-facing names (default "msk"): a
+#                        connection for msk.vpn.example goes to vpn.example. Point
+#                        msk.vpn.example's DNS at this relay, add it to the server's
+#                        extra_domains, and set the same prefix on the relay in the app.
+#   PHANTOM_RELAY_FALLBACK  "host:port" for connections it has nowhere for (no SNI, an
+#                        unknown name) - e.g. one of your servers, so a probe sees a site
 #   PHANTOM_REPO         override the GitHub "owner/repo" release source
 #   PHANTOM_VERSION      install this release tag (e.g. v2.5.0-beta.1) instead of the latest stable
 #   PHANTOM_NO_TUNE=1    leave the kernel's TCP settings alone
@@ -151,6 +157,17 @@ for p in $PORTS; do
 done
 [ -n "$listen" ] || die "none of the ports ($PORTS) is free"
 
+# Port 80 too, when free: Let's Encrypt reaches the servers' relay-facing
+# names through it.
+http_listen=""
+if ! { command -v ss >/dev/null 2>&1 && ss -ltnH "sport = :80" 2>/dev/null | grep -q .; }; then
+    http_listen="\"0.0.0.0:80\""
+else
+    warn "port 80 is already in use - certificates for relay-facing names can't be issued through this relay"
+fi
+PREFIX="${PHANTOM_RELAY_PREFIX-msk}"
+FALLBACK="${PHANTOM_RELAY_FALLBACK:-}"
+
 allow=""
 for d in ${PHANTOM_RELAY_ALLOW:-}; do
     allow="$allow\"$d\", "
@@ -161,7 +178,12 @@ umask 077
     echo "# Phantom relay. Clients connect here; each connection goes to port"
     echo "# target_port of the domain in its TLS ClientHello."
     echo "listen: [${listen%, }]"
+    echo "http_listen: [$http_listen]"
     echo "target_port: 8443"
+    echo "# <prefix>.<domain> goes to <domain>; see install-relay.sh."
+    echo "sni_prefix: \"$PREFIX\""
+    echo "# Where connections it has nowhere for go (empty: closed)."
+    echo "fallback: \"$FALLBACK\""
     echo "# Empty: any domain that resolves to a public address."
     echo "allow: [${allow%, }]"
     echo "# A server on another port, or whose domain points elsewhere:"

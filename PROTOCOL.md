@@ -582,6 +582,19 @@ configs and picked with a radio dot; a relay's ping is a bare TCP connect
 relay is in use - the switch, the pick, or editing/deleting the picked one - rebuilds a
 running tunnel.
 
+Relay-facing names. Through a relay the client would present `domain`, whose DNS points
+at the server - a name/address mismatch a censor can check cheaply. With a relay prefix
+(`relay_prefix: "msk"` in the client, `sni_prefix: "msk"` on the relay) the client
+presents `msk.<domain>` instead, a name whose A record points at the relay; the relay
+strips the prefix and forwards to `<domain>`, and the server holds a certificate for
+`msk.<domain>` too (`extra_domains`), issued through the relay's port 80 (`http_listen`,
+passed on by Host header). TLS stays end to end. A server without that certificate yet
+fails the TLS handshake under the new name and the client retries with `domain`. A
+ClientHello the relay has nowhere for (no SNI, a name it doesn't forward) goes to
+`fallback` if set - one of the servers, which answers a missing SNI with its own
+certificate - so a probe of the relay's address sees a site rather than a closed
+connection.
+
 Cost: one more TCP hop (the relay's own uplink caps throughput — ~60–70 Mbit/s on the
 first one), and the relay's IP serves the real domain's certificate, which an active
 prober comparing DNS with the answering address could notice.

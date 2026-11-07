@@ -298,7 +298,7 @@ func genX25519Keypair(t *testing.T) (priv, pub []byte) {
 	return priv, pub
 }
 
-func generateThrowawayCert(t *testing.T, domain string) tls.Certificate {
+func generateThrowawayCert(t *testing.T, domain string, more ...string) tls.Certificate {
 	t.Helper()
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
@@ -308,7 +308,7 @@ func generateThrowawayCert(t *testing.T, domain string) tls.Certificate {
 	template := &x509.Certificate{
 		SerialNumber: big.NewInt(1),
 		Subject:      pkix.Name{CommonName: domain},
-		DNSNames:     []string{domain},
+		DNSNames:     append([]string{domain}, more...),
 		NotBefore:    time.Now(),
 		NotAfter:     time.Now().Add(time.Hour),
 	}

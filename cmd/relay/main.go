@@ -48,22 +48,33 @@ func main() {
 	}
 	log.Printf("[relay] forwarding to port %d of: %s", cfg.TargetPort, allow)
 
+	if cfg.SNIPrefix != "" {
+		log.Printf("[relay] %s.<domain> goes to <domain>", cfg.SNIPrefix)
+	}
+	if cfg.Fallback != "" {
+		log.Printf("[relay] connections it has nowhere for go to %s", cfg.Fallback)
+	}
+
 	r := relay.New(cfg)
 	var wg sync.WaitGroup
-	for _, addr := range cfg.Listen {
-		ln, err := net.Listen("tcp", addr)
-		if err != nil {
-			log.Fatalf("Failed to listen on %s: %v", addr, err)
-		}
-		log.Printf("[relay] listening on %s", addr)
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			if err := r.Serve(ctx, ln); err != nil {
-				log.Printf("[relay] %s: %v", addr, err)
-				cancel()
+	listen := func(addrs []string, kind string, serve func(context.Context, net.Listener) error) {
+		for _, addr := range addrs {
+			ln, err := net.Listen("tcp", addr)
+			if err != nil {
+				log.Fatalf("Failed to listen on %s: %v", addr, err)
 			}
-		}()
+			log.Printf("[relay] listening on %s (%s)", addr, kind)
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				if err := serve(ctx, ln); err != nil {
+					log.Printf("[relay] %s: %v", addr, err)
+					cancel()
+				}
+			}()
+		}
 	}
+	listen(cfg.Listen, "tls", r.Serve)
+	listen(cfg.HTTPListen, "http", r.ServeHTTP)
 	wg.Wait()
 }

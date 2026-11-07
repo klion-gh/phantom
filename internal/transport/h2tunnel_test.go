@@ -31,11 +31,11 @@ type testServer struct {
 
 // startTunnelServer runs handleConnection - the production path - behind a
 // listener offering alpn, relaying authenticated streams to their targets.
-func startTunnelServer(t *testing.T, domain string, alpn []string) *testServer {
+func startTunnelServer(t *testing.T, domain string, alpn []string, extraNames ...string) *testServer {
 	t.Helper()
 	priv, pub := genX25519Keypair(t)
 	psk := []byte("h2-tunnel-test-psk-0123456789ab")
-	cert := generateThrowawayCert(t, domain)
+	cert := generateThrowawayCert(t, domain, extraNames...)
 	leaf, err := x509.ParseCertificate(cert.Certificate[0])
 	if err != nil {
 		t.Fatal(err)

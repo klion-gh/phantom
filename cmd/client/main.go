@@ -51,6 +51,7 @@ func main() {
 		Fingerprint: cfg.Fingerprint,
 		ServerAddr:  cfg.Server,
 		ServerAddrs: cfg.ServerList(),
+		RelayDomain: cfg.RelayDomain(),
 		PSK:         psk,
 		ServerPub:   serverPub,
 	}
