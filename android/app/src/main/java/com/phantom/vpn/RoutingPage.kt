@@ -541,7 +541,7 @@ private fun ConfigPickRow(
             verticalAlignment = Alignment.CenterVertically,
             modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 12.dp),
         ) {
-            Column(modifier = Modifier.weight(1f)) {
+            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
                 Text(
                     domain,
                     color = TextPrimary,
@@ -549,7 +549,9 @@ private fun ConfigPickRow(
                     fontWeight = FontWeight.Medium,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f, fill = false),
                 )
+                PlaceLabel(config.countryCode, config.country, modifier = Modifier.padding(start = 8.dp))
             }
             // The active config is the one actually carrying traffic right now -
             // worth distinguishing from "selected", which only means the selector

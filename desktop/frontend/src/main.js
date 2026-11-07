@@ -242,6 +242,15 @@ function pingLabel(id) {
   return info.failed ? `${t('ping')}: ${t('no_answer')}` : `${t('ping')}: —`;
 }
 
+// A small flag with the country after it, for a line of text: "" when the
+// config's country isn't known.
+function flagHTML(item) {
+  const code = /^[A-Za-z]{2}$/.test(item.countryCode || '') ? item.countryCode.toLowerCase() : '';
+  if (!code) return '';
+  const name = escapeHtml(item.country || item.countryCode);
+  return ` <span class="routing-config-geo"><span class="geo-flag fi fi-${code}"></span>${name}</span>`;
+}
+
 // What follows the flag on a tile: "Moscow, Russia", or the country alone.
 function placeLabel(item) {
   return [item.city, item.country || item.countryCode].filter(Boolean).join(', ');
@@ -430,13 +439,13 @@ function renderConfigList() {
       <div class="config-info">
         <div class="config-title">
           <span class="config-domain">${escapeHtml(domain)}</span>
-          <span class="geo-flag fi hidden"></span>
-          <span class="geo-text"></span>
         </div>
         <div class="config-ip"><span class="ip-addr"></span></div>
         <div class="config-provider"></div>
         <div class="config-meta">
           <button type="button" class="ping-btn" title="${t('check_ping')}">${t('ping')}: —</button>
+          <span class="geo-flag fi hidden"></span>
+          <span class="geo-text"></span>
         </div>
       </div>
       <button class="config-edit-btn icon-btn-gear" title="${t('edit')}"></button>
@@ -1430,7 +1439,7 @@ function renderRoutingConfigs() {
     return `
       <div class="routing-config-row${on ? ' active' : ''}" data-id="${config.id}">
         <div class="routing-config-text">
-          <div class="routing-config-name">${escapeHtml(domain)}</div>
+          <div class="routing-config-name">${escapeHtml(domain)}${flagHTML(config)}</div>
         </div>
       </div>`;
   }).join('');
@@ -1580,13 +1589,13 @@ function renderRelay() {
         <div class="config-title">
           <span class="config-domain">${escapeHtml(relay.address)}</span>
           ${relay.prefix ? `<span class="relay-prefix-tag">${escapeHtml(relay.prefix)}.*</span>` : ''}
-          <span class="geo-flag fi hidden"></span>
-          <span class="geo-text"></span>
         </div>
         <div class="config-ip"><span class="ip-addr"></span></div>
         <div class="config-provider"></div>
         <div class="config-meta">
           <button type="button" class="ping-btn" title="${t('check_ping')}">${t('ping')}: —</button>
+          <span class="geo-flag fi hidden"></span>
+          <span class="geo-text"></span>
         </div>
       </div>
       <button class="config-edit-btn icon-btn-gear" title="${t('edit')}"></button>

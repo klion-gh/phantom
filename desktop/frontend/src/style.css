@@ -351,7 +351,7 @@ html, body {
 
 .config-info { flex: 1; min-width: 0; }
 
-/* Domain, then where it is - flag and country on the same line. */
+/* The name alone; where it is goes after the ping (.config-meta). */
 .config-title {
     display: flex;
     align-items: center;
@@ -366,10 +366,22 @@ html, body {
     text-overflow: ellipsis;
     min-width: 0;
 }
-.config-title .geo-text {
+.config-meta .geo-text {
     font-size: 12.5px;
     color: var(--text-muted);
     white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.config-meta { min-width: 0; }
+.routing-config-geo {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    margin-left: 8px;
+    font-size: 12.5px;
+    font-weight: 400;
+    color: var(--text-muted);
 }
 
 /* The IP; the provider goes on the next line. */

@@ -1149,18 +1149,18 @@ private fun RelayCard(
             Column(modifier = Modifier.weight(1f)) {
                 TileHeading(
                     title = if (relay.prefix.isNotEmpty()) "${relay.address} · ${relay.prefix}.*" else relay.address,
-                    countryCode = relay.countryCode,
-                    country = relay.country,
                     ip = info?.ip ?: relay.ip ?: "—",
-                    city = relay.city,
                     provider = relay.provider,
                 )
                 Spacer(Modifier.height(6.dp))
-                PingPill(
-                    label = pingLabel(info, checking),
-                    tone = relayPingTone(info, checking),
-                    checking = checking,
-                ) { scope.launch { RelayPings.check(context, relay) } }
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    PingPill(
+                        label = pingLabel(info, checking),
+                        tone = relayPingTone(info, checking),
+                        checking = checking,
+                    ) { scope.launch { RelayPings.check(context, relay) } }
+                    PlaceLabel(relay.countryCode, relay.country, relay.city, Modifier.padding(start = 8.dp))
+                }
             }
             Spacer(Modifier.width(4.dp))
             IconButton(onClick = onEdit) {

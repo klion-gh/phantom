@@ -174,40 +174,23 @@ suspend fun lookupPlace(ip: String): Place? = withContext(Dispatchers.IO) {
 data class Place(val country: String, val countryCode: String, val city: String?, val provider: String?)
 
 /**
- * The top of a config or relay tile: the name with its flag and "City,
- * Country" after it, then the IP, then the hosting provider.
+ * The top of a config or relay tile: the name, then the IP, then the hosting
+ * provider. Where it is ([PlaceLabel]) goes after the ping, at the bottom.
  */
 @Composable
 fun TileHeading(
     title: String,
-    countryCode: String?,
-    country: String?,
     ip: String,
-    city: String?,
     provider: String?,
 ) {
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        Text(
-            text = title,
-            color = TextPrimary,
-            fontSize = 16.sp,
-            fontWeight = FontWeight.SemiBold,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.weight(1f, fill = false),
-        )
-        val label = listOfNotNull(city, country ?: countryCode).filter { it.isNotBlank() }.joinToString(", ")
-        if (label.isNotBlank()) {
-            val flag = countryCode?.let { countryCodeToFlag(it) }.orEmpty()
-            Spacer(modifier = Modifier.width(7.dp))
-            Text(
-                text = if (flag.isNotEmpty()) "$flag $label" else label,
-                color = TextMuted,
-                fontSize = 12.5.sp,
-                maxLines = 1,
-            )
-        }
-    }
+    Text(
+        text = title,
+        color = TextPrimary,
+        fontSize = 16.sp,
+        fontWeight = FontWeight.SemiBold,
+        maxLines = 1,
+        overflow = TextOverflow.Ellipsis,
+    )
     Spacer(modifier = Modifier.height(2.dp))
     Text(
         text = ip,
@@ -227,6 +210,23 @@ fun TileHeading(
             overflow = TextOverflow.Ellipsis,
         )
     }
+}
+
+/** Flag and "City, Country" - after a tile's ping, or a name in a list.
+ * Nothing when the country isn't known. */
+@Composable
+fun PlaceLabel(countryCode: String?, country: String?, city: String? = null, modifier: Modifier = Modifier) {
+    val label = listOfNotNull(city, country ?: countryCode).filter { it.isNotBlank() }.joinToString(", ")
+    if (label.isBlank()) return
+    val flag = countryCode?.let { countryCodeToFlag(it) }.orEmpty()
+    Text(
+        text = if (flag.isNotEmpty()) "$flag $label" else label,
+        color = TextMuted,
+        fontSize = 12.5.sp,
+        maxLines = 1,
+        overflow = TextOverflow.Ellipsis,
+        modifier = modifier,
+    )
 }
 
 /**
@@ -272,21 +272,21 @@ fun ConfigInfoCard(
             Column(modifier = Modifier.weight(1f)) {
                 TileHeading(
                     title = domain.ifBlank { server.ifBlank { "—" } },
-                    countryCode = config.countryCode,
-                    country = config.country,
                     ip = info?.ip ?: config.ip ?: server,
-                    city = config.city,
                     provider = config.provider,
                 )
                 // The ping is a pill you tap - there is no automatic ping. It is
                 // neutral until a result is in, then takes the result's colour
                 // (pingTone): green, amber, or red for slow or no answer.
                 Spacer(modifier = Modifier.height(6.dp))
-                PingPill(
-                    label = pingLabel(info, checking),
-                    tone = pingTone(info, checking),
-                    checking = checking,
-                ) { scope.launch { PingStore.check(config) } }
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    PingPill(
+                        label = pingLabel(info, checking),
+                        tone = pingTone(info, checking),
+                        checking = checking,
+                    ) { scope.launch { PingStore.check(config) } }
+                    PlaceLabel(config.countryCode, config.country, config.city, Modifier.padding(start = 8.dp))
+                }
             }
             Spacer(modifier = Modifier.width(4.dp))
             IconButton(onClick = onEdit) {
