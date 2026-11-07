@@ -54,6 +54,11 @@ const (
 	// RouteDirect sends the flow straight out the physical interface,
 	// bypassing the tunnel.
 	RouteDirect
+	// RouteTunnelFirst is for DNS queries only: through the tunnel, and
+	// straight to the public resolver the query was addressed to if the
+	// tunnel doesn't answer in time or isn't there. A name that isn't on the
+	// smart list goes this way - never to the network's own resolver.
+	RouteTunnelFirst
 )
 
 // RouterFunc decides where a new flow should go, based only on its

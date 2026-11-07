@@ -1,6 +1,9 @@
 package routing
 
-import "encoding/json"
+import (
+	"encoding/json"
+	"strings"
+)
 
 // PopularResource is one entry in the built-in catalogue of services people
 // commonly need routed through a VPN - offered as a picker so the user doesn't
@@ -42,7 +45,17 @@ func PopularResources() []PopularResource {
 		res("Instagram", "instagram.com", "cdninstagram.com"),
 		res("Facebook", "facebook.com", "fbcdn.net"),
 		res("X", "x.com", "twitter.com", "twimg.com"),
-		res("Discord", "discord.com", "discordapp.com", "discord.gg", "discordapp.net"),
+		// Discord spreads over more than its main domains: voice servers live
+		// under discord.media, attachments and avatars on discordapp.net and
+		// discordcdn.com, invites and gifts on their own short domains. Voice
+		// itself runs on Discord's own network (AS49544, 66.22.192.0/18), and
+		// the API and gateway sit on Cloudflare addresses reserved for Discord
+		// (162.159.128.0/20) - listed as ranges so an app that already holds
+		// its addresses, and asks no DNS, still goes through the tunnel.
+		res("Discord", "discord.com", "discordapp.com", "discord.gg", "discordapp.net",
+			"discord.media", "discordcdn.com", "discord.co", "discord.gift", "discord.new",
+			"discord.dev", "discordstatus.com", "dis.gd",
+			"66.22.192.0/18", "162.159.128.0/20"),
 		res("Signal", "signal.org", "whispersystems.org"),
 		res("Snapchat", "snapchat.com", "sc-cdn.net"),
 		res("LinkedIn", "linkedin.com", "licdn.com"),
@@ -88,6 +101,34 @@ func PopularResources() []PopularResource {
 
 func res(name string, domains ...string) PopularResource {
 	return PopularResource{Name: name, Icon: domains[0], Domains: domains}
+}
+
+// UpgradeSites brings a saved list up to date with the catalogue: for every
+// service the list already carries - its first domain is on it - the
+// entries the service gained since are added. Without this, someone who had
+// switched Discord on before discord.media joined it would keep the old,
+// incomplete set (and see the tile as off). Returns the list unchanged, and
+// false, when there was nothing to add.
+func UpgradeSites(sites []string) ([]string, bool) {
+	have := map[string]bool{}
+	for _, s := range sites {
+		have[strings.ToLower(strings.TrimSpace(s))] = true
+	}
+	out := sites
+	changed := false
+	for _, r := range PopularResources() {
+		if !have[strings.ToLower(r.Domains[0])] {
+			continue
+		}
+		for _, d := range r.Domains {
+			if !have[strings.ToLower(d)] {
+				out = append(out, d)
+				have[strings.ToLower(d)] = true
+				changed = true
+			}
+		}
+	}
+	return out, changed
 }
 
 // PopularResourcesJSON is the catalogue as a JSON array, for clients that

@@ -155,22 +155,43 @@ func (s *dnsSplitter) handleQuery(q []byte) {
 	if decision == RouteDirect {
 		if rw := s.upstream(true); rw != nil {
 			s.stats.dnsViaDirect.Add(1)
-			s.armFallback(q)
+			s.armFallback(q, false)
 			if _, err := rw.Write(q); err == nil {
 				return
 			}
 		}
 		// No direct path at all: the tunnel is still better than no answer.
 	}
+	tunnelFirst := decision == RouteTunnelFirst
 	if rw := s.upstream(false); rw != nil {
 		s.stats.dnsViaTunnel.Add(1)
-		rw.Write(q)
+		// A tunnel that stops answering (a frozen connection, a server gone)
+		// must not take every unlisted name down with it: re-sent directly -
+		// to the public resolver the query was addressed to, never the
+		// network's own - after fallbackAfter. Listed names never are: asked
+		// on the local network they come back poisoned, and the asking says
+		// which listed sites are in use.
+		if tunnelFirst {
+			s.armFallback(q, true)
+		}
+		if _, err := rw.Write(q); err == nil {
+			return
+		}
+	}
+	// No tunnel at all: for an unlisted name a public resolver directly
+	// beats no answer.
+	if tunnelFirst {
+		if rw := s.upstream(true); rw != nil {
+			s.stats.dnsViaDirect.Add(1)
+			rw.Write(q)
+		}
 	}
 }
 
-// armFallback re-sends a direct query through the tunnel if no answer with
-// its id has come back within fallbackAfter.
-func (s *dnsSplitter) armFallback(q []byte) {
+// armFallback re-sends a query the other way - a direct one through the
+// tunnel, a tunnelled one directly - if no answer with its id has come back
+// within fallbackAfter.
+func (s *dnsSplitter) armFallback(q []byte, toDirect bool) {
 	if s.fallbackAfter <= 0 || len(q) < 2 {
 		return
 	}
@@ -195,9 +216,13 @@ func (s *dnsSplitter) armFallback(q []byte) {
 		if !still || closed {
 			return
 		}
-		if rw := s.upstream(false); rw != nil {
+		if rw := s.upstream(toDirect); rw != nil {
 			s.stats.dnsDirectFallback.Add(1)
-			logFailure("dnsDirectFallback", "udp", "", nil, "afterMs", s.fallbackAfter)
+			event := "dnsDirectFallback"
+			if toDirect {
+				event = "dnsTunnelFallback"
+			}
+			logFailure(event, "udp", "", nil, "afterMs", s.fallbackAfter)
 			rw.Write(q)
 		}
 	})
@@ -262,7 +287,7 @@ func (s *dnsSplitter) readAnswers(rw io.ReadWriteCloser, direct bool) {
 		if err != nil {
 			return
 		}
-		if direct && n >= 2 {
+		if n >= 2 {
 			id := binary.BigEndian.Uint16(buf)
 			s.mu.Lock()
 			if timer := s.pending[id]; timer != nil {

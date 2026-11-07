@@ -1,10 +1,12 @@
 package routing
 
 import (
+	"context"
 	"net"
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"phantom/internal/diag"
 )
@@ -41,7 +43,14 @@ type Engine struct {
 	// Split DNS: queries for listed names (tunnel) vs everything else (direct).
 	dnsListed, dnsUnlisted atomic.Int64
 	sites                  atomic.Int64
+
+	// The list as last set, and how to look its names up (SetResolver).
+	entries []string
+	resolve Resolver
 }
+
+// seedLookupTimeout bounds one up-front lookup through the tunnel.
+const seedLookupTimeout = 8 * time.Second
 
 func NewEngine() *Engine {
 	return &Engine{mode: ModeAll, domains: NewDomainSet()}
@@ -88,8 +97,12 @@ func (e *Engine) Mode() Mode {
 func (e *Engine) SetSites(entries []string) <-chan struct{} {
 	e.domains.Set(entries)
 	e.sites.Store(int64(len(entries)))
+	e.mu.Lock()
+	e.entries = append([]string(nil), entries...)
+	resolve := e.resolve
+	e.mu.Unlock()
 	diag.Event(diag.CatRoute, "sites", "count", len(entries), "mode", e.Mode(), "empty", e.domains.Empty())
-	return seedDomainIPs(e.domains, entries)
+	return seedDomainIPs(e.domains, entries, resolve)
 }
 
 // DiagFields returns (and resets) the per-flow decision counts, plus the
@@ -118,6 +131,13 @@ func (e *Engine) DiagFields() []any {
 //
 // Outside smart mode, or with an empty list (where smart mode tunnels
 // everything - see ShouldTunnel), every query rides the tunnel as before.
+//
+// false no longer means "ask the network's resolver": the platforms map it to
+// netstack.RouteTunnelFirst - through the tunnel too, falling back to a public
+// resolver directly only when the tunnel doesn't answer. The network's own
+// resolver - in Russia, the operator's - answers blocked names with nothing
+// or a wrong address, and is part of how the blocking works, so it is never
+// asked. true is tunnel only, with no fallback.
 func (e *Engine) TunnelDNSQuery(qname string) bool {
 	if e.Mode() != ModeSmart || e.domains.Empty() {
 		return true
@@ -130,11 +150,35 @@ func (e *Engine) TunnelDNSQuery(qname string) bool {
 	return false
 }
 
-// seedDomainIPs resolves each name-based entry once, immediately, and feeds
-// the answers into set. Literal IPs and CIDRs already match without any DNS
-// involved, so only names need this. The channel closes when all lookups are
-// done.
-func seedDomainIPs(set *DomainSet, entries []string) <-chan struct{} {
+// Resolver looks a name up for the engine. The platforms hand it one that
+// asks through the tunnel (netstack.Tunnel.LookupIP).
+type Resolver func(ctx context.Context, host string) ([]net.IP, error)
+
+// SetResolver gives the engine its way to learn listed sites' addresses up
+// front, and learns the current list's straight away. nil - no tunnel up -
+// means no up-front lookups at all: the device's own resolver is never asked,
+// since in Russia it answers blocked names with nothing. The DNS sniffer still
+// learns from answers as they pass.
+func (e *Engine) SetResolver(r Resolver) {
+	e.mu.Lock()
+	e.resolve = r
+	entries := e.entries
+	e.mu.Unlock()
+	if r != nil && len(entries) > 0 {
+		seedDomainIPs(e.domains, entries, r)
+	}
+}
+
+// seedDomainIPs resolves each name-based entry once, immediately, through
+// resolve, and feeds the answers into set. Literal IPs and CIDRs already
+// match without any DNS involved, so only names need this. With no resolver
+// nothing is looked up. The channel closes when all lookups are done.
+func seedDomainIPs(set *DomainSet, entries []string, resolve Resolver) <-chan struct{} {
+	if resolve == nil {
+		done := make(chan struct{})
+		close(done)
+		return done
+	}
 	var wg sync.WaitGroup
 	for _, raw := range entries {
 		name := strings.ToLower(strings.TrimSpace(raw))
@@ -151,7 +195,9 @@ func seedDomainIPs(set *DomainSet, entries []string) <-chan struct{} {
 		wg.Add(1)
 		go func(host string) {
 			defer wg.Done()
-			ips, err := net.LookupIP(host)
+			ctx, cancel := context.WithTimeout(context.Background(), seedLookupTimeout)
+			ips, err := resolve(ctx, host)
+			cancel()
 			if err != nil || len(ips) == 0 {
 				// A listed site's own name - the user typed it, so logging it
 				// reveals nothing they didn't choose to put in the list.

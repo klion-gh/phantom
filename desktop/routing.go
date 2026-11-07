@@ -123,7 +123,17 @@ func saveStringList(name string, values []string) {
 	writeSettingFile(name, string(data))
 }
 
-func loadSmartSites() []string { return loadStringList(smartSitesFileName) }
+// loadSmartSites reads the list, first bringing catalogue services on it up
+// to their current set of domains (routing.UpgradeSites) - saved back, so it
+// happens once.
+func loadSmartSites() []string {
+	sites := loadStringList(smartSitesFileName)
+	if upgraded, changed := routing.UpgradeSites(sites); changed {
+		saveSmartSites(upgraded)
+		return upgraded
+	}
+	return sites
+}
 
 func saveSmartSites(sites []string) { saveStringList(smartSitesFileName, sites) }
 

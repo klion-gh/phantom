@@ -93,6 +93,13 @@ object RoutingStore {
         sites = decodeList(p.getString(SITES_KEY, null))
             ?.map { RoutedSite(it) }
             ?: defaultSites.map { RoutedSite(it) }.also { saveSites(context, it) }
+        // Catalogue services already on the list get the domains they gained
+        // since (Discord's discord.media and address ranges, for one) - once,
+        // saved back.
+        val upgraded = runCatching { mobile.Mobile.upgradeSites(sites.joinToString("\n") { it.pattern }) }.getOrNull()
+        if (!upgraded.isNullOrEmpty()) {
+            saveSites(context, upgraded.split("\n").filter { it.isNotBlank() }.map { RoutedSite(it) })
+        }
         smartConfigIds = decodeList(p.getString(SMART_CONFIG_IDS_KEY, null))?.toSet() ?: emptySet()
         autoConfigIds = decodeList(p.getString(AUTO_CONFIG_IDS_KEY, null))?.toSet() ?: emptySet()
     }

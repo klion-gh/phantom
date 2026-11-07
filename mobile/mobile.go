@@ -281,8 +281,11 @@ func Start(configYAML string, tunFD int, mtu int, protector Protector) (*Tunnel,
 		if engine.TunnelDNSQuery(qname) {
 			return netstack.RouteTunnel
 		}
-		return netstack.RouteDirect
+		return netstack.RouteTunnelFirst
 	})
+	// Listed sites' addresses are learned up front through this tunnel - the
+	// network's own resolver answers blocked names with nothing.
+	engine.SetResolver(inner.LookupIP)
 	// See netstack.Tunnel.SetDNSUpstream: fakeDNSServer must match whatever
 	// address the platform layer (PhantomVpnService.kt's VpnService.Builder)
 	// hands the OS as the VPN's DNS server.
@@ -328,31 +331,14 @@ func (t *Tunnel) NetworkChanged(dnsServers string) {
 // interface scope a protected socket can't be relied on to carry). Without it
 // direct queries go to the placeholder's real upstream (1.1.1.1), which some
 // networks block - the split-DNS fallback covers that, but slower.
+//
+// No longer used: the network's resolver - in Russia, the operator's - answers
+// blocked names with nothing or a wrong address and is part of how blocking
+// works. Direct queries (only ever a fallback now, when the tunnel doesn't
+// answer) go to the public resolver the query was addressed to. Kept so the
+// app's calls still bind; it only records what the network offered.
 func (t *Tunnel) SetDirectDNS(servers string) {
-	if t.inner == nil {
-		return
-	}
-	var v6 string
-	for _, s := range strings.Split(servers, ",") {
-		ip := net.ParseIP(strings.TrimSpace(s))
-		if ip == nil || ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsUnspecified() {
-			continue
-		}
-		if ip.To4() != nil {
-			t.inner.SetDirectDNSUpstream(net.JoinHostPort(ip.String(), "53"))
-			diag.Event(diag.CatVPN, "directDNS", "server", ip.String())
-			return
-		}
-		if v6 == "" {
-			v6 = ip.String()
-		}
-	}
-	if v6 != "" {
-		t.inner.SetDirectDNSUpstream(net.JoinHostPort(v6, "53"))
-		diag.Event(diag.CatVPN, "directDNS", "server", v6)
-		return
-	}
-	diag.Event(diag.CatVPN, "directDNS", "server", "none", "reported", servers)
+	diag.Event(diag.CatVPN, "directDNS", "server", "public", "networkOffered", servers)
 }
 
 // Stop tears down the tunnel: the netstack, the Phantom session/pool, and

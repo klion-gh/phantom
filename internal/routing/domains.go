@@ -54,13 +54,13 @@ type DomainSet struct {
 	suffixes []string
 	nets     []*net.IPNet
 	literals map[string]bool
-	learned  map[string]time.Time
+	learned  map[string]learnedIP
 }
 
 func NewDomainSet() *DomainSet {
 	return &DomainSet{
 		literals: map[string]bool{},
-		learned:  map[string]time.Time{},
+		learned:  map[string]learnedIP{},
 	}
 }
 
@@ -109,8 +109,23 @@ func (d *DomainSet) Set(entries []string) {
 	d.suffixes = suffixes
 	d.nets = nets
 	d.literals = literals
-	d.learned = map[string]time.Time{}
+	// Addresses learned for names still on the list stay. Setting the list
+	// again - which every (re)connect does - used to forget them all, and an
+	// app that already had its addresses (Discord, holding them in the OS's
+	// DNS cache) then reconnected straight past the tunnel until it next
+	// asked for the name.
+	for ip, l := range d.learned {
+		if !matchesAnySuffix(l.name, suffixes) {
+			delete(d.learned, ip)
+		}
+	}
 	d.mu.Unlock()
+}
+
+// learnedIP is one address a DNS answer tied to a listed name.
+type learnedIP struct {
+	at   time.Time
+	name string
 }
 
 // Empty reports whether the set would match nothing at all. Callers use this
@@ -163,11 +178,11 @@ func (d *DomainSet) Learn(name string, ips []net.IP) {
 		// grow. Worst case the next DNS answer re-learns what's actually in
 		// use, which costs one flow going direct.
 		if len(d.learned) >= maxLearned {
-			d.learned = map[string]time.Time{}
+			d.learned = map[string]learnedIP{}
 		}
 	}
 	for _, ip := range ips {
-		d.learned[ip.String()] = now
+		d.learned[ip.String()] = learnedIP{at: now, name: n}
 	}
 }
 
@@ -179,8 +194,8 @@ func (d *DomainSet) LearnedCount() int {
 }
 
 func (d *DomainSet) pruneLocked(now time.Time) {
-	for ip, at := range d.learned {
-		if now.Sub(at) > learnedTTL {
+	for ip, l := range d.learned {
+		if now.Sub(l.at) > learnedTTL {
 			delete(d.learned, ip)
 		}
 	}
@@ -209,8 +224,8 @@ func (d *DomainSet) Match(host string) bool {
 			return true
 		}
 	}
-	at, ok := d.learned[key]
+	l, ok := d.learned[key]
 	d.mu.RUnlock()
 
-	return ok && time.Since(at) <= learnedTTL
+	return ok && time.Since(l.at) <= learnedTTL
 }

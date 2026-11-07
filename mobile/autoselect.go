@@ -4,6 +4,7 @@ package mobile
 
 import (
 	"encoding/json"
+	"strings"
 	"time"
 
 	"phantom/internal/pingcheck"
@@ -19,6 +20,22 @@ const probeTimeout = 6 * time.Second
 // [{"name":..,"icon":..,"domains":[..]}, ...]. Shared with the Windows client
 // (see internal/routing) so both show the same list.
 func PopularResourcesJSON() string { return routing.PopularResourcesJSON() }
+
+// UpgradeSites brings a saved smart list - newline-separated - up to date with
+// the catalogue (see routing.UpgradeSites). Returns "" when nothing changed.
+func UpgradeSites(sites string) string {
+	var list []string
+	for _, s := range strings.Split(sites, "\n") {
+		if s = strings.TrimSpace(s); s != "" {
+			list = append(list, s)
+		}
+	}
+	upgraded, changed := routing.UpgradeSites(list)
+	if !changed {
+		return ""
+	}
+	return strings.Join(upgraded, "\n")
+}
 
 // SwitchListener is implemented on the Kotlin/Swift side. OnSwitch is called
 // whenever the selector decides the tunnel should move to a different config -

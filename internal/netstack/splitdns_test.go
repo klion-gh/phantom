@@ -200,3 +200,45 @@ func TestPlaceholderDNSRefusedExceptOnPort53(t *testing.T) {
 		t.Fatal("only the placeholder address is refused")
 	}
 }
+
+// RouteTunnelFirst: an unlisted name rides the tunnel, not the network's
+// resolver; only a tunnel that doesn't answer sends it directly, to the
+// public resolver it was addressed to.
+func TestTunnelFirstGoesThroughTheTunnel(t *testing.T) {
+	direct, tunnel := newFakeUpstream(), newFakeUpstream()
+	s, _, _ := newTestSplitter(direct, tunnel, "youtube.com", 40*time.Millisecond)
+	s.route = func(name string) RouteDecision { return RouteTunnelFirst }
+	defer s.close()
+
+	q := query(11, "example.org")
+	s.handleQuery(q)
+	if tunnel.count() != 1 || direct.count() != 0 {
+		t.Fatalf("expected the query through the tunnel only, got tunnel=%d direct=%d", tunnel.count(), direct.count())
+	}
+	answer := append([]byte(nil), q...)
+	answer[2] |= 0x80
+	tunnel.answers <- answer
+	time.Sleep(120 * time.Millisecond)
+	if direct.count() != 0 {
+		t.Fatal("an answered tunnel query was also sent directly")
+	}
+
+	s.handleQuery(query(12, "example.net"))
+	time.Sleep(120 * time.Millisecond)
+	if direct.count() != 1 {
+		t.Fatalf("an unanswered tunnel query should fall back directly, got direct=%d", direct.count())
+	}
+}
+
+// With no tunnel at all, an unlisted name still gets an answer directly.
+func TestTunnelFirstWithoutTunnelGoesDirect(t *testing.T) {
+	direct := newFakeUpstream()
+	s, _, _ := newTestSplitter(direct, nil, "youtube.com", 0)
+	s.route = func(name string) RouteDecision { return RouteTunnelFirst }
+	defer s.close()
+
+	s.handleQuery(query(13, "example.org"))
+	if direct.count() != 1 {
+		t.Fatalf("expected a direct query with no tunnel, got %d", direct.count())
+	}
+}
