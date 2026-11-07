@@ -935,7 +935,10 @@ private fun NavStyleIcon(iconRes: Int, tint: Color?) {
 @Composable
 private fun BestConnectButton(enabled: Boolean, onToggle: (Boolean) -> Unit) {
     val lineOff = TextMuted.copy(alpha = 0.7f)
-    val lineWidth = if (enabled) 44.dp else 32.dp
+    // Short enough that hairlines, pill and words fit a phone's width in one
+    // line - the words wrapped onto two before, which also pushed the whole
+    // row off centre.
+    val lineWidth = if (enabled) 28.dp else 20.dp
     Row(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.Center,
@@ -949,17 +952,19 @@ private fun BestConnectButton(enabled: Boolean, onToggle: (Boolean) -> Unit) {
         )
         Text(
             I18n.t("auto_config").uppercase(),
+            maxLines = 1,
+            softWrap = false,
             style = TextStyle(
-                fontSize = 13.sp,
+                fontSize = 12.5.sp,
                 fontWeight = if (enabled) FontWeight.SemiBold else FontWeight.Medium,
-                letterSpacing = 3.2.sp,
+                letterSpacing = 2.sp,
                 color = TextSecondary,
             ),
             // In a thin pill - the brand gradient ring while on. Its end padding
             // is short by the tracking after the last letter, so the words are
             // optically centred.
             modifier = Modifier
-                .padding(horizontal = 10.dp)
+                .padding(horizontal = 8.dp)
                 .clip(RoundedCornerShape(50))
                 .background(Surface.copy(alpha = if (enabled) 1f else 0.55f))
                 .border(
@@ -968,7 +973,7 @@ private fun BestConnectButton(enabled: Boolean, onToggle: (Boolean) -> Unit) {
                     RoundedCornerShape(50),
                 )
                 .toggleable(value = enabled, role = Role.Switch, onValueChange = onToggle)
-                .padding(start = 20.dp, end = 17.dp, top = 9.dp, bottom = 9.dp)
+                .padding(start = 16.dp, end = 14.dp, top = 9.dp, bottom = 9.dp)
                 // While on, the letters are painted with the brand gradient:
                 // drawn, then the gradient laid over them keeping only where
                 // they are (SrcAtop, on an offscreen layer).
@@ -1017,7 +1022,7 @@ private fun RelaysSection() {
         },
     )
 
-    if (RelayStore.relays.isNotEmpty() || RelayStore.enabled) {
+    run {
         Spacer(modifier = Modifier.height(12.dp))
         TileGroup {
             Row(
@@ -1340,7 +1345,13 @@ private fun ConfigsPage(
     val currentOnMove by rememberUpdatedState(onMoveConfig)
     // The configs follow the page's header items in the one list (see below):
     // their list index minus however many of those there are is their place.
-    val currentHeaderItems by rememberUpdatedState(if (RoutingStore.smartEnabled && !autoEnabled) 4 else 3)
+    val currentHeaderItems by rememberUpdatedState(
+        when {
+            configs.isEmpty() -> 2
+            RoutingStore.smartEnabled && !autoEnabled -> 4
+            else -> 3
+        },
+    )
     val reorder = remember(listState) {
         ReorderState(listState, reorderScope, isMovable = { it !in HEADER_KEYS }) { from, to ->
             currentOnMove(from - currentHeaderItems, to - currentHeaderItems)
@@ -1374,7 +1385,7 @@ private fun ConfigsPage(
 
         Spacer(modifier = Modifier.height(10.dp))
 
-        if (configs.isNotEmpty()) {
+        run {
             // The whole page is one list: the mode tiles at the top move up
             // with the relays and configs below them rather than staying
             // pinned, so a long list gets the full height. The configs come
@@ -1387,7 +1398,7 @@ private fun ConfigsPage(
                 // Explained before the tile it's about, not after - the user
                 // should know why "Выбирать лучшую" is dimmed before they
                 // reach it, not discover it's inert by tapping first.
-                if (smartDriving) {
+                if (smartDriving && configs.isNotEmpty()) {
                     item(key = HEADER_SMART_WARNING) {
                         Text(
                             I18n.t("smart_vpn_configs_warning"),
@@ -1407,9 +1418,11 @@ private fun ConfigsPage(
                 // inert while this is on (see SmartVpnHeaderTile's `overridden`
                 // param) - each mode expresses a different idea of what the
                 // tunnel is for, so only one gets to hold it at a time.
-                item(key = HEADER_AUTO) {
-                    InactiveOverlay(inactive = smartDriving) {
-                        BestConnectButton(enabled = autoEnabled && !smartDriving, onToggle = onToggleAuto)
+                if (configs.isNotEmpty()) {
+                    item(key = HEADER_AUTO) {
+                        InactiveOverlay(inactive = smartDriving) {
+                            BestConnectButton(enabled = autoEnabled && !smartDriving, onToggle = onToggleAuto)
+                        }
                     }
                 }
 
@@ -1432,7 +1445,7 @@ private fun ConfigsPage(
                 // The block's title rides at the top of its panel, the same
                 // place "Ретрансляторы" has in theirs.
                 item(key = HEADER_CONFIGS) {
-                    ConfigGroupSegment(first = true, last = false) {
+                    ConfigGroupSegment(first = true, last = configs.isEmpty()) {
                         // Its + adds a config, as the relays block's adds a relay.
                         Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
                             Text(
@@ -1505,6 +1518,15 @@ private fun ConfigsPage(
                         }
                     }
                 }
+                if (configs.isEmpty()) {
+                    item(key = "empty") {
+                        EmptyState(
+                            modifier = Modifier.fillMaxWidth().padding(top = 32.dp),
+                            title = I18n.t("no_configs"),
+                            hint = I18n.t("no_configs_hint"),
+                        )
+                    }
+                }
             }
 
             if (status == ConnectionStatus.ERROR && message.isNotBlank()) {
@@ -1522,12 +1544,6 @@ private fun ConfigsPage(
                         .padding(horizontal = 14.dp, vertical = 10.dp),
                 )
             }
-        } else {
-            EmptyState(
-                modifier = Modifier.weight(1f).fillMaxWidth(),
-                title = I18n.t("no_configs"),
-                hint = I18n.t("no_configs_hint"),
-            )
         }
     }
 }

@@ -16,7 +16,7 @@ const dict = {
     configs: 'Конфигурации',
     add_config: 'Добавить конфигурацию',
     no_configs: 'Нет добавленной конфигурации',
-    no_configs_hint: 'Нажмите + чтобы добавить client.yaml',
+    no_configs_hint: 'Нажмите + в блоке «Конфигурации», чтобы добавить client.yaml',
     resources: 'Доступность ресурсов',
     add_resource: 'Добавить ресурс',
     // config edit
@@ -185,7 +185,7 @@ const dict = {
     configs: 'Configurations',
     add_config: 'Add configuration',
     no_configs: 'No configuration added',
-    no_configs_hint: 'Tap + to add client.yaml',
+    no_configs_hint: 'Press + on the Configurations block to add client.yaml',
     resources: 'Resource availability',
     add_resource: 'Add resource',
     paste_yaml: 'Paste the full client.yaml contents:',

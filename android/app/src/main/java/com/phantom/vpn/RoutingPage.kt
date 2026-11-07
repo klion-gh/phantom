@@ -500,7 +500,6 @@ private fun ConfigPickerSection(
             ConfigPickRow(
                 config = config,
                 selected = config.id in selected,
-                ping = PingStore[config.id],
                 // The selector only decides anything while the mode is on -
                 // with it off, a stale "this one is carrying traffic" marker
                 // from before it was switched off would be misleading.
@@ -513,15 +512,13 @@ private fun ConfigPickerSection(
 }
 
 /** Health of one config as last measured by the smart selector - which one it
- * is carrying traffic through. What the rows *show* as latency is the same
- * [PingStore] value the Конфигурации tiles show, not this. */
+ * is carrying traffic through. */
 data class ConfigHealth(val alive: Boolean, val latencyMs: Long, val probed: Boolean, val active: Boolean)
 
 @Composable
 private fun ConfigPickRow(
     config: SavedConfig,
     selected: Boolean,
-    ping: PingInfo?,
     active: Boolean,
     onClick: () -> Unit,
 ) {
@@ -552,14 +549,6 @@ private fun ConfigPickRow(
                     fontWeight = FontWeight.Medium,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
-                )
-                // Word for word what the Конфигурации tile shows for this
-                // config, from the same measurement (see PingStore).
-                Spacer(Modifier.height(3.dp))
-                Text(
-                    pingLabel(ping, PingStore.isChecking(config.id)),
-                    color = TextSecondary,
-                    fontSize = 12.sp,
                 )
             }
             // The active config is the one actually carrying traffic right now -

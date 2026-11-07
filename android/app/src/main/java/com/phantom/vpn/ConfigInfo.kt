@@ -36,9 +36,6 @@ import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.TextStyle
-import androidx.compose.ui.text.SpanStyle
-import androidx.compose.ui.text.withStyle
-import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
@@ -176,13 +173,9 @@ suspend fun lookupPlace(ip: String): Place? = withContext(Dispatchers.IO) {
 /** Where a server is, as a tile shows it: country, then city and provider. */
 data class Place(val country: String, val countryCode: String, val city: String?, val provider: String?)
 
-/** " · city · provider" after a tile's IP. */
-fun placeSuffix(city: String?, provider: String?): String =
-    listOfNotNull(city, provider).filter { it.isNotBlank() }.joinToString("") { " · $it" }
-
 /**
- * The first two lines of a config or relay tile: the name with its flag and
- * country after it, then the IP with city and provider after that.
+ * The top of a config or relay tile: the name with its flag and "City,
+ * Country" after it, then the IP, then the hosting provider.
  */
 @Composable
 fun TileHeading(
@@ -203,8 +196,8 @@ fun TileHeading(
             overflow = TextOverflow.Ellipsis,
             modifier = Modifier.weight(1f, fill = false),
         )
-        val label = country ?: countryCode
-        if (!label.isNullOrBlank()) {
+        val label = listOfNotNull(city, country ?: countryCode).filter { it.isNotBlank() }.joinToString(", ")
+        if (label.isNotBlank()) {
             val flag = countryCode?.let { countryCodeToFlag(it) }.orEmpty()
             Spacer(modifier = Modifier.width(7.dp))
             Text(
@@ -217,14 +210,23 @@ fun TileHeading(
     }
     Spacer(modifier = Modifier.height(2.dp))
     Text(
-        text = buildAnnotatedString {
-            withStyle(SpanStyle(fontFamily = FontFamily.Monospace, color = TextSecondary)) { append(ip) }
-            withStyle(SpanStyle(color = TextMuted, fontSize = 12.5.sp)) { append(placeSuffix(city, provider)) }
-        },
+        text = ip,
+        color = TextSecondary,
         fontSize = 13.sp,
+        fontFamily = FontFamily.Monospace,
         maxLines = 1,
         overflow = TextOverflow.Ellipsis,
     )
+    // The hosting provider gets a line of its own: after the IP it rarely fit.
+    if (!provider.isNullOrBlank()) {
+        Text(
+            text = provider,
+            color = TextMuted,
+            fontSize = 12.5.sp,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+    }
 }
 
 /**

@@ -372,7 +372,7 @@ html, body {
     white-space: nowrap;
 }
 
-/* IP, then city and provider: "34.88.191.124 · Lappeenranta · Google LLC". */
+/* The IP; the provider goes on the next line. */
 .config-ip {
     font-size: 13px;
     color: var(--text-secondary);
@@ -382,7 +382,16 @@ html, body {
     text-overflow: ellipsis;
 }
 .config-ip .ip-addr { font-family: "Consolas", "Cascadia Code", monospace; }
-.config-ip .ip-place { color: var(--text-muted); font-size: 12.5px; }
+/* The hosting provider, on a line of its own under the IP. */
+.config-provider {
+    font-size: 12.5px;
+    color: var(--text-muted);
+    margin-top: 1px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.config-provider:empty { display: none; }
 
 .config-meta {
     display: flex;

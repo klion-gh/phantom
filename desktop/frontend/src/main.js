@@ -209,7 +209,6 @@ async function pingNow(config) {
   if (pingsInFlight.has(config.id)) return;
   pingsInFlight.add(config.id);
   updateTileMeta(config.id);
-  updateRoutingPing(config.id);
   const prev = pingData.get(config.id) || {};
   try {
     const json = JSON.parse(await Ping(config.yaml));
@@ -220,7 +219,6 @@ async function pingNow(config) {
     pingsInFlight.delete(config.id);
   }
   updateTileMeta(config.id);
-  updateRoutingPing(config.id);
 }
 
 // What a ping result is shown as: a full handshake (TCP, TLS, the auth
@@ -236,9 +234,7 @@ function pingTone(id) {
   return info.latencyMs <= PING_SLOW_MS ? 'slow' : 'bad';
 }
 
-// The Маршрутизация list shows exactly what the config tile shows, from the
-// same measurement (pingData) - not a second, separately-timed check that
-// could disagree with it.
+// The ping pill's text for a config tile.
 function pingLabel(id) {
   if (pingsInFlight.has(id)) return `${t('ping')}: …`;
   const info = pingData.get(id) || {};
@@ -246,14 +242,9 @@ function pingLabel(id) {
   return info.failed ? `${t('ping')}: ${t('no_answer')}` : `${t('ping')}: —`;
 }
 
-function updateRoutingPing(id) {
-  const el = document.querySelector(`[data-ping-for="${id}"]`);
-  if (el) el.textContent = pingLabel(id);
-}
-
-// " · city · provider" after a tile's IP, from the cached place lookup.
-function placeSuffix(item) {
-  return [item.city, item.provider].filter(Boolean).map((v) => ` · ${v}`).join('');
+// What follows the flag on a tile: "Moscow, Russia", or the country alone.
+function placeLabel(item) {
+  return [item.city, item.country || item.countryCode].filter(Boolean).join(', ');
 }
 
 // Configs saved before tiles showed a city and provider have only the
@@ -283,7 +274,7 @@ function updateTileMeta(id) {
 
   const info = pingData.get(id) || {};
   card.querySelector('.ip-addr').textContent = info.ip || config.ip || parseYamlField(config.yaml, 'server') || '—';
-  card.querySelector('.ip-place').textContent = placeSuffix(config);
+  card.querySelector('.config-provider').textContent = config.provider || '';
   const pingBtn = card.querySelector('.ping-btn');
   pingBtn.textContent = pingLabel(id);
   pingBtn.disabled = pingsInFlight.has(id);
@@ -298,7 +289,7 @@ function updateTileMeta(id) {
   // own emoji font has no flag glyphs (confirmed directly in a WebView2 page,
   // not just assumed), so that would only ever show the bare two-letter code.
   const geoText = card.querySelector('.geo-text');
-  geoText.textContent = config.country || config.countryCode || '';
+  geoText.textContent = placeLabel(config);
 
   const flagEl = card.querySelector('.geo-flag');
   const code = /^[A-Za-z]{2}$/.test(config.countryCode || '') ? config.countryCode.toLowerCase() : '';
@@ -442,7 +433,8 @@ function renderConfigList() {
           <span class="geo-flag fi hidden"></span>
           <span class="geo-text"></span>
         </div>
-        <div class="config-ip"><span class="ip-addr"></span><span class="ip-place"></span></div>
+        <div class="config-ip"><span class="ip-addr"></span></div>
+        <div class="config-provider"></div>
         <div class="config-meta">
           <button type="button" class="ping-btn" title="${t('check_ping')}">${t('ping')}: —</button>
         </div>
@@ -1439,7 +1431,6 @@ function renderRoutingConfigs() {
       <div class="routing-config-row${on ? ' active' : ''}" data-id="${config.id}">
         <div class="routing-config-text">
           <div class="routing-config-name">${escapeHtml(domain)}</div>
-          <div class="routing-config-health" data-ping-for="${config.id}">${escapeHtml(pingLabel(config.id))}</div>
         </div>
       </div>`;
   }).join('');
@@ -1458,8 +1449,7 @@ function renderRoutingConfigs() {
 
 // Which config the selector is carrying traffic through, shown as the bar on
 // its row. Polled rather than pushed: the selector already probes on its own
-// schedule. The latency on each row is not this - it's the same ping the
-// config tiles show (see updateRoutingPing).
+// schedule.
 async function refreshRoutingHealth() {
   let health = [];
   try {
@@ -1569,11 +1559,11 @@ function renderSmartRelayNote() {
 function renderRelay() {
   renderSmartRelayNote();
   const any = relayState.relays.length > 0;
-  document.getElementById('relay-tile').classList.toggle('hidden', configs.length === 0);
+  document.getElementById('relay-tile').classList.remove('hidden');
   document.getElementById('relay-toggle').classList.toggle('active', relayState.enabled);
 
   const group = document.getElementById('relay-group');
-  group.classList.toggle('hidden', configs.length === 0 || (!any && !relayState.enabled));
+  group.classList.remove('hidden');
   group.classList.toggle('dimmed', !relayState.enabled);
   document.getElementById('relay-empty').classList.toggle('hidden', any);
 
@@ -1593,7 +1583,8 @@ function renderRelay() {
           <span class="geo-flag fi hidden"></span>
           <span class="geo-text"></span>
         </div>
-        <div class="config-ip"><span class="ip-addr"></span><span class="ip-place"></span></div>
+        <div class="config-ip"><span class="ip-addr"></span></div>
+        <div class="config-provider"></div>
         <div class="config-meta">
           <button type="button" class="ping-btn" title="${t('check_ping')}">${t('ping')}: —</button>
         </div>
@@ -1617,7 +1608,7 @@ function updateRelayMeta(id) {
 
   const info = relayPing.get(id) || {};
   card.querySelector('.ip-addr').textContent = info.ip || relay.ip || '—';
-  card.querySelector('.ip-place').textContent = placeSuffix(relay);
+  card.querySelector('.config-provider').textContent = relay.provider || '';
   const pingBtn = card.querySelector('.ping-btn');
   pingBtn.textContent = relayPingLabel(id);
   pingBtn.disabled = relayPingsInFlight.has(id);
@@ -1625,7 +1616,7 @@ function updateRelayMeta(id) {
   const tone = relayPingTone(id);
   if (tone) pingBtn.classList.add(`tone-${tone}`);
 
-  card.querySelector('.geo-text').textContent = relay.country || relay.countryCode || '';
+  card.querySelector('.geo-text').textContent = placeLabel(relay);
   const flagEl = card.querySelector('.geo-flag');
   const code = /^[A-Za-z]{2}$/.test(relay.countryCode || '') ? relay.countryCode.toLowerCase() : '';
   for (const cls of [...flagEl.classList]) {
