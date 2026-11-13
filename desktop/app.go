@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"log"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"phantom/internal/geoip"
@@ -29,6 +30,14 @@ type App struct {
 	mu             sync.Mutex
 	tunnel         activeTunnel
 	activeConfigID string
+	// The config the user wants connected: set when any connect starts,
+	// cleared only by a disconnect. Unlike activeConfigID it survives a
+	// connect that failed - which is exactly when "Поддерживать соединение"
+	// has to know what to bring back.
+	wantedID string
+
+	// Connects in flight, so the keep-alive guard never races one.
+	connecting atomic.Int32
 }
 
 func NewApp() *App {
@@ -52,11 +61,12 @@ func (a *App) startup(ctx context.Context) {
 	// while it still carries the machine's traffic. Never anything on Windows.
 	if t, id := adoptRunningTunnel(); t != nil {
 		a.mu.Lock()
-		a.tunnel, a.activeConfigID = t, id
+		a.tunnel, a.activeConfigID, a.wantedID = t, id, id
 		a.mu.Unlock()
 		log.Printf("adopted the running tunnel for config %s", id)
 	}
 	syncSelector()
+	a.syncKeepAlive()
 	startBrowserBridgeIfEnabled(a)
 
 	go checkAndSelfUpdate(ctx)
@@ -165,7 +175,10 @@ func (a *App) beforeClose(ctx context.Context) (prevent bool) {
 // exactly what happens when the network-change watch below decides to
 // reconnect from scratch.
 func (a *App) Connect(configID string, configYAML string) string {
+	a.connecting.Add(1)
+	defer a.connecting.Add(-1)
 	a.mu.Lock()
+	a.wantedID = configID
 	if a.tunnel != nil {
 		a.tunnel.Stop()
 		a.tunnel = nil
@@ -242,6 +255,7 @@ func (a *App) attemptReconnect(configID, configYAML string, attempt int) {
 func (a *App) Disconnect() {
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	a.wantedID = ""
 	if a.tunnel == nil {
 		return
 	}
@@ -256,6 +270,8 @@ type statusResponse struct {
 	Alive          bool   `json:"alive"`
 	Stats          string `json:"stats"`
 	ActiveConfigID string `json:"activeConfigId"`
+	// "Поддерживать соединение"'s state - see linkguard.Status.
+	KeepAlive json.RawMessage `json:"keepAlive"`
 }
 
 // Status reports whether a tunnel is currently up, and which saved config it
@@ -266,7 +282,11 @@ func (a *App) Status() string {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
-	resp := statusResponse{Connected: a.tunnel != nil, ActiveConfigID: a.activeConfigID}
+	resp := statusResponse{
+		Connected:      a.tunnel != nil,
+		ActiveConfigID: a.activeConfigID,
+		KeepAlive:      json.RawMessage(keepAliveStatusJSON()),
+	}
 	if a.tunnel != nil {
 		resp.Alive = a.tunnel.IsAlive()
 		resp.Stats = a.tunnel.Stats()
@@ -395,6 +415,9 @@ func (a *App) DeleteConfig(id string) string {
 		a.tunnel.Stop()
 		a.tunnel = nil
 		a.activeConfigID = ""
+	}
+	if a.wantedID == id {
+		a.wantedID = ""
 	}
 	a.mu.Unlock()
 

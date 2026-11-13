@@ -7,11 +7,15 @@ package pingcheck
 import (
 	"context"
 	"fmt"
+	"io"
 	"net"
 	"time"
 
 	"phantom/internal/config"
+	"phantom/internal/netcheck"
+	"phantom/internal/protocol"
 	"phantom/internal/transport"
+	"phantom/internal/tunnel"
 )
 
 // Result is what a UI needs to show for a saved config's server: its
@@ -48,6 +52,42 @@ func Ping(configYAML string) (Result, error) {
 
 // PingWith is Ping with control over the network path - see Options.
 func PingWith(configYAML string, opts Options) (Result, error) {
+	return probe(configYAML, opts, nil)
+}
+
+// Internet is PingWith that goes one step further: once the handshake is
+// done it fetches a connectivity-check page through that server (see
+// internal/netcheck). A server can answer the handshake and still pass no
+// traffic - its own uplink down, a filter between it and the internet - and
+// that's exactly what choosing a config to fall back to must not land on.
+// LatencyMs covers the handshake and the fetch.
+func Internet(configYAML string, opts Options) (Result, error) {
+	return probe(configYAML, opts, func(conn net.Conn, crypto *protocol.SessionCrypto) error {
+		mux := tunnel.NewMultiplexer(conn, crypto)
+		defer mux.Close()
+		ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+		defer cancel()
+		_, err := netcheck.Through(ctx, func(addr string) (io.ReadWriteCloser, error) {
+			return mux.Open(addr)
+		})
+		return err
+	})
+}
+
+// Direct reports whether this device reaches the internet at all around the
+// VPN - see netcheck.Direct. opts.ProtectFD takes the sockets out of a
+// running tunnel, as for a ping.
+func Direct(opts Options) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	d := &net.Dialer{Timeout: 5 * time.Second, Control: transport.ProtectControl(opts.ProtectFD)}
+	return netcheck.Direct(ctx, d)
+}
+
+// probe dials configYAML's endpoints in order and, on the first handshake
+// that succeeds, runs then on the connection (nil: just the handshake). The
+// connection is closed afterwards.
+func probe(configYAML string, opts Options, then func(net.Conn, *protocol.SessionCrypto) error) (Result, error) {
 	cfg, err := config.ParseClientConfig([]byte(configYAML))
 	if err != nil {
 		return Result{}, fmt.Errorf("parse config: %w", err)
@@ -101,11 +141,18 @@ func PingWith(configYAML string, opts Options) (Result, error) {
 		tlsCfg.ServerAddr = net.JoinHostPort(ips[0].String(), port)
 		dialCtx, dialCancel := context.WithTimeout(context.Background(), 8*time.Second)
 		start := time.Now()
-		conn, _, dialErr := transport.Dial(dialCtx, tlsCfg)
+		conn, crypto, dialErr := transport.Dial(dialCtx, tlsCfg)
 		dialCancel()
 		if dialErr != nil {
 			lastErr = fmt.Errorf("handshake: %w", dialErr)
 			continue
+		}
+		if then != nil {
+			if err := then(conn, crypto); err != nil {
+				conn.Close()
+				lastErr = fmt.Errorf("through the server: %w", err)
+				continue
+			}
 		}
 		latency := time.Since(start)
 		conn.Close()

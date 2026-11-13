@@ -35,6 +35,10 @@ export function GetBrowserBridge():Promise<string>;
 
 export function GetLanguage():Promise<string>;
 
+export function GetKeepAlive():Promise<boolean>;
+
+export function SetKeepAlive(arg1:boolean):Promise<void>;
+
 export function GetRelays():Promise<string>;
 
 export function GetRoutingState():Promise<string>;

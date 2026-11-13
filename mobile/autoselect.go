@@ -5,8 +5,10 @@ package mobile
 import (
 	"encoding/json"
 	"strings"
+	"sync"
 	"time"
 
+	"phantom/internal/linkguard"
 	"phantom/internal/pingcheck"
 	"phantom/internal/routing"
 )
@@ -104,10 +106,39 @@ func (a *AutoSelector) Apply() {
 }
 
 // Start begins background probing.
-func (a *AutoSelector) Start() { a.inner.Start() }
+func (a *AutoSelector) Start() {
+	liveSelectorsMu.Lock()
+	liveSelectors[a] = struct{}{}
+	liveSelectorsMu.Unlock()
+	a.inner.Start()
+}
 
 // Stop ends background probing.
-func (a *AutoSelector) Stop() { a.inner.Stop() }
+func (a *AutoSelector) Stop() {
+	liveSelectorsMu.Lock()
+	delete(liveSelectors, a)
+	liveSelectorsMu.Unlock()
+	a.inner.Stop()
+}
+
+// The selectors running right now, so "keep the connection up" can tell
+// them when it moved the tunnel - see adoptInSelectors.
+var (
+	liveSelectorsMu sync.Mutex
+	liveSelectors   = map[*AutoSelector]struct{}{}
+)
+
+// adoptInSelectors tells every running selector that the tunnel moved from
+// one config to another behind its back, and to stay off the old one for a
+// while - see routing.Selector.Adopt and Avoid.
+func adoptInSelectors(from, to string) {
+	liveSelectorsMu.Lock()
+	defer liveSelectorsMu.Unlock()
+	for a := range liveSelectors {
+		a.inner.Avoid(from, linkguard.AvoidFor)
+		a.inner.Adopt(to)
+	}
+}
 
 // Probe forces an immediate round. Worth calling right after the device's
 // network changes, where waiting for the next tick would leave the user on a

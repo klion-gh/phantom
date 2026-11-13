@@ -70,6 +70,14 @@ export function GetLanguage() {
   return window['go']['main']['App']['GetLanguage']();
 }
 
+export function GetKeepAlive() {
+  return window['go']['main']['App']['GetKeepAlive']();
+}
+
+export function SetKeepAlive(arg1) {
+  return window['go']['main']['App']['SetKeepAlive'](arg1);
+}
+
 export function GetRelays() {
   return window['go']['main']['App']['GetRelays']();
 }

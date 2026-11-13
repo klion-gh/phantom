@@ -51,6 +51,18 @@
                 <button id="relay-toggle" class="toggle-switch"><span class="toggle-switch-thumb"></span></button>
               </div>
 
+              <!-- "Поддерживать соединение" (desktop/keepalive.go): under the
+                   relay switch, the other setting about how this machine
+                   reaches its servers. The line under the title says what it
+                   currently makes of the connection. -->
+              <div id="keepalive-tile" class="relay-row keepalive-row">
+                <div class="keepalive-text">
+                  <span class="relay-row-title" data-i18n="keepalive">Поддерживать соединение</span>
+                  <span id="keepalive-status" class="keepalive-status"></span>
+                </div>
+                <button id="keepalive-toggle" class="toggle-switch"><span class="toggle-switch-thumb"></span></button>
+              </div>
+
               <div id="relay-group" class="tile-group hidden">
                 <div class="tile-group-header">
                   <span class="tile-group-title" data-i18n="relays">Ретрансляторы</span>

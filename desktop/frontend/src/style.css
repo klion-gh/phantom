@@ -1625,6 +1625,21 @@ textarea::placeholder { color: var(--text-muted); }
     flex-shrink: 0;
     padding: 2px 6px 6px 18px;
 }
+/* "Поддерживать соединение": the relay row's look, with a status line under
+   the title. */
+.keepalive-text {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+}
+.keepalive-status {
+    font-size: 12.5px;
+    line-height: 1.4;
+    color: var(--text-secondary);
+}
+.keepalive-status.tone-bad { color: var(--danger, #e5484d); }
 .relay-row-title {
     flex: 1;
     font-size: 15px;

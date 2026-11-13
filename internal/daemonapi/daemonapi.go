@@ -143,3 +143,31 @@ func (c *Client) Ping(yaml string) (PingReply, error) {
 	err := c.call("Ping", PingArgs{YAML: yaml}, &r, 20*time.Second)
 	return r, err
 }
+
+// What Check is asked to check - see internal/netcheck.
+const (
+	CheckTunnel = "tunnel" // internet through the running tunnel
+	CheckDirect = "direct" // internet around the tunnel
+	CheckConfig = "config" // internet through CheckArgs.YAML's server, dialed on its own
+)
+
+// CheckArgs asks phantomd for one of the checks "keep the connection up"
+// makes (internal/linkguard). They run in the service because only its
+// sockets can step around the tunnel.
+type CheckArgs struct {
+	Kind string
+	YAML string // for CheckConfig
+}
+
+type CheckReply struct {
+	LatencyMs int64
+}
+
+// Check runs one check. A service from before 2.7.3 doesn't know the call
+// and answers with an error, which reads as a failed check - the window then
+// simply can't tell, and the guard keeps waiting rather than acting.
+func (c *Client) Check(args CheckArgs) (CheckReply, error) {
+	var r CheckReply
+	err := c.call("Check", args, &r, 25*time.Second)
+	return r, err
+}

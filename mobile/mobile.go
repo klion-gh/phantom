@@ -26,6 +26,7 @@ package mobile
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -416,4 +417,21 @@ func LookupCountry(ip string) (string, error) {
 		return "", err
 	}
 	return string(data), nil
+}
+
+// CheckInternet fetches a connectivity-check page through this tunnel (see
+// internal/netcheck) and returns nil when the answer came back within
+// timeoutMs. A tunnel can look alive - its connection to the server open -
+// while nothing gets through it; this is the check that tells the two apart.
+func (t *Tunnel) CheckInternet(timeoutMs int) error {
+	if t.inner == nil {
+		return errors.New("no tunnel")
+	}
+	if timeoutMs <= 0 {
+		timeoutMs = 8000
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(timeoutMs)*time.Millisecond)
+	defer cancel()
+	_, err := t.inner.CheckInternet(ctx)
+	return err
 }

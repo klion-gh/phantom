@@ -44,7 +44,7 @@ object RoutingController {
      * is the opposite: it is explicitly about routing certain sites through
      * certain servers, so an empty list there means "not configured yet".
      */
-    private fun candidates(context: Context): List<SavedConfig> {
+    fun candidates(context: Context): List<SavedConfig> {
         val all = ConfigStore.loadAll(context)
         return when {
             RoutingStore.autoEnabled -> {
@@ -74,6 +74,8 @@ object RoutingController {
             "smartEnabled" to RoutingStore.smartEnabled,
             "selectorWasRunning" to (selector != null),
         )
+        // "Поддерживать соединение" chooses within the same set.
+        KeepAliveController.refreshCandidates()
         if (configs.isEmpty()) {
             selector?.stop()
             selector = null

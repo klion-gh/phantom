@@ -28,6 +28,36 @@ func pingConfig(configYAML string) (pingcheck.Result, error) {
 	return pingcheck.Result{IP: reply.IP, LatencyMs: reply.LatencyMs}, nil
 }
 
+// checkDirect and checkConfigInternet run in phantomd for the same reason
+// pingConfig does; with no service there's no tunnel to step around.
+func checkDirect() error {
+	_, err := daemonCheck(daemonapi.CheckArgs{Kind: daemonapi.CheckDirect})
+	if errors.Is(err, daemonapi.ErrNotRunning) {
+		return pingcheck.Direct(pingcheck.Options{})
+	}
+	return err
+}
+
+func checkConfigInternet(configYAML string) (int64, error) {
+	configYAML = withRelaySetting(configYAML)
+	ms, err := daemonCheck(daemonapi.CheckArgs{Kind: daemonapi.CheckConfig, YAML: configYAML})
+	if errors.Is(err, daemonapi.ErrNotRunning) {
+		r, err := pingcheck.Internet(configYAML, pingcheck.Options{})
+		return r.LatencyMs, err
+	}
+	return ms, err
+}
+
+func daemonCheck(args daemonapi.CheckArgs) (int64, error) {
+	var reply daemonapi.CheckReply
+	err := withDaemon(false, func(c *daemonapi.Client) error {
+		var callErr error
+		reply, callErr = c.Check(args)
+		return callErr
+	})
+	return reply.LatencyMs, err
+}
+
 // pingRelay times a relay's TCP port. This process can't mark its sockets
 // (see pingConfig), so while the tunnel is up the connect may take the
 // tunnel's route and the number is only a rough one.

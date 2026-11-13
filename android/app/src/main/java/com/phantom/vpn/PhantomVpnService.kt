@@ -130,6 +130,7 @@ class PhantomVpnService : VpnService() {
                 if (intent.getBooleanExtra(EXTRA_FROM_NOTIFICATION, false)) {
                     releaseDrivingModeFromNotification()
                 }
+                KeepAliveController.onUserDisconnect()
                 disconnect()
                 return START_NOT_STICKY
             }
@@ -211,6 +212,7 @@ class PhantomVpnService : VpnService() {
         showPersistentNotification(ConnectionStatus.CONNECTING)
         activeConfigId = configId
         activeConfigYaml = configYaml
+        KeepAliveController.onConnectStart(configId)
 
         executor.execute {
             // Tear down any previous tunnel first - switching from one saved config to
@@ -309,6 +311,7 @@ class PhantomVpnService : VpnService() {
                 // there is nothing left to apply.
                 RoutingStore.clearSitesDirty()
 
+                tunnel?.let { KeepAliveController.onTunnelUp(configId, it) }
                 FileLog.i("Mobile.start returned, tunnel connected")
                 // Wall-clock cost of the whole connect path - the number to
                 // look at for any "connecting feels slow" report, and the one
@@ -329,8 +332,23 @@ class PhantomVpnService : VpnService() {
                     "ms" to (System.currentTimeMillis() - connectStartedAt),
                     "error" to (e.message ?: e::class.java.simpleName),
                 )
-                VpnStateHolder.update(ConnectionStatus.ERROR, e.message ?: "connection failed", configId)
-                disconnect()
+                if (KeepAliveController.enabled && tunInterface != null) {
+                    // "Поддерживать соединение" brings it back (or moves to a
+                    // config that works). Until then the VPN interface stays
+                    // up and carries nothing - traffic isn't let out around
+                    // the VPN the user asked for - and the service stays in
+                    // the foreground, which is what lets the guard start the
+                    // next connect while the app is in the background.
+                    Mobile.setPingProtector(object : Protector {
+                        override fun protect(fd: Long): Boolean = this@PhantomVpnService.protect(fd.toInt())
+                    })
+                    VpnStateHolder.update(ConnectionStatus.CONNECTING, "Reconnecting...", configId)
+                    showPersistentNotification(ConnectionStatus.CONNECTING)
+                    KeepAliveController.onConnectFailed(configId)
+                } else {
+                    VpnStateHolder.update(ConnectionStatus.ERROR, e.message ?: "connection failed", configId)
+                    disconnect()
+                }
             }
         }
     }
@@ -515,6 +533,7 @@ class PhantomVpnService : VpnService() {
             // Whatever the selector last measured was measured from the old
             // network - re-probe rather than wait out a full tick.
             RoutingController.probeNow()
+            KeepAliveController.kick()
         }
     }
 
@@ -659,6 +678,9 @@ class PhantomVpnService : VpnService() {
     }
 
     override fun onRevoke() {
+        // Another VPN took over, or the user revoked it in system settings:
+        // nothing to bring back.
+        KeepAliveController.onUserDisconnect()
         disconnect()
         super.onRevoke()
     }

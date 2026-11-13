@@ -108,6 +108,8 @@ type candidateState struct {
 	latencyMs int64
 	fails     int
 	probed    bool
+	// Not chosen before this time, whatever its probes say - see Avoid.
+	avoidUntil time.Time
 }
 
 // Selector keeps the tunnel pointed at whichever of the user's chosen configs
@@ -198,6 +200,34 @@ func (s *Selector) SetCandidates(candidates []Candidate) {
 		case s.kick <- struct{}{}:
 		default: // a round is already pending; it will pick these up
 		}
+	}
+}
+
+// Adopt records that the tunnel was moved to id by something other than the
+// selector - "keep the connection up" (internal/linkguard) switching away
+// from a config that stopped carrying traffic. Without it the selector would
+// go on believing the old config is current and judge every switch against it.
+// Counts as a switch for the dwell time.
+func (s *Selector) Adopt(id string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.findLocked(id) == nil {
+		return
+	}
+	s.currentID = id
+	s.lastSwitch = s.now()
+	s.leaderID, s.leaderRounds = "", 0
+}
+
+// Avoid keeps id from being chosen for d. Its handshake probe can keep
+// succeeding while no traffic gets through it - which is how linkguard found
+// it broken - so without this the selector could switch straight back to it
+// the moment it looked "much faster".
+func (s *Selector) Avoid(id string, d time.Duration) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if st := s.findLocked(id); st != nil {
+		st.avoidUntil = s.now().Add(d)
 	}
 }
 
@@ -348,7 +378,7 @@ func switchTarget(changed bool, c Candidate) string {
 
 // evaluateLocked applies the switching policy. Caller holds s.mu.
 func (s *Selector) evaluateLocked() (Candidate, bool) {
-	best := bestLocked(s.states)
+	best := bestLocked(s.states, s.now())
 	if best == nil {
 		return Candidate{}, false // nothing reachable; keep whatever we had
 	}
@@ -410,10 +440,10 @@ func (s *Selector) findLocked(id string) *candidateState {
 // bestLocked returns the lowest-latency reachable candidate, or nil. Ties
 // break on id so the choice is stable rather than depending on map/probe
 // ordering - an unstable "best" would make the dwell logic fight itself.
-func bestLocked(states []*candidateState) *candidateState {
+func bestLocked(states []*candidateState, now time.Time) *candidateState {
 	alive := make([]*candidateState, 0, len(states))
 	for _, st := range states {
-		if st.alive {
+		if st.alive && !now.Before(st.avoidUntil) {
 			alive = append(alive, st)
 		}
 	}

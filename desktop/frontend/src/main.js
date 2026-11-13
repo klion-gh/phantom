@@ -8,7 +8,7 @@ import './style.css';
 // install ever shows, so the app's own footprint grows by the whole set
 // (~2.4MB) once, not per flag shown.
 import 'flag-icons/css/flag-icons.min.css';
-import { Connect, Disconnect, Status, ReadLog, ListConfigs, AddConfig, UpdateConfig, DeleteConfig, SetConfigGeo, SetConfigPlace, ClearConfigCountry, Ping, ListResources, AddResource, DeleteResource, ApplyUpdate, GetLanguage, SetLanguage, Version, LookupCountry, GetAppearance, SetAppearance, GetBetaUpdates, SetBetaUpdates, ReadFullLog, GetRoutingState, SetSmartEnabled, SetSmartSites, SetSmartConfigs, SetAutoEnabled, SetAutoConfigs, GetRelays, SetRelayEnabled, SelectRelay, AddRelay, UpdateRelay, DeleteRelay, SetRelayGeo, PingRelay, ReconnectActive, RoutingHealth, PopularResources, GetBrowserBridge, SetBrowserBridgeEnabled, RevokeBrowserClients, AnswerBrowserPairing, ProvisionServer, CancelProvision, ForgetServerKey } from '../wailsjs/go/main/App';
+import { Connect, Disconnect, Status, ReadLog, ListConfigs, AddConfig, UpdateConfig, DeleteConfig, SetConfigGeo, SetConfigPlace, ClearConfigCountry, Ping, ListResources, AddResource, DeleteResource, ApplyUpdate, GetLanguage, SetLanguage, Version, LookupCountry, GetAppearance, SetAppearance, GetBetaUpdates, SetBetaUpdates, ReadFullLog, GetRoutingState, SetSmartEnabled, SetSmartSites, SetSmartConfigs, SetAutoEnabled, SetAutoConfigs, GetRelays, SetRelayEnabled, SelectRelay, AddRelay, UpdateRelay, DeleteRelay, SetRelayGeo, PingRelay, GetKeepAlive, SetKeepAlive, ReconnectActive, RoutingHealth, PopularResources, GetBrowserBridge, SetBrowserBridgeEnabled, RevokeBrowserClients, AnswerBrowserPairing, ProvisionServer, CancelProvision, ForgetServerKey } from '../wailsjs/go/main/App';
 import { t, getLang, setLang, applyStaticTranslations } from './i18n.js';
 import { BACKGROUNDS, initBackground, initMiniBackground } from './background.js';
 import { PALETTES } from './palettes.js';
@@ -562,6 +562,7 @@ async function refreshStatus() {
   refreshTileStatuses();
   renderSitesApplyRow();
   refreshModeAvailability();
+  renderKeepAlive();
 }
 
 async function reloadConfigs() {
@@ -1192,6 +1193,11 @@ setInterval(refreshStatus, 4000);
   } catch (e) {
     // off stays if the Go call fails
   }
+  try {
+    keepAliveEnabled = await GetKeepAlive();
+  } catch (e) {
+    // off stays if the Go call fails
+  }
   applyAppearance();
   applyStaticTranslations();
   document.getElementById('btn-lang-ru').classList.toggle('active', getLang() === 'ru');
@@ -1527,6 +1533,62 @@ document.getElementById('auto-toggle').addEventListener('click', async () => {
     currentStatus = { connected: false, alive: false, stats: '{}', activeConfigId: '' };
   }
   renderRouting();
+});
+
+// --- "Поддерживать соединение" -------------------------------------------
+// desktop/keepalive.go: checks that internet gets through the connected
+// config and, when it stops, reconnects it or moves to one that works. Its
+// state rides on Status()'s 4s poll (currentStatus.keepAlive).
+
+let keepAliveEnabled = false;
+
+function configDisplayName(id) {
+  const config = configs.find((c) => c.id === id);
+  if (!config) return '—';
+  return parseYamlField(config.yaml, 'domain') || parseYamlField(config.yaml, 'server') || '—';
+}
+
+// How long "switched to X" stays under the switch after it happened.
+const KEEPALIVE_SWITCH_SHOWN_MS = 10 * 60 * 1000;
+
+function keepAliveText(ka) {
+  if (!keepAliveEnabled || ka.state === 'off') return [t('keepalive_off'), false];
+  switch (ka.state) {
+    case 'idle': return [t('keepalive_idle'), false];
+    case 'checking': return [t('keepalive_checking'), false];
+    case 'no_network': return [t('keepalive_no_network'), true];
+    case 'reconnecting': return [t('keepalive_reconnecting'), true];
+    case 'searching': return [t('keepalive_searching'), true];
+    case 'switching': return [t('keepalive_switching', { name: configDisplayName(ka.configId) }), false];
+    case 'all_down': return [t('keepalive_all_down'), true];
+    default: break;
+  }
+  if (ka.switchedAt && Date.now() - ka.switchedAt * 1000 < KEEPALIVE_SWITCH_SHOWN_MS) {
+    const time = new Date(ka.switchedAt * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    return [t('keepalive_switched', { name: configDisplayName(ka.switchedTo), time }), false];
+  }
+  return [t('keepalive_ok'), false];
+}
+
+function renderKeepAlive() {
+  document.getElementById('keepalive-toggle').classList.toggle('active', keepAliveEnabled);
+  const ka = currentStatus.keepAlive || { state: 'off' };
+  const [text, bad] = keepAliveText(ka);
+  const line = document.getElementById('keepalive-status');
+  line.textContent = text;
+  line.classList.toggle('tone-bad', bad);
+  diagOnChange('keepalive', Cat.VPN, 'keepAlive', { enabled: keepAliveEnabled, state: ka.state || 'off' });
+}
+
+document.getElementById('keepalive-toggle').addEventListener('click', async () => {
+  keepAliveEnabled = !keepAliveEnabled;
+  renderKeepAlive();
+  try {
+    await SetKeepAlive(keepAliveEnabled);
+  } catch (e) {
+    console.error(e);
+  }
+  await refreshStatus();
 });
 
 // --- "Использовать ретранслятор" -----------------------------------------

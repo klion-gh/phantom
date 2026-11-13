@@ -1021,6 +1021,7 @@ private fun RelaysSection() {
             }
         },
     )
+    KeepAliveTile()
 
     run {
         Spacer(modifier = Modifier.height(12.dp))
@@ -1102,6 +1103,72 @@ private fun RelaySwitchTile(enabled: Boolean, onToggle: (Boolean) -> Unit) {
             modifier = Modifier.weight(1f),
         )
         GradientSwitch(checked = enabled, onCheckedChange = onToggle)
+    }
+}
+
+// "Поддерживать соединение" - see KeepAliveController. The relay switch's
+// bare-row look, with a line under the title saying what the guard currently
+// makes of the connection.
+@Composable
+private fun KeepAliveTile() {
+    val context = LocalContext.current
+    var status by remember { mutableStateOf(KeepAliveController.status()) }
+    LaunchedEffect(KeepAliveController.enabled) {
+        while (isActive) {
+            status = KeepAliveController.status()
+            delay(2000)
+        }
+    }
+    val (text, bad) = keepAliveLine(context, status)
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier.fillMaxWidth().padding(start = 18.dp, end = 8.dp, top = 6.dp),
+    ) {
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                I18n.t("keepalive"),
+                color = TextPrimary,
+                fontSize = 15.sp,
+                fontWeight = FontWeight.SemiBold,
+            )
+            Text(
+                text,
+                color = if (bad) Color(0xFFFF5C7A) else TextSecondary,
+                fontSize = 12.5.sp,
+                lineHeight = 16.sp,
+            )
+        }
+        GradientSwitch(
+            checked = KeepAliveController.enabled,
+            onCheckedChange = { KeepAliveController.setEnabled(context, it) },
+        )
+    }
+}
+
+private fun keepAliveLine(context: android.content.Context, s: KeepAliveStatus): Pair<String, Boolean> {
+    fun name(id: String?): String {
+        val cfg = id?.let { i -> ConfigStore.loadAll(context).find { it.id == i } } ?: return "—"
+        return parseYamlField(cfg.yaml, "domain") ?: parseYamlField(cfg.yaml, "server") ?: "—"
+    }
+    if (!KeepAliveController.enabled || s.state == "off") return I18n.t("keepalive_off") to false
+    return when (s.state) {
+        "idle" -> I18n.t("keepalive_idle") to false
+        "checking" -> I18n.t("keepalive_checking") to false
+        "no_network" -> I18n.t("keepalive_no_network") to true
+        "reconnecting" -> I18n.t("keepalive_reconnecting") to true
+        "searching" -> I18n.t("keepalive_searching") to true
+        "switching" -> I18n.t("keepalive_switching").replace("{name}", name(s.configId)) to false
+        "all_down" -> I18n.t("keepalive_all_down") to true
+        else -> {
+            val recent = s.switchedAt > 0 && System.currentTimeMillis() - s.switchedAt * 1000 < 10 * 60 * 1000
+            if (recent) {
+                val time = java.text.SimpleDateFormat("HH:mm", java.util.Locale.getDefault())
+                    .format(java.util.Date(s.switchedAt * 1000))
+                I18n.t("keepalive_switched").replace("{name}", name(s.switchedTo)).replace("{time}", time) to false
+            } else {
+                I18n.t("keepalive_ok") to false
+            }
+        }
     }
 }
 

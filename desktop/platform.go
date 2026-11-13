@@ -1,5 +1,7 @@
 package main
 
+import "context"
+
 // The seam between the shared desktop client and each OS.
 //
 // Everything above it - saved configs, the smart selector, settings, the
@@ -16,6 +18,7 @@ package main
 //	adoptRunningTunnel() (activeTunnel, configID string)
 //	applyRoutingPlatform(sites, smart) <-chan struct{}
 //	pingConfig(configYAML) (pingcheck.Result, error)
+//	checkDirect() error / checkConfigInternet(configYAML) (latencyMs, error)
 //	provisionProtect() func(fd int) bool
 //	platformCommand(args) bool / platformPreflight() bool / platformOptions(opts, app)
 //	trayIconBytes, logDir()
@@ -29,4 +32,7 @@ type activeTunnel interface {
 	// ResetMisroutedFlows closes direct connections the current smart-VPN
 	// list would now tunnel - see applySiteList.
 	ResetMisroutedFlows()
+	// CheckInternet fetches a page through the tunnel - see
+	// netstack.Tunnel.CheckInternet. Used by "Поддерживать соединение".
+	CheckInternet(ctx context.Context) error
 }

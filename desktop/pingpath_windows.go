@@ -57,6 +57,16 @@ func pingConfig(configYAML string) (pingcheck.Result, error) {
 	return pingcheck.PingWith(withRelaySetting(configYAML), pingOptions())
 }
 
+// checkDirect: is there internet around the tunnel - see pingcheck.Direct.
+func checkDirect() error { return pingcheck.Direct(pingOptions()) }
+
+// checkConfigInternet: does a config's server, dialed on its own around the
+// tunnel and through the relay when one is in use, carry internet.
+func checkConfigInternet(configYAML string) (int64, error) {
+	r, err := pingcheck.Internet(withRelaySetting(configYAML), pingOptions())
+	return r.LatencyMs, err
+}
+
 // pingRelay times a relay's TCP port around the tunnel - see pingOptions.
 func pingRelay(address string) (pingcheck.Result, error) {
 	return pingcheck.PingRelay(address, pingOptions())

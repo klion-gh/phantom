@@ -4,11 +4,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"strings"
 	"time"
 
 	"golang.org/x/net/dns/dnsmessage"
+
+	"phantom/internal/netcheck"
 )
 
 // tunnelResolver is who LookupIP asks: a public resolver, reached from the
@@ -140,4 +143,20 @@ func exchange(ctx context.Context, rw interface {
 		}
 	}
 	return ips, nil
+}
+
+// CheckInternet fetches a connectivity-check page through the live tunnel
+// (see internal/netcheck) and reports how long the answer took. It goes
+// through the same session every flow uses - refreshed first if it died - so
+// a nil error means traffic really gets through the server right now, which
+// a handshake-level "alive" can't promise: after a network blip a session can
+// stay open while nothing comes back on it.
+func (t *Tunnel) CheckInternet(ctx context.Context) (time.Duration, error) {
+	session := t.currentSession()
+	if session == nil {
+		return 0, errNoSession
+	}
+	return netcheck.Through(ctx, func(addr string) (io.ReadWriteCloser, error) {
+		return session.Open(addr)
+	})
 }

@@ -33,6 +33,8 @@ class PhantomApplication : Application() {
         // through the relay when it's on.
         RelayStore.load(this)
         RoutingController.sync(this)
+        // After the relay: the guard's checks go through it.
+        KeepAliveController.load(this)
         Diag.log(
             Diag.Cat.ROUTE, "startupState",
             "smartEnabled" to RoutingStore.smartEnabled,

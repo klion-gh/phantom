@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -191,6 +192,11 @@ func (t daemonTunnel) Stats() string {
 		return st.Stats
 	}
 	return "{}"
+}
+
+func (daemonTunnel) CheckInternet(context.Context) error {
+	_, err := daemonCheck(daemonapi.CheckArgs{Kind: daemonapi.CheckTunnel})
+	return err
 }
 
 func (daemonTunnel) ResetMisroutedFlows() {

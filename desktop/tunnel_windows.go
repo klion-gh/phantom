@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"net"
@@ -395,6 +396,14 @@ func (w *WinTunnel) Stats() string {
 		return "{}"
 	}
 	return w.inner.Stats()
+}
+
+func (w *WinTunnel) CheckInternet(ctx context.Context) error {
+	if w.inner == nil {
+		return errors.New("no tunnel")
+	}
+	_, err := w.inner.CheckInternet(ctx)
+	return err
 }
 
 func (w *WinTunnel) IsAlive() bool {

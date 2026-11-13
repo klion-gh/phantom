@@ -130,3 +130,35 @@ func (s *service) shutdown() {
 	s.Disconnect(daemonapi.Empty{}, nil)
 	cleanupNetworking()
 }
+
+// Check runs one of "keep the connection up"'s checks - see
+// daemonapi.CheckArgs. The direct and per-config ones go around the tunnel,
+// like Ping.
+func (s *service) Check(args daemonapi.CheckArgs, reply *daemonapi.CheckReply) error {
+	opts := pingcheck.Options{ProtectFD: markSocket}
+	switch args.Kind {
+	case daemonapi.CheckTunnel:
+		s.mu.Lock()
+		t := s.tun
+		s.mu.Unlock()
+		if t == nil {
+			return errors.New("no tunnel")
+		}
+		start := time.Now()
+		if err := t.t.CheckInternet(8000); err != nil {
+			return err
+		}
+		reply.LatencyMs = time.Since(start).Milliseconds()
+		return nil
+	case daemonapi.CheckDirect:
+		return pingcheck.Direct(opts)
+	case daemonapi.CheckConfig:
+		result, err := pingcheck.Internet(args.YAML, opts)
+		if err != nil {
+			return err
+		}
+		reply.LatencyMs = result.LatencyMs
+		return nil
+	}
+	return errors.New("unknown check: " + args.Kind)
+}
