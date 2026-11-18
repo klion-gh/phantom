@@ -1,6 +1,12 @@
 package com.phantom.vpn
 
 import androidx.compose.animation.AnimatedContent
+import androidx.compose.ui.unit.Dp
+import dev.chrisbanes.haze.HazeState
+import dev.chrisbanes.haze.HazeStyle
+import dev.chrisbanes.haze.haze
+import dev.chrisbanes.haze.hazeChild
+import androidx.compose.ui.draw.shadow
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
@@ -93,6 +99,27 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.Dispatchers
 
+/**
+ * No hard edge where a scrolling list starts: its first [fade] dissolve
+ * instead of being cut off by a line as items scroll up past it.
+ */
+fun Modifier.fadeTopEdge(fade: Dp = 22.dp): Modifier = this
+    .graphicsLayer(compositingStrategy = CompositingStrategy.Offscreen)
+    .drawWithContent {
+        drawContent()
+        drawRect(
+            brush = Brush.verticalGradient(
+                0f to Color.Transparent,
+                (fade.toPx() / size.height).coerceIn(0f, 1f) to Color.Black,
+            ),
+            blendMode = BlendMode.DstIn,
+        )
+    }
+
+/** Room a page's list leaves at its end so the last item can scroll clear of
+ *  the floating nav island (and the system nav bar under it). */
+val IslandClearance = 120.dp
+
 private enum class Screen { MAIN, SETTINGS, LOG, POPULAR_RESOURCES, APPS }
 
 class MainActivity : ComponentActivity() {
@@ -177,7 +204,16 @@ class MainActivity : ComponentActivity() {
 
         setContent {
             PhantomTheme {
+                // Everything on screen is the source the nav island blurs -
+                // the animated backdrop as much as the pages - so the island
+                // is drawn outside it, on top (NavIslandHost).
+                val hazeState = remember { HazeState() }
                 Box(modifier = Modifier.fillMaxSize()) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .haze(state = hazeState, style = HazeStyle(tint = Surface.copy(alpha = 0.5f), blurRadius = 24.dp)),
+                ) {
                     // Deliberately outside the systemBars padding below - the
                     // backdrop is meant to run edge-to-edge, under the status/nav
                     // bars, not stop short of them.
@@ -186,8 +222,16 @@ class MainActivity : ComponentActivity() {
                         onConnect = { config -> requestConnect(config) },
                         onDisconnect = { stopVpn() },
                         onEnsureVpnPermission = { onResult -> ensureVpnPermission(onResult) },
-                        modifier = Modifier.windowInsetsPadding(WindowInsets.systemBars),
+                        // Top and sides only: the main screen's lists run on
+                        // under the system nav bar, with the floating nav
+                        // island keeping itself clear of it; the other
+                        // screens pad the bottom themselves (PhantomApp).
+                        modifier = Modifier.windowInsetsPadding(
+                            WindowInsets.systemBars.only(WindowInsetsSides.Top + WindowInsetsSides.Horizontal),
+                        ),
                     )
+                }
+                NavIslandHost(hazeState)
                 }
             }
         }
@@ -432,27 +476,29 @@ private fun PhantomApp(
 
     Box(modifier = modifier.fillMaxSize()) {
         when (screen) {
-            Screen.LOG -> LogScreen(onClose = { screen = Screen.SETTINGS })
-            Screen.POPULAR_RESOURCES -> PopularResourcesScreen(
+            Screen.LOG -> Box(Modifier.navigationBarsPadding()) { LogScreen(onClose = { screen = Screen.SETTINGS }) }
+            Screen.POPULAR_RESOURCES -> Box(Modifier.navigationBarsPadding()) { PopularResourcesScreen(
                 onBack = { screen = Screen.MAIN },
                 onToggle = { resource ->
                     RoutingStore.togglePopular(context, resource.domains)
                     PhantomVpnService.applyRoutingToActiveTunnel()
                     RoutingStore.markSitesDirty()
                 },
-            )
-            Screen.APPS -> AppPickerScreen(
+            ) }
+            Screen.APPS -> Box(Modifier.navigationBarsPadding()) { AppPickerScreen(
                 onBack = { screen = Screen.MAIN },
                 onToggle = { pkg ->
                     RoutingStore.toggleApp(context, pkg)
                     PhantomVpnService.applyRoutingToActiveTunnel()
                     PhantomVpnService.resetMisroutedFlows()
                 },
-            )
-            Screen.SETTINGS -> SettingsScreen(
-                onBack = { screen = Screen.MAIN },
-                onViewLog = { screen = Screen.LOG },
-            )
+            ) }
+            Screen.SETTINGS -> Box(Modifier.navigationBarsPadding()) {
+                SettingsScreen(
+                    onBack = { screen = Screen.MAIN },
+                    onViewLog = { screen = Screen.LOG },
+                )
+            }
             Screen.MAIN -> MainScreen(
                 // ConfigDialog is a popup over this screen now (see below),
                 // not a screen of its own - blurred out from behind it while
@@ -730,7 +776,9 @@ private fun MainScreen(
     // in them, and so was the neighbouring page mid-swipe. The 16dp is now
     // applied by each part instead: the header and nav bar pad themselves, and
     // the pager insets its pages (contentPadding) while drawing edge to edge.
-    Column(modifier = modifier.blur(addResourceBlur).fillMaxSize().padding(vertical = 24.dp)) {
+    // Top only: the pages run on to the screen's bottom edge, under the
+    // floating nav island.
+    Column(modifier = modifier.blur(addResourceBlur).fillMaxSize().padding(top = 24.dp)) {
         Row(
             verticalAlignment = Alignment.CenterVertically,
             modifier = Modifier.fillMaxWidth().padding(horizontal = screenGutter),
@@ -817,9 +865,11 @@ private fun MainScreen(
 
         Spacer(modifier = Modifier.height(20.dp))
 
+        Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
         HorizontalPager(
             state = pagerState,
-            modifier = Modifier.weight(1f).fillMaxWidth(),
+            modifier = Modifier
+                .fillMaxSize(),
             // Pages sit inset by the gutter but the pager spans the screen, so
             // nothing on a page is clipped short of the screen edge.
             contentPadding = PaddingValues(horizontal = screenGutter),
@@ -867,11 +917,13 @@ private fun MainScreen(
             }
         }
 
-        BottomNavBar(
-            currentPage = pagerState.currentPage,
-            onSelect = { page -> coroutineScope.launch { pagerState.animateScrollToPage(page) } },
-            modifier = Modifier.padding(horizontal = screenGutter),
-        )
+        }
+        // The island itself is drawn at the root, over the blur source (see
+        // NavIslandHost); this screen only says what it holds.
+        val currentPage = pagerState.currentPage
+        val onSelect: (Int) -> Unit = { page -> coroutineScope.launch { pagerState.animateScrollToPage(page) } }
+        SideEffect { NavIsland.content = { NavIcons(currentPage, onSelect) } }
+        DisposableEffect(Unit) { onDispose { NavIsland.content = null } }
     }
 
     if (showAddResourceDialog) {
@@ -895,23 +947,49 @@ private fun MainScreen(
 // SurfaceOutline border) instead of floating bare over the background - reads
 // as one more piece of the app's tile-based design system rather than a
 // leftover plain icon row.
+// Now a floating island rather than a framed bar: no border, the pages
+// scrolling on underneath it, blurred through a translucent material (Haze -
+// a real backdrop blur on Android 12+, the tint alone below that).
+/** What the nav island shows - set by the main screen while it's up. */
+private object NavIsland {
+    var content by mutableStateOf<(@Composable () -> Unit)?>(null)
+}
+
 @Composable
-private fun BottomNavBar(
-    currentPage: Int,
-    onSelect: (Int) -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    Tile(
-        modifier = modifier.fillMaxWidth().padding(top = 8.dp),
-        color = Surface,
-        shape = RoundedCornerShape(18.dp),
-        borderColor = SurfaceOutline,
+private fun NavIslandHost(hazeState: HazeState) {
+    val content = NavIsland.content ?: return
+    val shape = RoundedCornerShape(24.dp)
+    Box(
+        contentAlignment = Alignment.BottomCenter,
+        modifier = Modifier
+            .fillMaxSize()
+            .navigationBarsPadding()
+            .padding(bottom = 14.dp),
     ) {
-        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
-            NavBarItem(iconRes = R.drawable.ic_nav_lock, selected = currentPage == 0, onClick = { onSelect(0) })
-            NavBarItem(iconRes = R.drawable.ic_nav_routing, selected = currentPage == 1, onClick = { onSelect(1) })
-            NavBarItem(iconRes = R.drawable.ic_nav_globe, selected = currentPage == 2, onClick = { onSelect(2) })
+        Box(
+            modifier = Modifier
+                .shadow(18.dp, shape, ambientColor = Color.Black.copy(alpha = 0.35f), spotColor = Color.Black.copy(alpha = 0.35f))
+                .clip(shape)
+                .hazeChild(state = hazeState, shape = shape)
+                // Below Android 12 there is no blur to show through - the
+                // tint carries the material on its own there.
+                .then(
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) Modifier
+                    else Modifier.background(Surface.copy(alpha = 0.85f)),
+                )
+                .padding(horizontal = 6.dp, vertical = 4.dp),
+        ) {
+            content()
         }
+    }
+}
+
+@Composable
+private fun NavIcons(currentPage: Int, onSelect: (Int) -> Unit) {
+    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        NavBarItem(iconRes = R.drawable.ic_nav_lock, selected = currentPage == 0, onClick = { onSelect(0) })
+        NavBarItem(iconRes = R.drawable.ic_nav_routing, selected = currentPage == 1, onClick = { onSelect(1) })
+        NavBarItem(iconRes = R.drawable.ic_nav_globe, selected = currentPage == 2, onClick = { onSelect(2) })
     }
 }
 
@@ -1553,7 +1631,8 @@ private fun ConfigsPage(
             // currentHeaderItems).
             LazyColumn(
                 state = listState,
-                modifier = Modifier.weight(1f).fillMaxWidth(),
+                modifier = Modifier.weight(1f).fillMaxWidth().fadeTopEdge(),
+                contentPadding = PaddingValues(top = 10.dp, bottom = IslandClearance),
             ) {
                 // Explained before the tile it's about, not after - the user
                 // should know why "Выбирать лучшую" is dimmed before they
@@ -1765,8 +1844,9 @@ private fun ResourcesPage(
 
         if (resources.isNotEmpty()) {
             LazyColumn(
-                modifier = Modifier.weight(1f),
+                modifier = Modifier.weight(1f).fadeTopEdge(),
                 verticalArrangement = Arrangement.spacedBy(14.dp),
+                contentPadding = PaddingValues(top = 10.dp, bottom = IslandClearance),
             ) {
                 items(resources, key = { it.id }) { resource ->
                     ResourceCard(

@@ -1238,23 +1238,39 @@ textarea::placeholder { color: var(--text-muted); }
     gap: 12px;
 }
 
+/* The nav is a floating island, not a bar: no frame, a translucent
+   material with the content blurred behind it, centred at a fixed ~5 cm
+   (189px at 96 dpi) whatever the window's width. The lists scroll on
+   underneath it all the way to the window's edge. */
 .bottom-nav {
+    position: absolute;
+    left: 50%;
+    bottom: 18px;
+    transform: translateX(-50%);
+    width: 189px;
+    box-sizing: border-box;
     display: flex;
-    justify-content: space-evenly;
-    margin: 8px 20px 16px;
-    padding: 6px 0;
-    border-radius: 18px;
-    background: var(--surface);
-    border: 1px solid var(--surface-outline);
-    flex-shrink: 0;
+    justify-content: space-between;
+    padding: 5px;
+    border-radius: 22px;
+    background: color-mix(in srgb, var(--surface) 46%, transparent);
+    backdrop-filter: blur(22px) saturate(170%);
+    -webkit-backdrop-filter: blur(22px) saturate(170%);
+    box-shadow:
+        0 10px 30px rgba(0, 0, 0, 0.28),
+        inset 0 1px 0 color-mix(in srgb, #fff 9%, transparent);
+    z-index: 5;
 }
 .nav-item {
     background: transparent;
     border: none;
     cursor: pointer;
-    padding: 10px 22px;
-    border-radius: 14px;
+    padding: 10px 16px;
+    border-radius: 17px;
+    transition: background 200ms ease;
 }
+.nav-item:hover { background: color-mix(in srgb, var(--text-primary) 6%, transparent); }
+.nav-item.active { background: color-mix(in srgb, var(--primary) 14%, transparent); }
 /* The icons are solid-black masks, so they can be tinted to the palette -
    muted when idle, filled with the brand gradient when their section is the
    one showing (the same "this is on" language as the config tiles). */
@@ -1924,3 +1940,20 @@ textarea::placeholder { color: var(--text-muted); }
     color: var(--text-secondary);
 }
 .popular-section-title:first-child { margin-top: 0; }
+
+/* --- No hard edges -------------------------------------------------------
+   The main screen's lists used to stop at a ruled line under the header and
+   another above the nav bar. Now they run to the window's bottom edge (under
+   the floating nav) and dissolve into the header over their first pixels. */
+#screen-main { position: relative; }
+#screen-main .main-body { padding-bottom: 0; }
+.config-list,
+.routing-scroll,
+.resource-list,
+.content {
+    -webkit-mask-image: linear-gradient(to bottom, transparent 0, #000 22px, #000 100%);
+    mask-image: linear-gradient(to bottom, transparent 0, #000 22px, #000 100%);
+}
+.config-list,
+.routing-scroll,
+.resource-list { padding-top: 10px; padding-bottom: 96px; }

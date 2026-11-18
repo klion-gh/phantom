@@ -92,7 +92,11 @@ fun RoutingPage(
         // only be this manual one.
         val blockedByManualConfig = connected && !autoEnabled && !RoutingStore.smartEnabled
 
-        LazyColumn(verticalArrangement = Arrangement.spacedBy(14.dp)) {
+        LazyColumn(
+            modifier = Modifier.fadeTopEdge(),
+            verticalArrangement = Arrangement.spacedBy(14.dp),
+            contentPadding = PaddingValues(top = 10.dp, bottom = IslandClearance),
+        ) {
             item {
                 SmartVpnHeaderTile(
                     enabled = RoutingStore.smartEnabled,

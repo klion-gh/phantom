@@ -24,8 +24,8 @@ android {
         applicationId = "com.phantom.vpn"
         minSdk = 24
         targetSdk = 34
-        versionCode = 49
-        versionName = "2.8.1"
+        versionCode = 50
+        versionName = "2.8.2"
     }
 
     signingConfigs {
@@ -90,4 +90,7 @@ dependencies {
     // everything else in this app uses plain Unicode glyphs instead of an icon
     // library, but there's no good glyph equivalent for either of these two.
     implementation("androidx.compose.material:material-icons-extended")
+    // Backdrop blur for the floating nav island (Android 12+; a translucent
+    // tint below that).
+    implementation("dev.chrisbanes.haze:haze:0.7.3")
 }
