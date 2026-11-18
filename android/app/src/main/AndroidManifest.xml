@@ -12,6 +12,17 @@
          the file (see UpdateChecker.kt). -->
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
 
+    <!-- Android 11+ only shows an app the packages it declares an interest in:
+         without this the "Приложения под обход" picker saw a couple dozen
+         system apps and nothing the user installed. Launcher apps are exactly
+         what the picker lists (AppRouting.installedApps). -->
+    <queries>
+        <intent>
+            <action android:name="android.intent.action.MAIN" />
+            <category android:name="android.intent.category.LAUNCHER" />
+        </intent>
+    </queries>
+
     <application
         android:name=".PhantomApplication"
         android:allowBackup="false"

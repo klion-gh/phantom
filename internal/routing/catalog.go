@@ -22,7 +22,22 @@ type PopularResource struct {
 	// agree on that convention separately.
 	Icon    string   `json:"icon"`
 	Domains []string `json:"domains"`
+	// Category groups the picker into sections, in the order of
+	// Categories - the clients translate the key for the header.
+	Category string `json:"category"`
 }
+
+// The picker's sections, in display order.
+const (
+	CategorySocial = "social"
+	CategoryMusic  = "music"
+	CategoryAI     = "ai"
+	CategoryVideo  = "video"
+	CategoryOther  = "other"
+)
+
+// Categories is the section order both clients follow.
+var Categories = []string{CategorySocial, CategoryMusic, CategoryAI, CategoryVideo, CategoryOther}
 
 // PopularResources is the catalogue both clients render. Kept here rather than
 // duplicated in Kotlin and JavaScript so the two can't drift apart on what
@@ -36,15 +51,14 @@ func PopularResources() []PopularResource {
 		// so there's no DNS answer for the sniffer to learn from and the
 		// domains alone only ever covered the website and t.me links. These
 		// are Telegram's published ranges (core.telegram.org/resources/cidr.txt).
-		res("Telegram", "telegram.org", "t.me", "telegram.me",
+		resIn(CategorySocial, "Telegram", "telegram.org", "t.me", "telegram.me",
 			"91.108.56.0/22", "91.108.4.0/22", "91.108.8.0/22", "91.108.16.0/22",
 			"91.108.12.0/22", "149.154.160.0/20", "91.105.192.0/23", "91.108.20.0/22",
 			"185.76.151.0/24", "2001:b28:f23d::/48", "2001:b28:f23f::/48",
 			"2001:67c:4e8::/48", "2001:b28:f23c::/48", "2a0a:f280::/32"),
-		res("RuTracker", "rutracker.org", "rutracker.net"),
-		res("Instagram", "instagram.com", "cdninstagram.com"),
-		res("Facebook", "facebook.com", "fbcdn.net"),
-		res("X", "x.com", "twitter.com", "twimg.com"),
+		resIn(CategorySocial, "Instagram", "instagram.com", "cdninstagram.com"),
+		resIn(CategorySocial, "Facebook", "facebook.com", "fbcdn.net"),
+		resIn(CategorySocial, "X", "x.com", "twitter.com", "twimg.com"),
 		// Discord spreads over more than its main domains: voice servers live
 		// under discord.media, attachments and avatars on discordapp.net and
 		// discordcdn.com, invites and gifts on their own short domains. Voice
@@ -52,55 +66,61 @@ func PopularResources() []PopularResource {
 		// the API and gateway sit on Cloudflare addresses reserved for Discord
 		// (162.159.128.0/20) - listed as ranges so an app that already holds
 		// its addresses, and asks no DNS, still goes through the tunnel.
-		res("Discord", "discord.com", "discordapp.com", "discord.gg", "discordapp.net",
+		resIn(CategorySocial, "Discord", "discord.com", "discordapp.com", "discord.gg", "discordapp.net",
 			"discord.media", "discordcdn.com", "discord.co", "discord.gift", "discord.new",
 			"discord.dev", "discordstatus.com", "dis.gd",
 			"66.22.192.0/18", "162.159.128.0/20"),
-		res("Signal", "signal.org", "whispersystems.org"),
-		res("Snapchat", "snapchat.com", "sc-cdn.net"),
-		res("LinkedIn", "linkedin.com", "licdn.com"),
-		res("Threads", "threads.net", "threads.com"),
+		resIn(CategorySocial, "Signal", "signal.org", "whispersystems.org"),
+		resIn(CategorySocial, "Snapchat", "snapchat.com", "sc-cdn.net"),
+		resIn(CategorySocial, "LinkedIn", "linkedin.com", "licdn.com"),
+		resIn(CategorySocial, "Threads", "threads.net", "threads.com"),
+		resIn(CategorySocial, "TikTok", "tiktok.com", "tiktokcdn.com", "tiktokv.com"),
+		resIn(CategoryMusic, "Spotify", "spotify.com", "scdn.co", "spotifycdn.com"),
+		resIn(CategoryMusic, "Deezer", "deezer.com", "dzcdn.net"),
 		// OpenAI and Google both refuse these to Russian IPs themselves, so
 		// every host the app talks to has to come from the tunnel: the page,
 		// its static assets (oaistatic) and uploaded/generated files
 		// (oaiusercontent) for ChatGPT; the web app, AI Studio and the API
 		// behind them for Gemini. Only Gemini's own hosts - not google.com,
 		// which would drag every Google service through the tunnel.
-		res("ChatGPT", "chatgpt.com", "openai.com", "oaistatic.com", "oaiusercontent.com"),
-		res("Gemini", "gemini.google.com", "bard.google.com", "aistudio.google.com", "generativelanguage.googleapis.com"),
+		resIn(CategoryAI, "ChatGPT", "chatgpt.com", "openai.com", "oaistatic.com", "oaiusercontent.com"),
+		resIn(CategoryAI, "Gemini", "gemini.google.com", "bard.google.com", "aistudio.google.com", "generativelanguage.googleapis.com"),
+		// Anthropic doesn't serve Russia either: the app (claude.ai, and
+		// claude.com it is moving to), the API and account pages under
+		// anthropic.com, uploaded and generated files (claudeusercontent.com),
+		// published artifacts (claude.site) and the clau.de short links.
+		resIn(CategoryAI, "Claude", "claude.ai", "claude.com", "anthropic.com",
+			"claudeusercontent.com", "claude.site", "clau.de"),
 		// The Android app doesn't talk to www.youtube.com like the site does:
 		// its API is youtubei/youtube.googleapis.com and avatars come from
 		// ggpht.com. Missing those, the app's API went out directly while the
 		// video went through the tunnel - and video URLs are bound to the IP
 		// that requested them, so playback was refused. Only YouTube's own
 		// googleapis hosts, not googleapis.com, which is half of Google.
-		res("YouTube", "youtube.com", "googlevideo.com", "ytimg.com", "youtu.be",
+		resIn(CategoryVideo, "YouTube", "youtube.com", "googlevideo.com", "ytimg.com", "youtu.be",
 			"youtubei.googleapis.com", "youtube.googleapis.com", "ggpht.com"),
-		res("Netflix", "netflix.com", "nflxvideo.net", "nflximg.net", "nflxext.com"),
-		res("Spotify", "spotify.com", "scdn.co", "spotifycdn.com"),
-		res("Twitch", "twitch.tv", "ttvnw.net", "jtvnw.net"),
-		res("TikTok", "tiktok.com", "tiktokcdn.com", "tiktokv.com"),
-		res("Deezer", "deezer.com", "dzcdn.net"),
-		res("PlayStation Store", "playstation.com", "sonyentertainmentnetwork.com", "playstation.net"),
-		res("Notion", "notion.so", "notion.com"),
-		res("Figma", "figma.com"),
-		res("Canva", "canva.com"),
-		res("Trello", "trello.com"),
-		res("Slack", "slack.com", "slack-edge.com"),
-		res("Autodesk", "autodesk.com"),
-		res("Adobe", "adobe.com", "adobe.io", "typekit.net"),
-		res("Wix", "wix.com", "wixsite.com"),
-		res("Airtable", "airtable.com"),
-		res("Zoom", "zoom.us", "zoom.com"),
-		res("Microsoft", "microsoft.com", "live.com", "office.com"),
-		res("Cloudflare", "cloudflare.com"),
-		res("Booking.com", "booking.com", "bstatic.com"),
-		res("eBay", "ebay.com", "ebayimg.com"),
+		resIn(CategoryVideo, "Netflix", "netflix.com", "nflxvideo.net", "nflximg.net", "nflxext.com"),
+		resIn(CategoryVideo, "Twitch", "twitch.tv", "ttvnw.net", "jtvnw.net"),
+		resIn(CategoryOther, "RuTracker", "rutracker.org", "rutracker.net"),
+		resIn(CategoryOther, "PlayStation Store", "playstation.com", "sonyentertainmentnetwork.com", "playstation.net"),
+		resIn(CategoryOther, "Notion", "notion.so", "notion.com"),
+		resIn(CategoryOther, "Figma", "figma.com"),
+		resIn(CategoryOther, "Canva", "canva.com"),
+		resIn(CategoryOther, "Trello", "trello.com"),
+		resIn(CategoryOther, "Autodesk", "autodesk.com"),
+		resIn(CategoryOther, "Adobe", "adobe.com", "adobe.io", "typekit.net"),
+		resIn(CategoryOther, "Wix", "wix.com", "wixsite.com"),
+		resIn(CategoryOther, "Airtable", "airtable.com"),
+		resIn(CategoryOther, "Zoom", "zoom.us", "zoom.com"),
+		resIn(CategoryOther, "Microsoft", "microsoft.com", "live.com", "office.com"),
+		resIn(CategoryOther, "Cloudflare", "cloudflare.com"),
+		resIn(CategoryOther, "Booking.com", "booking.com", "bstatic.com"),
+		resIn(CategoryOther, "eBay", "ebay.com", "ebayimg.com"),
 	}
 }
 
-func res(name string, domains ...string) PopularResource {
-	return PopularResource{Name: name, Icon: domains[0], Domains: domains}
+func resIn(category, name string, domains ...string) PopularResource {
+	return PopularResource{Name: name, Category: category, Icon: domains[0], Domains: domains}
 }
 
 // UpgradeSites brings a saved list up to date with the catalogue: for every

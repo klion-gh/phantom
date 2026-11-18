@@ -1,5 +1,6 @@
 package com.phantom.vpn
 
+import androidx.compose.foundation.lazy.grid.GridItemSpan
 import android.graphics.BitmapFactory
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.tween
@@ -36,7 +37,15 @@ import java.net.HttpURLConnection
 import java.net.URL
 
 /** One service from the built-in catalogue (internal/routing's PopularResources). */
-data class PopularResource(val name: String, val icon: String, val domains: List<String>)
+data class PopularResource(
+    val name: String,
+    val icon: String,
+    val domains: List<String>,
+    val category: String = "other",
+)
+
+/** The picker's sections, in display order - internal/routing.Categories. */
+val PopularCategories = listOf("social", "music", "ai", "video", "other")
 
 /**
  * The catalogue, read once per process. It lives on the Go side so the Windows
@@ -57,6 +66,7 @@ private fun loadCatalogue(): List<PopularResource> = runCatching {
             name = obj.getString("name"),
             icon = obj.getString("icon"),
             domains = (0 until domainsArr.length()).map { domainsArr.getString(it) },
+            category = obj.optString("category", "other").ifBlank { "other" },
         )
     }
 }.getOrDefault(emptyList())
@@ -108,12 +118,27 @@ fun PopularResourcesScreen(
             horizontalArrangement = Arrangement.spacedBy(10.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
-            items(catalogue, key = { it.name }) { resource ->
-                ResourceTile(
-                    resource = resource,
-                    selected = RoutingStore.hasAll(resource.domains),
-                    onClick = { onToggle(resource) },
-                )
+            // One section per category, each under its own header spanning
+            // the row - "Соцсети", "Музыка", "ИИ", then the rest.
+            PopularCategories.forEach { category ->
+                val inCategory = catalogue.filter { it.category == category }
+                if (inCategory.isEmpty()) return@forEach
+                item(key = "header-$category", span = { GridItemSpan(maxLineSpan) }) {
+                    Text(
+                        I18n.t("category_$category"),
+                        color = TextSecondary,
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        modifier = Modifier.padding(top = 8.dp, start = 4.dp),
+                    )
+                }
+                items(inCategory, key = { it.name }) { resource ->
+                    ResourceTile(
+                        resource = resource,
+                        selected = RoutingStore.hasAll(resource.domains),
+                        onClick = { onToggle(resource) },
+                    )
+                }
             }
         }
     }

@@ -2066,16 +2066,23 @@ function hasAllDomains(domains) {
   return domains.every((d) => listed.includes(d.toLowerCase()));
 }
 
+// The picker's sections, in display order (internal/routing.Categories).
+const POPULAR_CATEGORIES = ['social', 'music', 'ai', 'video', 'other'];
+
 function renderPopularGrid() {
   const el = document.getElementById('popular-grid');
-  el.innerHTML = popularCatalogue.map((r) => `
+  const tile = (r) => `
     <button class="popular-tile${hasAllDomains(r.domains) ? ' active' : ''}" data-name="${escapeHtml(r.name)}">
       <img class="popular-tile-logo" alt=""
            src="https://www.google.com/s2/favicons?domain=${encodeURIComponent(r.icon)}&sz=64"
            onerror="this.style.visibility='hidden'" />
       <span class="popular-tile-name">${escapeHtml(r.name)}</span>
-    </button>
-  `).join('');
+    </button>`;
+  el.innerHTML = POPULAR_CATEGORIES.map((category) => {
+    const items = popularCatalogue.filter((r) => (r.category || 'other') === category);
+    if (items.length === 0) return '';
+    return `<div class="popular-section-title">${escapeHtml(t('category_' + category))}</div>` + items.map(tile).join('');
+  }).join('');
   for (const tile of el.querySelectorAll('.popular-tile')) {
     tile.addEventListener('click', async () => {
       const resource = popularCatalogue.find((r) => r.name === tile.dataset.name);

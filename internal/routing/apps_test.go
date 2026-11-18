@@ -53,3 +53,31 @@ func TestAdBlockOnlyWhenOn(t *testing.T) {
 		t.Fatal("DoH refusal is for the public resolvers' 443/853 only")
 	}
 }
+
+func TestCatalogueCategories(t *testing.T) {
+	known := map[string]bool{}
+	for _, c := range Categories {
+		known[c] = true
+	}
+	names := map[string]bool{}
+	for _, r := range PopularResources() {
+		if !known[r.Category] {
+			t.Fatalf("%s has unknown category %q", r.Name, r.Category)
+		}
+		names[r.Name] = true
+	}
+	if names["Slack"] || !names["Claude"] {
+		t.Fatal("Slack must be gone and Claude present")
+	}
+	d := NewDomainSet()
+	for _, r := range PopularResources() {
+		if r.Name == "Claude" {
+			d.Set(r.Domains)
+		}
+	}
+	for _, host := range []string{"claude.ai", "api.anthropic.com", "www.claudeusercontent.com", "claude.com"} {
+		if !d.MatchesName(host) {
+			t.Fatalf("Claude does not cover %s", host)
+		}
+	}
+}

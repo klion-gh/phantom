@@ -1914,3 +1914,13 @@ textarea::placeholder { color: var(--text-muted); }
     width: 22px; height: 22px; fill: none; stroke: var(--primary);
     stroke-width: 3; stroke-linecap: round; stroke-linejoin: round;
 }
+
+/* Section headers in the Популярные ресурсы picker - span the whole row. */
+.popular-section-title {
+    grid-column: 1 / -1;
+    margin: 8px 0 -2px 4px;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text-secondary);
+}
+.popular-section-title:first-child { margin-top: 0; }
