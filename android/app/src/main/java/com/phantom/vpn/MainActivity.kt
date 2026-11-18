@@ -270,7 +270,7 @@ class MainActivity : ComponentActivity() {
                 Box(
                     modifier = Modifier
                         .fillMaxSize()
-                        .haze(state = hazeState, style = HazeStyle(tint = Surface.copy(alpha = 0.5f), blurRadius = 24.dp)),
+                        .haze(state = hazeState, style = HazeStyle(tint = Surface.copy(alpha = 0.5f), blurRadius = 12.dp)),
                 ) {
                     // Deliberately outside the systemBars padding below - the
                     // backdrop is meant to run edge-to-edge, under the status/nav
@@ -1052,6 +1052,9 @@ private fun NavIslandHost(hazeState: HazeState) {
                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) Modifier
                     else Modifier.background(Surface.copy(alpha = 0.85f)),
                 )
+                // The same gradient outline a connected config tile wears,
+                // in the active palette's colours.
+                .border(1.dp, Brush.linearGradient(BrandGradient), shape)
                 .padding(horizontal = 6.dp, vertical = 4.dp),
         ) {
             content()

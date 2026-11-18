@@ -1239,18 +1239,19 @@ textarea::placeholder { color: var(--text-muted); }
 }
 
 /* The nav is a floating island, not a bar: no frame, a translucent
-   material with the content blurred behind it, centred at a fixed ~5 cm
-   (189px at 96 dpi) whatever the window's width. The lists scroll on
+   material with the content blurred behind it, centred at a fixed ~10 cm
+   (378px at 96 dpi) whatever the window's width. The lists scroll on
    underneath it all the way to the window's edge. */
 .bottom-nav {
     position: absolute;
     left: 50%;
     bottom: 18px;
     transform: translateX(-50%);
-    width: 189px;
+    width: 378px;
+    max-width: calc(100% - 32px);
     box-sizing: border-box;
     display: flex;
-    justify-content: space-between;
+    justify-content: space-evenly;
     padding: 5px;
     border-radius: 22px;
     background: color-mix(in srgb, var(--surface) 46%, transparent);
