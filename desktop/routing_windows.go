@@ -13,6 +13,12 @@ import (
 // to whatever connects next.
 var engine = routing.NewEngine()
 
+// applyAdBlockPlatform turns ad blocking on or off in the engine the tunnel
+// consults (internal/routing/adblock.go).
+func applyAdBlockPlatform(on bool) { engine.SetAdBlock(on) }
+
+const adBlockSupported = true
+
 // applyRoutingPlatform puts the smart-VPN settings into this process's own
 // engine, which the in-process tunnel consults per flow.
 func applyRoutingPlatform(sites []string, smart bool) <-chan struct{} {
@@ -43,6 +49,9 @@ func installRouting(inner *netstack.Tunnel, physicalIfIndex uint32, haveIfIndex 
 	}
 	inner.SetRouting(
 		func(network, target string) netstack.RouteDecision {
+			if engine.BlockFlow(network, target) {
+				return netstack.RouteBlock
+			}
 			if engine.ShouldTunnel(network, target) {
 				return netstack.RouteTunnel
 			}
@@ -52,6 +61,9 @@ func installRouting(inner *netstack.Tunnel, physicalIfIndex uint32, haveIfIndex 
 			return dialDirect(network, target, physicalIfIndex)
 		},
 	)
+	// "Приложения под обход": a flow the site rules sent direct still goes
+	// through the tunnel when a listed program opened it (apps_windows.go).
+	inner.SetAppRouter(engine.TunnelApp)
 	inner.SetDNSObserver(func(stream io.ReadWriteCloser) io.ReadWriteCloser {
 		return routing.SniffDNS(stream, engine.Domains())
 	})
@@ -64,6 +76,9 @@ func installRouting(inner *netstack.Tunnel, physicalIfIndex uint32, haveIfIndex 
 	// adapter) only if the tunnel doesn't answer. The network's own resolver
 	// is never asked.
 	inner.SetDNSRouter(func(qname string) netstack.RouteDecision {
+		if engine.BlockDNSQuery(qname) {
+			return netstack.RouteBlock
+		}
 		if engine.TunnelDNSQuery(qname) {
 			return netstack.RouteTunnel
 		}

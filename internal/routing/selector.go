@@ -157,7 +157,8 @@ func NewSelector(probe ProbeFunc, onSwitch func(Candidate)) *Selector {
 
 // SetCandidates replaces the pool the selector chooses from, preserving what
 // it already knows about configs that are still in the list. If the current
-// selection is no longer among them, the next evaluation picks a replacement.
+// selection is no longer among them, a replacement is picked straight away
+// from what is already known (onSwitch fires on its own goroutine).
 //
 // A config that wasn't in the pool before (the user just ticked it, or edited
 // its yaml) is probed right away rather than waiting out the rest of the
@@ -187,7 +188,29 @@ func (s *Selector) SetCandidates(candidates []Candidate) {
 		changed = true
 	}
 	s.states = states
+
+	// The config carrying traffic was just unticked: move off it now, onto
+	// the best of what is left, instead of keeping the tunnel on a server
+	// the user no longer wants until the next round notices. With no probe
+	// results yet, the first remaining candidate is as good a guess as any -
+	// the next round corrects it if it's wrong.
+	var replacement *Candidate
+	if s.currentID != "" && s.findLocked(s.currentID) == nil && len(states) > 0 {
+		next := bestLocked(states, s.now())
+		if next == nil {
+			next = states[0]
+		}
+		c := s.selectLocked(next)
+		replacement = &c
+	}
 	s.mu.Unlock()
+
+	if replacement != nil {
+		diag.Event(diag.CatRoute, "currentUnticked", "switchTo", shortID(replacement.ID))
+		if s.onSwitch != nil {
+			go s.onSwitch(*replacement)
+		}
+	}
 
 	// Wakes the existing loop rather than starting a probe here. Running one
 	// concurrently with the scheduled round would let a single unreachable

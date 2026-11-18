@@ -67,6 +67,12 @@ class PhantomVpnService : VpnService() {
          * A no-op when no tunnel is up, which is the common case while the
          * user is still setting the list up.
          */
+        /** Closes the running tunnel's direct connections that the current
+         *  routing would now tunnel (a newly listed app's, say). */
+        fun resetMisroutedFlows() {
+            activeInstance?.tunnel?.resetMisroutedFlows()
+        }
+
         fun applyRoutingToActiveTunnel() {
             RoutingController.applyToTunnel(activeInstance?.tunnel)
             // Doesn't reconnect anything by itself, so nothing would otherwise

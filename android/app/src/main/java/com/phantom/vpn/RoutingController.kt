@@ -65,6 +65,7 @@ object RoutingController {
     @Synchronized
     fun sync(context: Context) {
         val appContext = context.applicationContext
+        this.appContext = appContext
 
         val configs = candidates(appContext)
         Diag.log(
@@ -215,5 +216,21 @@ object RoutingController {
         val t = tunnel ?: return
         val smartActive = RoutingStore.smartEnabled && !RoutingStore.autoEnabled
         t.setSmartRouting(smartActive, RoutingStore.sitesPayload())
+        val ctx = appContext
+        val apps = RoutingStore.apps
+        if (AppRouting.supported && ctx != null && apps.isNotEmpty()) {
+            t.setAppRouting(apps.size.toLong(), owner ?: AppRouting.Owner(ctx).also { owner = it })
+        } else {
+            t.setAppRouting(0, null)
+        }
+        t.setAdBlock(RoutingStore.adBlock)
     }
+
+    /** Set from [sync] (always called at startup); the [AppRouting.Owner]
+     *  needs a context and outlives any one tunnel. */
+    @Volatile
+    private var appContext: Context? = null
+
+    @Volatile
+    private var owner: AppRouting.Owner? = null
 }

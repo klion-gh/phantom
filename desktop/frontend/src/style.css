@@ -1461,15 +1461,33 @@ textarea::placeholder { color: var(--text-muted); }
     text-overflow: ellipsis;
 }
 .routing-config-health { font-size: 12px; margin-top: 3px; color: var(--text-secondary); }
-/* The bar marks the config actually carrying traffic, as opposed to merely
+/* The check marks the config actually carrying traffic, as opposed to merely
    being one the selector is allowed to pick. */
-.routing-config-active-bar {
-    width: 26px;
-    height: 4px;
-    border-radius: 100px;
-    background: linear-gradient(135deg, var(--primary), var(--accent));
+.routing-config-check {
+    width: 24px;
+    height: 24px;
+    border-radius: 50%;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--brand-gradient, linear-gradient(135deg, var(--primary), var(--accent)));
     flex-shrink: 0;
+    animation: check-pop 260ms cubic-bezier(.2,1.4,.4,1);
 }
+.routing-config-check svg {
+    width: 15px;
+    height: 15px;
+    fill: none;
+    stroke: #fff;
+    stroke-width: 3;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+    stroke-dasharray: 24;
+    stroke-dashoffset: 0;
+    animation: check-draw 320ms ease-out 80ms backwards;
+}
+@keyframes check-pop { from { transform: scale(0.4); opacity: 0; } to { transform: scale(1); opacity: 1; } }
+@keyframes check-draw { from { stroke-dashoffset: 24; } to { stroke-dashoffset: 0; } }
 
 .routing-empty {
     font-size: 13px;
@@ -1833,3 +1851,66 @@ textarea::placeholder { color: var(--text-muted); }
     user-select: all;
 }
 .relay-error { font-size: 12.5px; color: var(--danger); }
+
+/* "Подключиться к лучшей" -> "Подключено": the words rise out of a blur, and
+   once connected the ring breathes slowly. */
+.best-btn.label-swap span b { display: inline-block; animation: best-label-in 520ms cubic-bezier(.2,.8,.2,1); }
+@keyframes best-label-in {
+    0% { opacity: 0; filter: blur(6px); transform: translateY(8px); letter-spacing: 0.5em; }
+    100% { opacity: 1; filter: blur(0); transform: translateY(0); }
+}
+.best-btn.active.linked span { animation: best-breathe 2.8s ease-in-out infinite; }
+@keyframes best-breathe {
+    0%, 100% { box-shadow: 0 0 18px color-mix(in srgb, var(--primary) 22%, transparent); }
+    50% { box-shadow: 0 0 30px color-mix(in srgb, var(--primary) 45%, transparent); }
+}
+
+/* "Приложения под обход" */
+.apps-add-row { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 6px; }
+.apps-add-btn { height: 40px; min-height: 40px; padding: 0 16px; font-size: 13px; }
+.app-row { gap: 10px; }
+.app-avatar {
+    width: 28px;
+    height: 28px;
+    border-radius: 8px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    font-size: 13px;
+    font-weight: 700;
+    color: #fff;
+    background: var(--brand-gradient);
+}
+.apps-filter { width: 100%; box-sizing: border-box; padding: 12px 14px; border-radius: 14px; margin-bottom: 10px; }
+.running-app-list { display: flex; flex-direction: column; gap: 6px; }
+.running-app {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    width: 100%;
+    padding: 10px 12px;
+    border-radius: 14px;
+    border: 1px solid var(--surface-outline);
+    background: var(--surface);
+    cursor: pointer;
+    font: inherit;
+    text-align: left;
+    transition: border-color 200ms ease, background 200ms ease;
+}
+.running-app:hover { background: var(--surface-high); }
+.running-app.active { border-color: var(--primary); }
+.running-app-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.running-app-name { font-size: 14px; font-weight: 500; color: var(--text-primary); }
+.running-app-path {
+    font-size: 11.5px;
+    color: var(--text-muted);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.running-app-check { width: 22px; height: 22px; flex-shrink: 0; }
+.running-app-check svg {
+    width: 22px; height: 22px; fill: none; stroke: var(--primary);
+    stroke-width: 3; stroke-linecap: round; stroke-linejoin: round;
+}

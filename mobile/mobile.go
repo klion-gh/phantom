@@ -266,6 +266,9 @@ func Start(configYAML string, tunFD int, mtu int, protector Protector) (*Tunnel,
 	}
 	inner.SetRouting(
 		func(network, target string) netstack.RouteDecision {
+			if engine.BlockFlow(network, target) {
+				return netstack.RouteBlock
+			}
 			if engine.ShouldTunnel(network, target) {
 				return netstack.RouteTunnel
 			}
@@ -276,9 +279,14 @@ func Start(configYAML string, tunFD int, mtu int, protector Protector) (*Tunnel,
 	inner.SetDNSObserver(func(stream io.ReadWriteCloser) io.ReadWriteCloser {
 		return routing.SniffDNS(stream, engine.Domains())
 	})
+	// "Приложения под обход": see SetAppRouting.
+	inner.SetAppRouter(engine.TunnelApp)
 	// Split DNS - see internal/netstack/splitdns.go: in smart mode only
 	// queries for listed names ride the tunnel.
 	inner.SetDNSRouter(func(qname string) netstack.RouteDecision {
+		if engine.BlockDNSQuery(qname) {
+			return netstack.RouteBlock
+		}
 		if engine.TunnelDNSQuery(qname) {
 			return netstack.RouteTunnel
 		}

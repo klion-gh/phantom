@@ -35,6 +35,8 @@ object RoutingStore {
     private const val SMART_CONFIG_IDS_KEY = "smart_vpn_config_ids"
     private const val AUTO_ENABLED_KEY = "auto_config_enabled"
     private const val AUTO_CONFIG_IDS_KEY = "auto_config_ids"
+    private const val APPS_KEY = "smart_vpn_apps"
+    private const val AD_BLOCK_KEY = "youtube_adblock"
 
     /** A starting point, not a recommendation - trivially editable, and only
      *  ever used to seed the very first run so the list isn't an empty box
@@ -63,6 +65,15 @@ object RoutingStore {
         private set
 
     var autoConfigIds by mutableStateOf<Set<String>>(emptySet())
+        private set
+
+    /** "Приложения под обход": package names whose every connection goes
+     *  through the tunnel in smart mode - see [AppRouting]. */
+    var apps by mutableStateOf<Set<String>>(emptySet())
+        private set
+
+    /** "Блокировать рекламу YouTube" - internal/routing/adblock.go. */
+    var adBlock by mutableStateOf(false)
         private set
 
     /**
@@ -102,6 +113,19 @@ object RoutingStore {
         }
         smartConfigIds = decodeList(p.getString(SMART_CONFIG_IDS_KEY, null))?.toSet() ?: emptySet()
         autoConfigIds = decodeList(p.getString(AUTO_CONFIG_IDS_KEY, null))?.toSet() ?: emptySet()
+        apps = decodeList(p.getString(APPS_KEY, null))?.toSet() ?: emptySet()
+        adBlock = p.getBoolean(AD_BLOCK_KEY, false)
+    }
+
+    fun toggleApp(context: Context, packageName: String) {
+        val next = apps.toMutableSet().apply { if (!add(packageName)) remove(packageName) }
+        apps = next
+        prefs(context).edit().putString(APPS_KEY, encodeList(next)).apply()
+    }
+
+    fun setAdBlock(context: Context, value: Boolean) {
+        adBlock = value
+        prefs(context).edit().putBoolean(AD_BLOCK_KEY, value).apply()
     }
 
     fun setSmartEnabled(context: Context, value: Boolean) {

@@ -526,17 +526,21 @@ func (a *App) SetLanguage(lang string) {
 // UI seeing a half-updated mix of old and new values.
 func (a *App) GetRoutingState() string {
 	data, _ := json.Marshal(struct {
-		SmartEnabled bool     `json:"smartEnabled"`
-		Sites        []string `json:"sites"`
-		SmartConfigs []string `json:"smartConfigs"`
-		AutoEnabled  bool     `json:"autoEnabled"`
-		AutoConfigs  []string `json:"autoConfigs"`
+		SmartEnabled  bool       `json:"smartEnabled"`
+		Sites         []string   `json:"sites"`
+		SmartConfigs  []string   `json:"smartConfigs"`
+		AutoEnabled   bool       `json:"autoEnabled"`
+		AutoConfigs   []string   `json:"autoConfigs"`
+		Apps          []SmartApp `json:"apps"`
+		AppsSupported bool       `json:"appsSupported"`
 	}{
-		SmartEnabled: loadSmartEnabled(),
-		Sites:        loadSmartSites(),
-		SmartConfigs: loadSmartConfigs(),
-		AutoEnabled:  loadAutoEnabled(),
-		AutoConfigs:  loadAutoConfigs(),
+		SmartEnabled:  loadSmartEnabled(),
+		Sites:         loadSmartSites(),
+		SmartConfigs:  loadSmartConfigs(),
+		AutoEnabled:   loadAutoEnabled(),
+		AutoConfigs:   loadAutoConfigs(),
+		Apps:          loadSmartApps(),
+		AppsSupported: appsSupported,
 	})
 	return string(data)
 }
@@ -573,6 +577,17 @@ func (a *App) SetSmartConfigs(idsJSON string) {
 	}
 	saveSmartConfigs(ids)
 	syncSelector()
+	// Unticking the last config while Умный VPN carries traffic leaves it
+	// nothing to carry it through: disconnect rather than keep a server the
+	// user just deselected. (Unticking the current one with others left is
+	// the selector's job - it moves to one of them straight away.)
+	a.mu.Lock()
+	connected := a.tunnel != nil
+	a.mu.Unlock()
+	if len(ids) == 0 && connected && loadSmartEnabled() && !loadAutoEnabled() {
+		log.Printf("[routing] last smart config unticked - disconnecting")
+		a.Disconnect()
+	}
 }
 
 // SetAutoEnabled turns whole-device automatic routing on or off.

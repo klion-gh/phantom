@@ -27,17 +27,17 @@ export function Disconnect():Promise<void>;
 
 export function ForgetServerKey(arg1:string,arg2:number):Promise<void>;
 
+export function GetAdBlock():Promise<string>;
+
 export function GetAppearance():Promise<string>;
 
 export function GetBetaUpdates():Promise<boolean>;
 
 export function GetBrowserBridge():Promise<string>;
 
-export function GetLanguage():Promise<string>;
-
 export function GetKeepAlive():Promise<boolean>;
 
-export function SetKeepAlive(arg1:boolean):Promise<void>;
+export function GetLanguage():Promise<string>;
 
 export function GetRelays():Promise<string>;
 
@@ -47,7 +47,11 @@ export function ListConfigs():Promise<string>;
 
 export function ListResources():Promise<string>;
 
+export function ListRunningApps():Promise<string>;
+
 export function LookupCountry(arg1:string):Promise<string>;
+
+export function PickAppExe():Promise<string>;
 
 export function Ping(arg1:string):Promise<string>;
 
@@ -69,6 +73,8 @@ export function RoutingHealth():Promise<string>;
 
 export function SelectRelay(arg1:string):Promise<string>;
 
+export function SetAdBlock(arg1:boolean):Promise<void>;
+
 export function SetAppearance(arg1:string,arg2:string):Promise<void>;
 
 export function SetAutoConfigs(arg1:string):Promise<void>;
@@ -83,11 +89,15 @@ export function SetConfigGeo(arg1:string,arg2:string,arg3:string,arg4:string):Pr
 
 export function SetConfigPlace(arg1:string,arg2:string,arg3:string):Promise<string>;
 
+export function SetKeepAlive(arg1:boolean):Promise<void>;
+
 export function SetLanguage(arg1:string):Promise<void>;
 
 export function SetRelayEnabled(arg1:boolean):Promise<string>;
 
 export function SetRelayGeo(arg1:string,arg2:string,arg3:string,arg4:string,arg5:string,arg6:string):Promise<string>;
+
+export function SetSmartApps(arg1:string):Promise<void>;
 
 export function SetSmartConfigs(arg1:string):Promise<void>;
 

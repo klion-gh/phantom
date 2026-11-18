@@ -54,6 +54,10 @@ export function ForgetServerKey(arg1, arg2) {
   return window['go']['main']['App']['ForgetServerKey'](arg1, arg2);
 }
 
+export function GetAdBlock() {
+  return window['go']['main']['App']['GetAdBlock']();
+}
+
 export function GetAppearance() {
   return window['go']['main']['App']['GetAppearance']();
 }
@@ -66,16 +70,12 @@ export function GetBrowserBridge() {
   return window['go']['main']['App']['GetBrowserBridge']();
 }
 
-export function GetLanguage() {
-  return window['go']['main']['App']['GetLanguage']();
-}
-
 export function GetKeepAlive() {
   return window['go']['main']['App']['GetKeepAlive']();
 }
 
-export function SetKeepAlive(arg1) {
-  return window['go']['main']['App']['SetKeepAlive'](arg1);
+export function GetLanguage() {
+  return window['go']['main']['App']['GetLanguage']();
 }
 
 export function GetRelays() {
@@ -94,8 +94,16 @@ export function ListResources() {
   return window['go']['main']['App']['ListResources']();
 }
 
+export function ListRunningApps() {
+  return window['go']['main']['App']['ListRunningApps']();
+}
+
 export function LookupCountry(arg1) {
   return window['go']['main']['App']['LookupCountry'](arg1);
+}
+
+export function PickAppExe() {
+  return window['go']['main']['App']['PickAppExe']();
 }
 
 export function Ping(arg1) {
@@ -138,6 +146,10 @@ export function SelectRelay(arg1) {
   return window['go']['main']['App']['SelectRelay'](arg1);
 }
 
+export function SetAdBlock(arg1) {
+  return window['go']['main']['App']['SetAdBlock'](arg1);
+}
+
 export function SetAppearance(arg1, arg2) {
   return window['go']['main']['App']['SetAppearance'](arg1, arg2);
 }
@@ -166,6 +178,10 @@ export function SetConfigPlace(arg1, arg2, arg3) {
   return window['go']['main']['App']['SetConfigPlace'](arg1, arg2, arg3);
 }
 
+export function SetKeepAlive(arg1) {
+  return window['go']['main']['App']['SetKeepAlive'](arg1);
+}
+
 export function SetLanguage(arg1) {
   return window['go']['main']['App']['SetLanguage'](arg1);
 }
@@ -176,6 +192,10 @@ export function SetRelayEnabled(arg1) {
 
 export function SetRelayGeo(arg1, arg2, arg3, arg4, arg5, arg6) {
   return window['go']['main']['App']['SetRelayGeo'](arg1, arg2, arg3, arg4, arg5, arg6);
+}
+
+export function SetSmartApps(arg1) {
+  return window['go']['main']['App']['SetSmartApps'](arg1);
 }
 
 export function SetSmartConfigs(arg1) {

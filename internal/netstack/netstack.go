@@ -59,6 +59,9 @@ const (
 	// tunnel doesn't answer in time or isn't there. A name that isn't on the
 	// smart list goes this way - never to the network's own resolver.
 	RouteTunnelFirst
+	// RouteBlock refuses the flow outright (for a DNS query: answers it
+	// NXDOMAIN on the device) - ad blocking, see internal/routing/adblock.go.
+	RouteBlock
 )
 
 // RouterFunc decides where a new flow should go, based only on its
@@ -72,6 +75,14 @@ const (
 // Consulted once per new flow, never per packet, so it can afford a map
 // lookup but not real work.
 type RouterFunc func(network string, target string) RouteDecision
+
+// AppRouterFunc is the per-application axis on top of RouterFunc: given a
+// flow the router would send direct, it reports whether the flow belongs to
+// an app the user listed under "Приложения под обход" - which sends it
+// through the tunnel after all. source is the flow's own "ip:port" as the
+// device sent it, which is what the platform maps back to its owning process
+// or app. Consulted only for flows the router sent direct, once per flow.
+type AppRouterFunc func(network, source, target string) bool
 
 // DirectDialer opens a connection to target *outside* the tunnel. Only the
 // platform layer knows how to do this (binding the socket to the physical
@@ -90,6 +101,7 @@ type Tunnel struct {
 	bytesUp   int64
 	bytesDown int64
 	router    RouterFunc
+	appRouter AppRouterFunc
 	direct    DirectDialer
 	dnsWrap   func(io.ReadWriteCloser) io.ReadWriteCloser
 	fakeDNS   string
@@ -124,6 +136,7 @@ type directFlow struct {
 	io.ReadWriteCloser
 	t       *Tunnel
 	network string
+	source  string
 	target  string
 	once    sync.Once
 }
@@ -137,8 +150,8 @@ func (f *directFlow) Close() error {
 	return f.ReadWriteCloser.Close()
 }
 
-func (t *Tunnel) trackDirect(network, target string, conn io.ReadWriteCloser) io.ReadWriteCloser {
-	f := &directFlow{ReadWriteCloser: conn, t: t, network: network, target: target}
+func (t *Tunnel) trackDirect(network, source, target string, conn io.ReadWriteCloser) io.ReadWriteCloser {
+	f := &directFlow{ReadWriteCloser: conn, t: t, network: network, source: source, target: target}
 	t.directMu.Lock()
 	if t.directFlows == nil {
 		t.directFlows = map[*directFlow]struct{}{}
@@ -164,6 +177,7 @@ func (t *Tunnel) trackDirect(network, target string, conn io.ReadWriteCloser) io
 // pre-seeding for new entries has finished: a flow is matched by its address.
 func (t *Tunnel) ResetMisroutedFlows() int {
 	router, _, _ := t.currentRouting()
+	appRouter := t.currentAppRouter()
 	t.directMu.Lock()
 	flows := make([]*directFlow, 0, len(t.directFlows))
 	for f := range t.directFlows {
@@ -173,7 +187,8 @@ func (t *Tunnel) ResetMisroutedFlows() int {
 
 	reset := 0
 	for _, f := range flows {
-		if router == nil || router(f.network, f.target) == RouteTunnel {
+		if router == nil || router(f.network, f.target) == RouteTunnel ||
+			(appRouter != nil && f.source != "" && appRouter(f.network, f.source, f.target)) {
 			f.Close()
 			reset++
 		}
@@ -215,6 +230,20 @@ func (t *Tunnel) SetRouting(router RouterFunc, direct DirectDialer) {
 	t.router = router
 	t.direct = direct
 	t.sessionMu.Unlock()
+}
+
+// SetAppRouter installs the per-application decision - see AppRouterFunc.
+// nil removes it.
+func (t *Tunnel) SetAppRouter(fn AppRouterFunc) {
+	t.sessionMu.Lock()
+	t.appRouter = fn
+	t.sessionMu.Unlock()
+}
+
+func (t *Tunnel) currentAppRouter() AppRouterFunc {
+	t.sessionMu.Lock()
+	defer t.sessionMu.Unlock()
+	return t.appRouter
 }
 
 // SetDNSObserver installs a wrapper applied to tunnelled DNS flows (UDP port
@@ -372,7 +401,7 @@ func (t *Tunnel) handleTCP(r *tcp.ForwarderRequest) {
 
 	local := gonet.NewTCPConn(&wq, ep)
 
-	remote := t.openRemote("tcp", target)
+	remote := t.openRemote("tcp", endpointSource(id), target)
 	if remote == nil {
 		local.Close()
 		return
@@ -421,7 +450,7 @@ func (t *Tunnel) handleUDP(r *udp.ForwarderRequest) bool {
 	}
 
 	go func() {
-		remote := t.openRemote("udp", target)
+		remote := t.openRemote("udp", endpointSource(id), target)
 		if remote == nil {
 			// Nothing to relay to: the datagrams already queued on local are
 			// dropped, the same as a network that can't reach the target.
@@ -440,19 +469,32 @@ func (t *Tunnel) handleUDP(r *udp.ForwarderRequest) bool {
 //  2. Otherwise the flow is tunnelled, which is also the fallback whenever a
 //     direct dial was chosen but failed: a flow losing its direct route is
 //     better served by the tunnel than by no connectivity at all.
-func (t *Tunnel) openRemote(network string, target string) io.ReadWriteCloser {
+func (t *Tunnel) openRemote(network, source, target string) io.ReadWriteCloser {
 	dns := network == "udp" && isDNSTarget(target)
 	if dns {
 		target = t.dnsUpstream(target)
 	}
 
 	router, direct, dnsWrap := t.currentRouting()
-	if router != nil && direct != nil && router(network, target) == RouteDirect {
+	decision := RouteTunnel
+	if router != nil {
+		decision = router(network, target)
+	}
+	if decision == RouteBlock {
+		return nil
+	}
+	goDirect := direct != nil && decision == RouteDirect
+	if goDirect && !dns && source != "" {
+		if appRouter := t.currentAppRouter(); appRouter != nil && appRouter(network, source, target) {
+			goDirect = false
+		}
+	}
+	if goDirect {
 		conn, err := direct(network, target)
 		if err == nil {
 			t.countFlow(network, false)
 			if !dns {
-				conn = t.trackDirect(network, target, conn)
+				conn = t.trackDirect(network, source, target, conn)
 			}
 			return t.meterFlow(network, target, false, dns, conn)
 		}
@@ -596,6 +638,12 @@ func (t *Tunnel) spliceUDP(local *gonet.UDPConn, remote io.ReadWriteCloser) {
 // destination address the intercepted packet was sent to (netstack
 // transparently answers for every address), while "remote" is the
 // originating app's own TUN-side address - see stack.TransportEndpointID.
+// endpointSource is the flow's own address as the device sent it - the
+// remote end from netstack's side.
+func endpointSource(id stack.TransportEndpointID) string {
+	return net.JoinHostPort(addressString(id.RemoteAddress), fmt.Sprintf("%d", id.RemotePort))
+}
+
 func endpointTarget(id stack.TransportEndpointID) string {
 	return net.JoinHostPort(addressString(id.LocalAddress), fmt.Sprintf("%d", id.LocalPort))
 }

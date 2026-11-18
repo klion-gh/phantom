@@ -8,7 +8,7 @@ import './style.css';
 // install ever shows, so the app's own footprint grows by the whole set
 // (~2.4MB) once, not per flag shown.
 import 'flag-icons/css/flag-icons.min.css';
-import { Connect, Disconnect, Status, ReadLog, ListConfigs, AddConfig, UpdateConfig, DeleteConfig, SetConfigGeo, SetConfigPlace, ClearConfigCountry, Ping, ListResources, AddResource, DeleteResource, ApplyUpdate, GetLanguage, SetLanguage, Version, LookupCountry, GetAppearance, SetAppearance, GetBetaUpdates, SetBetaUpdates, ReadFullLog, GetRoutingState, SetSmartEnabled, SetSmartSites, SetSmartConfigs, SetAutoEnabled, SetAutoConfigs, GetRelays, SetRelayEnabled, SelectRelay, AddRelay, UpdateRelay, DeleteRelay, SetRelayGeo, PingRelay, GetKeepAlive, SetKeepAlive, ReconnectActive, RoutingHealth, PopularResources, GetBrowserBridge, SetBrowserBridgeEnabled, RevokeBrowserClients, AnswerBrowserPairing, ProvisionServer, CancelProvision, ForgetServerKey } from '../wailsjs/go/main/App';
+import { Connect, Disconnect, Status, ReadLog, ListConfigs, AddConfig, UpdateConfig, DeleteConfig, SetConfigGeo, SetConfigPlace, ClearConfigCountry, Ping, ListResources, AddResource, DeleteResource, ApplyUpdate, GetLanguage, SetLanguage, Version, LookupCountry, GetAppearance, SetAppearance, GetBetaUpdates, SetBetaUpdates, ReadFullLog, GetRoutingState, SetSmartEnabled, SetSmartSites, SetSmartConfigs, SetAutoEnabled, SetAutoConfigs, SetSmartApps, ListRunningApps, PickAppExe, GetAdBlock, SetAdBlock, GetRelays, SetRelayEnabled, SelectRelay, AddRelay, UpdateRelay, DeleteRelay, SetRelayGeo, PingRelay, GetKeepAlive, SetKeepAlive, ReconnectActive, RoutingHealth, PopularResources, GetBrowserBridge, SetBrowserBridgeEnabled, RevokeBrowserClients, AnswerBrowserPairing, ProvisionServer, CancelProvision, ForgetServerKey } from '../wailsjs/go/main/App';
 import { t, getLang, setLang, applyStaticTranslations } from './i18n.js';
 import { BACKGROUNDS, initBackground, initMiniBackground } from './background.js';
 import { PALETTES } from './palettes.js';
@@ -31,6 +31,7 @@ const screens = {
   settings: document.getElementById('screen-settings'),
   log: document.getElementById('screen-log'),
   popular: document.getElementById('screen-popular'),
+  apps: document.getElementById('screen-apps'),
 };
 
 function showScreen(name) {
@@ -1249,6 +1250,7 @@ const SECTIONS = ['configs', 'routing', 'resources'];
 let routingState = {
   smartEnabled: false, sites: [],
   smartConfigs: [], autoEnabled: false, autoConfigs: [],
+  apps: [], appsSupported: false,
 };
 let popularCatalogue = [];
 // True once the routed-sites list has been edited since the last apply - an
@@ -1283,6 +1285,8 @@ async function reloadRoutingState() {
       sites: Array.isArray(parsed.sites) ? parsed.sites : [],
       smartConfigs: Array.isArray(parsed.smartConfigs) ? parsed.smartConfigs : [],
       autoConfigs: Array.isArray(parsed.autoConfigs) ? parsed.autoConfigs : [],
+      apps: Array.isArray(parsed.apps) ? parsed.apps : [],
+      appsSupported: !!parsed.appsSupported,
     };
   } catch (e) {
     console.error(e);
@@ -1350,11 +1354,33 @@ function refreshModeAvailability() {
     .classList.toggle('inactive', overriddenByAuto());
 
   document.getElementById('auto-tile').classList.toggle('inactive', smartDriving());
+  renderBestLabel();
   document.getElementById('smart-configs-warning').classList.toggle('hidden', !smartDriving());
 
   // While either mode is on, the config tiles are driven by it rather than
   // the user - dimmed and inert beats silently swallowing clicks.
   configList.classList.toggle('locked', routingState.autoEnabled || smartDriving());
+}
+
+// "Подключиться к лучшей" reads "Подключено" once that mode has the tunnel
+// up, with the words swapped by a short blur-and-rise rather than in a jump.
+let bestLabelKey = 'auto_config';
+function renderBestLabel() {
+  const label = document.querySelector('#auto-toggle b');
+  if (!label) return;
+  const key = routingState.autoEnabled && currentStatus.connected ? 'best_connected' : 'auto_config';
+  if (key === bestLabelKey) {
+    label.textContent = t(key);
+    return;
+  }
+  bestLabelKey = key;
+  label.setAttribute('data-i18n', key);
+  const btn = document.getElementById('auto-toggle');
+  btn.classList.remove('label-swap');
+  void btn.offsetWidth; // restart the animation
+  label.textContent = t(key);
+  btn.classList.add('label-swap');
+  btn.classList.toggle('linked', key === 'best_connected');
 }
 
 function renderRouting() {
@@ -1366,8 +1392,116 @@ function renderRouting() {
 
   renderSiteList();
   renderSitesApplyRow();
+  renderAppList();
   renderRoutingConfigs();
 }
+
+// --- "Приложения под обход" ------------------------------------------------
+// Matched by the exe's file name (desktop/apps.go), so that's what a second
+// add of the same program is checked against.
+
+function exeBase(path) {
+  return String(path).replace(/\//g, '\\').split('\\').pop();
+}
+
+function appKey(path) {
+  return exeBase(path).toLowerCase();
+}
+
+function appInitial(name) {
+  return escapeHtml((String(name).trim()[0] || '?').toUpperCase());
+}
+
+function renderAppList() {
+  const tile = document.getElementById('apps-tile');
+  tile.classList.toggle('hidden', !routingState.appsSupported);
+  if (!routingState.appsSupported) return;
+  const el = document.getElementById('app-list');
+  if (routingState.apps.length === 0) {
+    el.innerHTML = '<div class="routing-empty">' + escapeHtml(t('smart_vpn_no_apps')) + '</div>';
+    return;
+  }
+  el.innerHTML = routingState.apps.map((app, i) => `
+    <div class="site-row app-row" title="${escapeHtml(app.path)}">
+      <span class="app-avatar">${appInitial(app.name)}</span>
+      <div class="site-row-name">${escapeHtml(app.name)}</div>
+      <button class="site-remove-btn app-remove-btn" data-index="${i}" title="${t('remove')}">&times;</button>
+    </div>
+  `).join('');
+  for (const btn of el.querySelectorAll('.app-remove-btn')) {
+    btn.addEventListener('click', async () => {
+      const i = Number(btn.dataset.index);
+      routingState.apps = routingState.apps.filter((_, j) => j !== i);
+      await SetSmartApps(JSON.stringify(routingState.apps));
+      renderAppList();
+    });
+  }
+}
+
+async function toggleApp(app) {
+  const key = appKey(app.path);
+  if (routingState.apps.some((a) => appKey(a.path) === key)) {
+    routingState.apps = routingState.apps.filter((a) => appKey(a.path) !== key);
+  } else {
+    routingState.apps = routingState.apps.concat([{ name: app.name, path: app.path }]);
+  }
+  await SetSmartApps(JSON.stringify(routingState.apps));
+  renderAppList();
+}
+
+let runningApps = [];
+
+function renderRunningApps() {
+  const el = document.getElementById('running-app-list');
+  const q = document.getElementById('apps-filter').value.trim().toLowerCase();
+  const listed = new Set(routingState.apps.map((a) => appKey(a.path)));
+  const shown = runningApps.filter((a) => !q || a.name.toLowerCase().includes(q) || a.path.toLowerCase().includes(q));
+  if (shown.length === 0) {
+    el.innerHTML = '<div class="routing-empty">' + escapeHtml(t('apps_none_running')) + '</div>';
+    return;
+  }
+  el.innerHTML = shown.map((a) => {
+    const on = listed.has(appKey(a.path));
+    return `
+    <button class="running-app${on ? ' active' : ''}" data-path="${escapeHtml(a.path)}">
+      <span class="app-avatar">${appInitial(a.name)}</span>
+      <span class="running-app-text">
+        <span class="running-app-name">${escapeHtml(a.name)}</span>
+        <span class="running-app-path">${escapeHtml(a.path)}</span>
+      </span>
+      <span class="running-app-check">${on ? '<svg viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>' : ''}</span>
+    </button>`;
+  }).join('');
+  for (const row of el.querySelectorAll('.running-app')) {
+    row.addEventListener('click', async () => {
+      const app = runningApps.find((a) => a.path === row.dataset.path);
+      if (!app) return;
+      await toggleApp(app);
+      renderRunningApps();
+    });
+  }
+}
+
+document.getElementById('btn-apps-running').addEventListener('click', async () => {
+  document.getElementById('apps-filter').value = '';
+  document.getElementById('running-app-list').innerHTML = '<div class="routing-empty">…</div>';
+  showScreen('apps');
+  try {
+    runningApps = JSON.parse(await ListRunningApps()) || [];
+  } catch (e) {
+    runningApps = [];
+  }
+  renderRunningApps();
+});
+document.getElementById('apps-filter').addEventListener('input', renderRunningApps);
+document.getElementById('btn-back-apps').addEventListener('click', () => showScreen('main'));
+
+document.getElementById('btn-apps-path').addEventListener('click', async () => {
+  const path = await PickAppExe();
+  if (!path) return;
+  if (routingState.apps.some((a) => appKey(a.path) === appKey(path))) return;
+  await toggleApp({ name: exeBase(path).replace(/\.exe$/i, ''), path });
+});
 
 
 // Only worth showing while there's both a live tunnel (nothing to reconnect
@@ -1457,6 +1591,10 @@ function renderRoutingConfigs() {
         : routingState.smartConfigs.concat([id]);
       await SetSmartConfigs(JSON.stringify(routingState.smartConfigs));
       renderRouting();
+      // Unticking the config in use moves the tunnel (or disconnects it when
+      // nothing is left ticked) - show that without waiting for the 4s poll.
+      setTimeout(refreshStatus, 300);
+      setTimeout(refreshStatus, 1500);
     });
   }
   refreshRoutingHealth();
@@ -1489,13 +1627,14 @@ async function refreshRoutingHealth() {
     // mode off the selector decides nothing, and a leftover "carrying traffic"
     // bar from before it was switched off would be misleading.
     const carrying = entry.active && routingState.smartEnabled && routingState.smartConfigs.includes(entry.id);
-    const existingBar = row.querySelector('.routing-config-active-bar');
-    if (carrying && !existingBar) {
-      const bar = document.createElement('div');
-      bar.className = 'routing-config-active-bar';
-      row.appendChild(bar);
-    } else if (!carrying && existingBar) {
-      existingBar.remove();
+    const existingCheck = row.querySelector('.routing-config-check');
+    if (carrying && !existingCheck) {
+      const check = document.createElement('span');
+      check.className = 'routing-config-check';
+      check.innerHTML = '<svg viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>';
+      row.appendChild(check);
+    } else if (!carrying && existingCheck) {
+      existingCheck.remove();
     }
   }
 }
@@ -1533,6 +1672,32 @@ document.getElementById('auto-toggle').addEventListener('click', async () => {
     currentStatus = { connected: false, alive: false, stats: '{}', activeConfigId: '' };
   }
   renderRouting();
+});
+
+// --- "Блокировать рекламу YouTube" ------------------------------------------
+
+let adBlock = { enabled: false, supported: false };
+
+function renderAdBlock() {
+  document.getElementById('adblock-tile').classList.toggle('hidden', !adBlock.supported);
+  document.getElementById('adblock-toggle').classList.toggle('active', adBlock.enabled);
+}
+
+(async () => {
+  try {
+    const parsed = JSON.parse(await GetAdBlock());
+    adBlock = { enabled: !!parsed.enabled, supported: !!parsed.supported };
+  } catch (e) {
+    adBlock = { enabled: false, supported: false };
+  }
+  renderAdBlock();
+})();
+
+document.getElementById('adblock-toggle').addEventListener('click', async () => {
+  adBlock.enabled = !adBlock.enabled;
+  renderAdBlock();
+  await SetAdBlock(adBlock.enabled);
+  diag(Cat.UI, 'adBlock', { enabled: adBlock.enabled });
 });
 
 // --- "Поддерживать соединение" -------------------------------------------

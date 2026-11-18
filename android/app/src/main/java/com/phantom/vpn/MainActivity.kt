@@ -1,6 +1,17 @@
 package com.phantom.vpn
 
+import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
+import androidx.compose.animation.togetherWith
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
@@ -82,7 +93,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.Dispatchers
 
-private enum class Screen { MAIN, SETTINGS, LOG, POPULAR_RESOURCES }
+private enum class Screen { MAIN, SETTINGS, LOG, POPULAR_RESOURCES, APPS }
 
 class MainActivity : ComponentActivity() {
 
@@ -430,6 +441,14 @@ private fun PhantomApp(
                     RoutingStore.markSitesDirty()
                 },
             )
+            Screen.APPS -> AppPickerScreen(
+                onBack = { screen = Screen.MAIN },
+                onToggle = { pkg ->
+                    RoutingStore.toggleApp(context, pkg)
+                    PhantomVpnService.applyRoutingToActiveTunnel()
+                    PhantomVpnService.resetMisroutedFlows()
+                },
+            )
             Screen.SETTINGS -> SettingsScreen(
                 onBack = { screen = Screen.MAIN },
                 onViewLog = { screen = Screen.LOG },
@@ -518,6 +537,11 @@ private fun PhantomApp(
                     RoutingStore.markSitesDirty()
                 },
                 onOpenPopular = { screen = Screen.POPULAR_RESOURCES },
+                onOpenApps = { screen = Screen.APPS },
+                onRemoveApp = { pkg ->
+                    RoutingStore.toggleApp(context, pkg)
+                    PhantomVpnService.applyRoutingToActiveTunnel()
+                },
                 // Clearing sitesDirty happens once the reconnect actually
                 // lands (PhantomVpnService.connect(), right after applying
                 // routing to the fresh tunnel) - not here, so an edit made
@@ -535,6 +559,16 @@ private fun PhantomApp(
                         if (granted) {
                             RoutingStore.toggleSmartConfig(context, id)
                             RoutingController.sync(context)
+                            // Unticking the last config while Умный VPN carries
+                            // traffic leaves nothing to carry it through. (With
+                            // others still ticked, the selector moves to one of
+                            // them straight away - internal/routing.Selector.)
+                            if (RoutingStore.smartConfigIds.isEmpty() &&
+                                RoutingStore.smartEnabled && !RoutingStore.autoEnabled &&
+                                state.status == ConnectionStatus.CONNECTED
+                            ) {
+                                onDisconnect()
+                            }
                         }
                     }
                 },
@@ -666,6 +700,8 @@ private fun MainScreen(
     onRemoveResource: (PopularResource) -> Unit,
     onToggleSmartConfig: (String) -> Unit,
     onOpenPopular: () -> Unit,
+    onOpenApps: () -> Unit,
+    onRemoveApp: (String) -> Unit,
     onApplySites: () -> Unit,
     onEditConfig: (SavedConfig) -> Unit,
     onAddConfig: () -> Unit,
@@ -819,6 +855,8 @@ private fun MainScreen(
                     onToggleConfig = onToggleSmartConfig,
                     onOpenPopular = onOpenPopular,
                     onApplySites = onApplySites,
+                    onOpenApps = onOpenApps,
+                    onRemoveApp = onRemoveApp,
                 )
                 else -> ResourcesPage(
                     resources = resources,
@@ -933,7 +971,7 @@ private fun NavStyleIcon(iconRes: Int, tint: Color?) {
 // Set as type alone, not a tile: small capitals, wide tracking, a hairline
 // either side - muted while off, the brand gradient while on.
 @Composable
-private fun BestConnectButton(enabled: Boolean, onToggle: (Boolean) -> Unit) {
+private fun BestConnectButton(enabled: Boolean, connected: Boolean, onToggle: (Boolean) -> Unit) {
     val lineOff = TextMuted.copy(alpha = 0.7f)
     // Short enough that hairlines, pill and words fit a phone's width in one
     // line - the words wrapped onto two before, which also pushed the whole
@@ -950,8 +988,27 @@ private fun BestConnectButton(enabled: Boolean, onToggle: (Boolean) -> Unit) {
                 .height(1.dp)
                 .background(Brush.horizontalGradient(listOf(Color.Transparent, if (enabled) Primary else lineOff))),
         )
+        // "Подключиться к лучшей" becomes "Подключено" once this mode has the
+        // tunnel up: the new words rise into place as the old ones sink and
+        // fade, and while connected the ring breathes slowly.
+        val breathe = rememberInfiniteTransition(label = "bestBreathe")
+        val glow by breathe.animateFloat(
+            initialValue = 0.55f,
+            targetValue = 1f,
+            animationSpec = infiniteRepeatable(tween(1400), RepeatMode.Reverse),
+            label = "bestGlow",
+        )
+        AnimatedContent(
+            targetState = enabled && connected,
+            transitionSpec = {
+                (fadeIn(tween(380, delayMillis = 90)) + slideInVertically(tween(420)) { it / 2 } +
+                    scaleIn(tween(420), initialScale = 0.92f)) togetherWith
+                    (fadeOut(tween(200)) + slideOutVertically(tween(260)) { -it / 2 })
+            },
+            label = "bestLabel",
+        ) { isConnected ->
         Text(
-            I18n.t("auto_config").uppercase(),
+            I18n.t(if (isConnected) "best_connected" else "auto_config").uppercase(),
             maxLines = 1,
             softWrap = false,
             style = TextStyle(
@@ -972,6 +1029,7 @@ private fun BestConnectButton(enabled: Boolean, onToggle: (Boolean) -> Unit) {
                     if (enabled) Brush.linearGradient(BrandGradient) else Brush.linearGradient(listOf(SurfaceOutline, SurfaceOutline)),
                     RoundedCornerShape(50),
                 )
+                .graphicsLayer(alpha = if (isConnected) glow.coerceAtLeast(0.8f) else 1f)
                 .toggleable(value = enabled, role = Role.Switch, onValueChange = onToggle)
                 .padding(start = 16.dp, end = 14.dp, top = 9.dp, bottom = 9.dp)
                 // While on, the letters are painted with the brand gradient:
@@ -990,6 +1048,7 @@ private fun BestConnectButton(enabled: Boolean, onToggle: (Boolean) -> Unit) {
                     },
                 ),
         )
+        }
         Box(
             Modifier
                 .width(lineWidth)
@@ -1022,6 +1081,7 @@ private fun RelaysSection() {
         },
     )
     KeepAliveTile()
+    AdBlockTile()
 
     run {
         Spacer(modifier = Modifier.height(12.dp))
@@ -1103,6 +1163,39 @@ private fun RelaySwitchTile(enabled: Boolean, onToggle: (Boolean) -> Unit) {
             modifier = Modifier.weight(1f),
         )
         GradientSwitch(checked = enabled, onCheckedChange = onToggle)
+    }
+}
+
+// "Блокировать рекламу YouTube" - internal/routing/adblock.go. Live: the
+// running tunnel picks it up on the next DNS query.
+@Composable
+private fun AdBlockTile() {
+    val context = LocalContext.current
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier.fillMaxWidth().padding(start = 18.dp, end = 8.dp, top = 6.dp),
+    ) {
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                I18n.t("adblock"),
+                color = TextPrimary,
+                fontSize = 15.sp,
+                fontWeight = FontWeight.SemiBold,
+            )
+            Text(
+                I18n.t("adblock_hint"),
+                color = TextSecondary,
+                fontSize = 12.5.sp,
+                lineHeight = 16.sp,
+            )
+        }
+        GradientSwitch(
+            checked = RoutingStore.adBlock,
+            onCheckedChange = {
+                RoutingStore.setAdBlock(context, it)
+                PhantomVpnService.applyRoutingToActiveTunnel()
+            },
+        )
     }
 }
 
@@ -1488,7 +1581,11 @@ private fun ConfigsPage(
                 if (configs.isNotEmpty()) {
                     item(key = HEADER_AUTO) {
                         InactiveOverlay(inactive = smartDriving) {
-                            BestConnectButton(enabled = autoEnabled && !smartDriving, onToggle = onToggleAuto)
+                            BestConnectButton(
+                                enabled = autoEnabled && !smartDriving,
+                                connected = status == ConnectionStatus.CONNECTED,
+                                onToggle = onToggleAuto,
+                            )
                         }
                     }
                 }

@@ -60,6 +60,13 @@ func saveSmartEnabled(on bool) {
 	saveSetting(smartEnabledFileName, boolToSetting(on), "0", "1", "0")
 }
 
+// "Блокировать рекламу YouTube" - see internal/routing/adblock.go.
+const adBlockFileName = "youtube_adblock"
+
+func loadAdBlock() bool { return loadSetting(adBlockFileName, "0", "1", "0") == "1" }
+
+func saveAdBlock(on bool) { saveSetting(adBlockFileName, boolToSetting(on), "0", "1", "0") }
+
 func loadAutoEnabled() bool { return loadSetting(autoEnabledFileName, "0", "1", "0") == "1" }
 
 func saveAutoEnabled(on bool) {
@@ -164,6 +171,8 @@ func saveAutoConfigs(ids []string) { saveStringList(autoConfigsFileName, ids) }
 // The returned channel closes once the new list's DNS pre-seeding is done -
 // see applySiteList, which waits on it.
 func applyRoutingToEngine() <-chan struct{} {
+	applyAppsPlatform(loadSmartApps())
+	applyAdBlockPlatform(loadAdBlock())
 	return applyRoutingPlatform(loadSmartSites(), loadSmartEnabled() && !loadAutoEnabled())
 }
 

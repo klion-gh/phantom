@@ -31,8 +31,8 @@ func TestResetMisroutedFlowsClosesOnlyNewlyListedDirectFlows(t *testing.T) {
 		},
 	)
 
-	site := tun.openRemote("tcp", "203.0.113.10:443")
-	other := tun.openRemote("tcp", "198.51.100.7:443")
+	site := tun.openRemote("tcp", "10.10.0.2:50000", "203.0.113.10:443")
+	other := tun.openRemote("tcp", "10.10.0.2:50000", "198.51.100.7:443")
 	if site == nil || other == nil {
 		t.Fatal("direct flows did not open")
 	}

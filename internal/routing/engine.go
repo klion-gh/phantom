@@ -39,10 +39,19 @@ type Engine struct {
 	// "internet went down in smart mode" question is mostly answered by
 	// these: listed sites should be a small share, and anything counted
 	// under emptyList means smart mode was tunnelling everything.
-	whyListed, whyDNS, whyEmptyList, whyAllMode, whyBadTarget, whyDirect atomic.Int64
+	whyListed, whyDNS, whyEmptyList, whyAllMode, whyBadTarget, whyDirect, whyApp atomic.Int64
 	// Split DNS: queries for listed names (tunnel) vs everything else (direct).
 	dnsListed, dnsUnlisted atomic.Int64
 	sites                  atomic.Int64
+	// How many apps are listed under "Приложения под обход", and how the
+	// platform tells whether a flow came from one of them (SetApps).
+	apps    atomic.Int64
+	ownerFn OwnerFunc
+
+	// Ad blocking - see adblock.go.
+	adBlock    atomic.Bool
+	adsBlocked atomic.Int64
+	ads        *DomainSet
 
 	// The list as last set, and how to look its names up (SetResolver).
 	entries []string
@@ -53,7 +62,9 @@ type Engine struct {
 const seedLookupTimeout = 8 * time.Second
 
 func NewEngine() *Engine {
-	return &Engine{mode: ModeAll, domains: NewDomainSet()}
+	ads := NewDomainSet()
+	ads.Set(adDomains)
+	return &Engine{mode: ModeAll, domains: NewDomainSet(), ads: ads}
 }
 
 // Domains exposes the underlying set so the DNS sniffer can learn into it.
@@ -105,6 +116,43 @@ func (e *Engine) SetSites(entries []string) <-chan struct{} {
 	return seedDomainIPs(e.domains, entries, resolve)
 }
 
+// OwnerFunc reports whether the flow from source ("ip:port", as the device
+// sent it) to target belongs to one of the listed apps. Platform glue: the
+// process table on Windows, the connection owner's uid on Android.
+type OwnerFunc func(network, source, target string) bool
+
+// SetApps installs the listed-apps check. count is how many apps are listed;
+// with none, no flow is ever attributed (and owner is never called).
+func (e *Engine) SetApps(count int, owner OwnerFunc) {
+	e.mu.Lock()
+	e.ownerFn = owner
+	e.mu.Unlock()
+	if owner == nil {
+		count = 0
+	}
+	if e.apps.Swap(int64(count)) != int64(count) {
+		diag.Event(diag.CatRoute, "apps", "count", count, "mode", e.Mode())
+	}
+}
+
+// TunnelApp decides a flow ShouldTunnel sent direct: true when it belongs to
+// a listed app, which sends it through the tunnel after all. Only in smart
+// mode - everything is tunnelled otherwise anyway.
+func (e *Engine) TunnelApp(network, source, target string) bool {
+	if e.apps.Load() == 0 || e.Mode() != ModeSmart {
+		return false
+	}
+	e.mu.RLock()
+	owner := e.ownerFn
+	e.mu.RUnlock()
+	if owner == nil || !owner(network, source, target) {
+		return false
+	}
+	e.whyApp.Add(1)
+	e.whyDirect.Add(-1)
+	return true
+}
+
 // DiagFields returns (and resets) the per-flow decision counts, plus the
 // engine's current state, as key/value pairs for a periodic summary line.
 func (e *Engine) DiagFields() []any {
@@ -118,6 +166,10 @@ func (e *Engine) DiagFields() []any {
 		"whyAllMode", e.whyAllMode.Swap(0),
 		"whyBadTarget", e.whyBadTarget.Swap(0),
 		"whyDirect", e.whyDirect.Swap(0),
+		"whyApp", e.whyApp.Swap(0),
+		"adBlock", e.adBlock.Load(),
+		"adsBlocked", e.adsBlocked.Swap(0),
+		"apps", e.apps.Load(),
 		"dnsListed", e.dnsListed.Swap(0),
 		"dnsUnlisted", e.dnsUnlisted.Swap(0),
 	}
@@ -229,7 +281,7 @@ func (e *Engine) ShouldTunnel(network, target string) bool {
 	// silently behave as if the VPN were off. Tunnelling instead is the safer
 	// reading of "I turned a VPN on": the UI is what stops the user getting
 	// here with nothing listed, and this is the backstop if they do.
-	if e.domains.Empty() {
+	if e.domains.Empty() && e.apps.Load() == 0 {
 		e.whyEmptyList.Add(1)
 		return true
 	}

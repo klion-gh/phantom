@@ -41,8 +41,11 @@ func newTestSelector(t *testing.T, initial map[string]int64) (*Selector, *fakePr
 		fake.results[yaml] = latency
 	}
 	var switches []string
+	var switchesMu sync.Mutex
 	s := NewSelector(fake.probe, func(c Candidate) {
+		switchesMu.Lock()
 		switches = append(switches, c.ID)
+		switchesMu.Unlock()
 	})
 	return s, fake, &switches
 }
@@ -215,6 +218,9 @@ func TestSelectorReselectsWhenCurrentRemovedFromList(t *testing.T) {
 	}
 
 	s.SetCandidates(candidates("b")) // user unticked a
+	if s.Current() != "b" {
+		t.Fatalf("expected an immediate move off the unticked config, got %q", s.Current())
+	}
 	s.Probe()
 
 	if s.Current() != "b" {

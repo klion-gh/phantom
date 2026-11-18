@@ -1,6 +1,21 @@
 package com.phantom.vpn
 
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
+import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.StrokeJoin
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.platform.LocalContext
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Image
@@ -57,6 +72,8 @@ fun RoutingPage(
     onToggleConfig: (String) -> Unit,
     onOpenPopular: () -> Unit,
     onApplySites: () -> Unit,
+    onOpenApps: () -> Unit,
+    onRemoveApp: (String) -> Unit,
 ) {
     Column(modifier = Modifier.fillMaxSize()) {
         Text(
@@ -101,6 +118,9 @@ fun RoutingPage(
                             onRemoveResource = onRemoveResource,
                             onApplySites = onApplySites,
                         )
+                        if (AppRouting.supported) {
+                            AppsSection(onOpenApps = onOpenApps, onRemoveApp = onRemoveApp)
+                        }
                         ConfigPickerSection(
                             configs = configs,
                             selected = RoutingStore.smartConfigIds,
@@ -555,15 +575,120 @@ private fun ConfigPickRow(
             }
             // The active config is the one actually carrying traffic right now -
             // worth distinguishing from "selected", which only means the selector
-            // is allowed to choose it.
-            if (selected && active) {
-                Box(
-                    modifier = Modifier
-                        .size(width = 26.dp, height = 4.dp)
-                        .clip(RoundedCornerShape(100.dp))
-                        .background(Brush.linearGradient(BrandGradient)),
-                )
+            // is allowed to choose it. Tapping it moves the tunnel to another
+            // ticked config, or disconnects when none is left.
+            AnimatedVisibility(
+                visible = selected && active,
+                enter = scaleIn(tween(260)) + fadeIn(tween(200)),
+                exit = scaleOut(tween(180)) + fadeOut(tween(180)),
+            ) {
+                CheckBadge()
             }
+        }
+    }
+}
+
+/** A tick in a gradient circle - "this one is carrying traffic" / "picked". */
+@Composable
+fun CheckBadge(size: Int = 24) {
+    Box(
+        contentAlignment = Alignment.Center,
+        modifier = Modifier
+            .size(size.dp)
+            .clip(CircleShape)
+            .background(Brush.linearGradient(BrandGradient)),
+    ) {
+        Canvas(modifier = Modifier.size((size * 0.62f).dp)) {
+            val w = this.size.width
+            val h = this.size.height
+            val path = Path().apply {
+                moveTo(w * 0.12f, h * 0.52f)
+                lineTo(w * 0.40f, h * 0.80f)
+                lineTo(w * 0.90f, h * 0.22f)
+            }
+            drawPath(
+                path,
+                color = Color.White,
+                style = Stroke(width = w * 0.16f, cap = StrokeCap.Round, join = StrokeJoin.Round),
+            )
+        }
+    }
+}
+
+/**
+ * "Приложения под обход": the listed apps, each with its icon and an ×, and a
+ * button into the picker ([AppPickerScreen]).
+ */
+@Composable
+private fun AppsSection(onOpenApps: () -> Unit, onRemoveApp: (String) -> Unit) {
+    val context = LocalContext.current
+    SectionTile {
+        Text(
+            I18n.t("smart_vpn_apps"),
+            color = TextPrimary,
+            fontSize = 15.sp,
+            fontWeight = FontWeight.SemiBold,
+        )
+        Spacer(Modifier.height(4.dp))
+        Text(
+            I18n.t("smart_vpn_apps_hint"),
+            color = TextSecondary,
+            fontSize = 13.sp,
+            lineHeight = 18.sp,
+        )
+        Spacer(Modifier.height(10.dp))
+        val apps = RoutingStore.apps.sortedBy { AppRouting.label(context, it).lowercase() }
+        if (apps.isEmpty()) {
+            Text(
+                I18n.t("smart_vpn_no_apps"),
+                color = TextMuted,
+                fontSize = 13.sp,
+                modifier = Modifier.fillMaxWidth(),
+                textAlign = TextAlign.Center,
+            )
+        }
+        apps.forEach { pkg ->
+            var icon by remember(pkg) { mutableStateOf<ImageBitmap?>(null) }
+            LaunchedEffect(pkg) {
+                icon = withContext(Dispatchers.IO) { AppRouting.icon(context, pkg) }
+            }
+            val label = remember(pkg) { AppRouting.label(context, pkg) }
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.fillMaxWidth().padding(vertical = 3.dp),
+            ) {
+                AppIcon(icon, label, size = 28)
+                Spacer(Modifier.width(10.dp))
+                Text(
+                    label,
+                    color = TextPrimary,
+                    fontSize = 14.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f),
+                )
+                IconButton(onClick = { onRemoveApp(pkg) }, modifier = Modifier.size(32.dp)) {
+                    Text("×", color = TextSecondary, fontSize = 18.sp)
+                }
+            }
+        }
+        Spacer(Modifier.height(8.dp))
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.Center,
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(14.dp))
+                .background(SurfaceHigh)
+                .clickable(onClick = onOpenApps)
+                .padding(vertical = 12.dp),
+        ) {
+            Text(
+                I18n.t("apps_choose"),
+                color = Primary,
+                fontSize = 14.sp,
+                fontWeight = FontWeight.SemiBold,
+            )
         }
     }
 }

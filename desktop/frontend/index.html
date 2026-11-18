@@ -63,6 +63,16 @@
                 <button id="keepalive-toggle" class="toggle-switch"><span class="toggle-switch-thumb"></span></button>
               </div>
 
+              <!-- "Блокировать рекламу YouTube" (internal/routing/adblock.go):
+                   ad hosts answered NXDOMAIN on this machine, both modes. -->
+              <div id="adblock-tile" class="relay-row keepalive-row hidden">
+                <div class="keepalive-text">
+                  <span class="relay-row-title" data-i18n="adblock">Блокировать рекламу YouTube</span>
+                  <span class="keepalive-status" data-i18n="adblock_hint">Рекламные серверы Google не открываются</span>
+                </div>
+                <button id="adblock-toggle" class="toggle-switch"><span class="toggle-switch-thumb"></span></button>
+              </div>
+
               <div id="relay-group" class="tile-group hidden">
                 <div class="tile-group-header">
                   <span class="tile-group-title" data-i18n="relays">Ретрансляторы</span>
@@ -137,6 +147,19 @@
                     </div>
                   </div>
 
+                  <!-- "Приложения под обход": programs whose every connection
+                       goes through the tunnel, whatever site it is to. Picked
+                       from what's running or by path (desktop/apps.go). -->
+                  <div id="apps-tile" class="routing-tile hidden">
+                    <div class="routing-tile-title" data-i18n="smart_vpn_apps">Приложения под обход</div>
+                    <div class="routing-tile-hint" data-i18n="smart_vpn_apps_hint">Всё, что откроют эти программы, пойдёт через VPN.</div>
+                    <div id="app-list" class="site-list"></div>
+                    <div class="apps-add-row">
+                      <button id="btn-apps-running" class="routing-inline-btn lang-tile apps-add-btn" data-i18n="apps_from_running">Из запущенных</button>
+                      <button id="btn-apps-path" class="routing-inline-btn lang-tile apps-add-btn" data-i18n="apps_by_path">Указать путь</button>
+                    </div>
+                  </div>
+
                   <div class="routing-tile">
                     <div class="routing-tile-title" data-i18n="smart_vpn_configs">Конфигурации для обхода</div>
                     <div class="routing-tile-hint" data-i18n="smart_vpn_configs_hint">Выберите одну или несколько. При нескольких Phantom сам переключится на ту, что на связи.</div>
@@ -171,6 +194,18 @@
         </div>
         <div class="content">
           <div id="popular-grid" class="popular-grid"></div>
+        </div>
+      </div>
+
+      <!-- Running programs, for "Приложения под обход" -->
+      <div id="screen-apps" class="screen hidden">
+        <div class="header">
+          <button id="btn-back-apps" class="icon-btn icon-btn-back"></button>
+          <div class="title" data-i18n="apps_running_title">Запущенные программы</div>
+        </div>
+        <div class="content">
+          <input id="apps-filter" class="text-input apps-filter" type="text" data-i18n-placeholder="apps_filter_ph" placeholder="Поиск" />
+          <div id="running-app-list" class="running-app-list"></div>
         </div>
       </div>
 

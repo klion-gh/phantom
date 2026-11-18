@@ -152,6 +152,13 @@ func (s *dnsSplitter) handleQuery(q []byte) {
 	if name := dnsQueryName(q); name != "" && s.route != nil {
 		decision = s.route(name)
 	}
+	if decision == RouteBlock {
+		if resp := dnsNXDomain(q); resp != nil {
+			s.reply(resp)
+			return
+		}
+		decision = RouteTunnelFirst
+	}
 	if decision == RouteDirect {
 		if rw := s.upstream(true); rw != nil {
 			s.stats.dnsViaDirect.Add(1)
@@ -322,6 +329,33 @@ func (s *dnsSplitter) close() {
 // dnsQueryName returns the first question's name from a DNS query message,
 // lowercased and without the trailing dot - or "" if it isn't a parseable
 // query, which the caller treats as "tunnel it", the safe default.
+// dnsNXDomain builds the "no such name" answer to query q: its header with
+// the response bit, recursion available and rcode 3, and its question echoed
+// back. nil if q isn't a well-formed single-question query.
+func dnsNXDomain(q []byte) []byte {
+	const headerLen = 12
+	if dnsQueryName(q) == "" || binary.BigEndian.Uint16(q[4:6]) != 1 {
+		return nil
+	}
+	i := headerLen
+	for i < len(q) && q[i] != 0 {
+		i += int(q[i]) + 1
+	}
+	end := i + 1 + 4 // root label, QTYPE, QCLASS
+	if end > len(q) {
+		return nil
+	}
+	resp := make([]byte, end)
+	copy(resp, q[:end])
+	flags := binary.BigEndian.Uint16(q[2:4])
+	flags = flags&0x7900 | 0x8000 | 0x0080 | 3 // keep opcode+RD; QR, RA, NXDOMAIN
+	binary.BigEndian.PutUint16(resp[2:4], flags)
+	binary.BigEndian.PutUint16(resp[6:8], 0)
+	binary.BigEndian.PutUint16(resp[8:10], 0)
+	binary.BigEndian.PutUint16(resp[10:12], 0)
+	return resp
+}
+
 func dnsQueryName(msg []byte) string {
 	const headerLen = 12
 	if len(msg) < headerLen {
