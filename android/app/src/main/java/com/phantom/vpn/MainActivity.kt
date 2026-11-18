@@ -1,6 +1,15 @@
 package com.phantom.vpn
 
 import androidx.compose.animation.AnimatedContent
+import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
+import androidx.compose.ui.input.nestedscroll.NestedScrollSource
+import androidx.compose.ui.input.nestedscroll.nestedScroll
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.layout.layout
+import androidx.compose.ui.unit.Constraints
+import androidx.compose.ui.platform.LocalDensity
+import kotlin.math.roundToInt
 import androidx.compose.ui.unit.Dp
 import dev.chrisbanes.haze.HazeState
 import dev.chrisbanes.haze.HazeStyle
@@ -116,6 +125,55 @@ fun Modifier.fadeTopEdge(fade: Dp = 22.dp): Modifier = this
         )
     }
 
+/**
+ * The main screen's header behaves as the top of the page: scrolling the
+ * list up first moves the header up and away (pre-scroll), and pulling down
+ * only brings it back once the list itself is back at its top (post-scroll) -
+ * exactly as if it were the list's first item, for whichever page is showing.
+ */
+class HeaderScroll : NestedScrollConnection {
+    var height by mutableFloatStateOf(0f)
+    var offset by mutableFloatStateOf(0f) // 0 (shown) .. -height (gone)
+    val visibleHeight: Float get() = (height + offset).coerceAtLeast(0f)
+
+    private fun move(dy: Float): Float {
+        val next = (offset + dy).coerceIn(-height, 0f)
+        val used = next - offset
+        offset = next
+        return used
+    }
+
+    override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset =
+        if (available.y < 0f) Offset(0f, move(available.y)) else Offset.Zero
+
+    override fun onPostScroll(consumed: Offset, available: Offset, source: NestedScrollSource): Offset =
+        if (available.y > 0f) Offset(0f, move(available.y)) else Offset.Zero
+}
+
+/** Lays [content] out at its full height but only shows what [state] says
+ *  is still on screen, shifted up by the scrolled-away part. */
+@Composable
+fun CollapsingHeader(state: HeaderScroll, content: @Composable () -> Unit) {
+    Box(
+        modifier = Modifier
+            .clipToBounds()
+            .layout { measurable, constraints ->
+                val placeable = measurable.measure(constraints.copy(minHeight = 0, maxHeight = Constraints.Infinity))
+                val full = placeable.height.toFloat()
+                if (state.height != full) {
+                    state.height = full
+                    state.offset = state.offset.coerceIn(-full, 0f)
+                }
+                val shown = (full + state.offset).roundToInt().coerceAtLeast(0)
+                layout(placeable.width, shown) {
+                    placeable.place(0, state.offset.roundToInt())
+                }
+            },
+    ) {
+        content()
+    }
+}
+
 /** Room a page's list leaves at its end so the last item can scroll clear of
  *  the floating nav island (and the system nav bar under it). */
 val IslandClearance = 120.dp
@@ -222,12 +280,13 @@ class MainActivity : ComponentActivity() {
                         onConnect = { config -> requestConnect(config) },
                         onDisconnect = { stopVpn() },
                         onEnsureVpnPermission = { onResult -> ensureVpnPermission(onResult) },
-                        // Top and sides only: the main screen's lists run on
-                        // under the system nav bar, with the floating nav
-                        // island keeping itself clear of it; the other
-                        // screens pad the bottom themselves (PhantomApp).
+                        // Sides only: the main screen runs under both system
+                        // bars - its header scrolls away under the status bar
+                        // and the lists run on under the nav bar, the island
+                        // keeping itself clear of it. The other screens pad
+                        // themselves (PhantomApp).
                         modifier = Modifier.windowInsetsPadding(
-                            WindowInsets.systemBars.only(WindowInsetsSides.Top + WindowInsetsSides.Horizontal),
+                            WindowInsets.systemBars.only(WindowInsetsSides.Horizontal),
                         ),
                     )
                 }
@@ -476,8 +535,8 @@ private fun PhantomApp(
 
     Box(modifier = modifier.fillMaxSize()) {
         when (screen) {
-            Screen.LOG -> Box(Modifier.navigationBarsPadding()) { LogScreen(onClose = { screen = Screen.SETTINGS }) }
-            Screen.POPULAR_RESOURCES -> Box(Modifier.navigationBarsPadding()) { PopularResourcesScreen(
+            Screen.LOG -> Box(Modifier.systemBarsPadding()) { LogScreen(onClose = { screen = Screen.SETTINGS }) }
+            Screen.POPULAR_RESOURCES -> Box(Modifier.systemBarsPadding()) { PopularResourcesScreen(
                 onBack = { screen = Screen.MAIN },
                 onToggle = { resource ->
                     RoutingStore.togglePopular(context, resource.domains)
@@ -485,7 +544,7 @@ private fun PhantomApp(
                     RoutingStore.markSitesDirty()
                 },
             ) }
-            Screen.APPS -> Box(Modifier.navigationBarsPadding()) { AppPickerScreen(
+            Screen.APPS -> Box(Modifier.systemBarsPadding()) { AppPickerScreen(
                 onBack = { screen = Screen.MAIN },
                 onToggle = { pkg ->
                     RoutingStore.toggleApp(context, pkg)
@@ -493,7 +552,7 @@ private fun PhantomApp(
                     PhantomVpnService.resetMisroutedFlows()
                 },
             ) }
-            Screen.SETTINGS -> Box(Modifier.navigationBarsPadding()) {
+            Screen.SETTINGS -> Box(Modifier.systemBarsPadding()) {
                 SettingsScreen(
                     onBack = { screen = Screen.MAIN },
                     onViewLog = { screen = Screen.LOG },
@@ -778,7 +837,14 @@ private fun MainScreen(
     // the pager insets its pages (contentPadding) while drawing edge to edge.
     // Top only: the pages run on to the screen's bottom edge, under the
     // floating nav island.
-    Column(modifier = modifier.blur(addResourceBlur).fillMaxSize().padding(top = 24.dp)) {
+    // The header is the top of the page, not a bar over it: it scrolls away
+    // with the list and comes back when the list is pulled back to its top
+    // (see HeaderScroll) - no line where the page meets it.
+    val headerScroll = remember { HeaderScroll() }
+    val statusBarPx = WindowInsets.statusBars.getTop(LocalDensity.current).toFloat()
+    Column(modifier = modifier.blur(addResourceBlur).fillMaxSize().nestedScroll(headerScroll)) {
+        CollapsingHeader(headerScroll) {
+        Column(modifier = Modifier.statusBarsPadding().padding(top = 24.dp)) {
         Row(
             verticalAlignment = Alignment.CenterVertically,
             modifier = Modifier.fillMaxWidth().padding(horizontal = screenGutter),
@@ -864,12 +930,20 @@ private fun MainScreen(
         }
 
         Spacer(modifier = Modifier.height(20.dp))
+        }
+        }
 
         Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
+        // Once the header has gone, the page scrolls on under the status bar;
+        // it fades out there so the clock and icons stay readable.
+        val underStatusBar = with(LocalDensity.current) {
+            (statusBarPx - headerScroll.visibleHeight).coerceAtLeast(0f).toDp()
+        }
         HorizontalPager(
             state = pagerState,
             modifier = Modifier
-                .fillMaxSize(),
+                .fillMaxSize()
+                .fadeTopEdge(underStatusBar),
             // Pages sit inset by the gutter but the pager spans the screen, so
             // nothing on a page is clipped short of the screen edge.
             contentPadding = PaddingValues(horizontal = screenGutter),
@@ -964,10 +1038,11 @@ private fun NavIslandHost(hazeState: HazeState) {
         modifier = Modifier
             .fillMaxSize()
             .navigationBarsPadding()
-            .padding(bottom = 14.dp),
+            .padding(start = screenGutter, end = screenGutter, bottom = 14.dp),
     ) {
         Box(
             modifier = Modifier
+                .fillMaxWidth()
                 .shadow(18.dp, shape, ambientColor = Color.Black.copy(alpha = 0.35f), spotColor = Color.Black.copy(alpha = 0.35f))
                 .clip(shape)
                 .hazeChild(state = hazeState, shape = shape)
@@ -986,7 +1061,7 @@ private fun NavIslandHost(hazeState: HazeState) {
 
 @Composable
 private fun NavIcons(currentPage: Int, onSelect: (Int) -> Unit) {
-    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
         NavBarItem(iconRes = R.drawable.ic_nav_lock, selected = currentPage == 0, onClick = { onSelect(0) })
         NavBarItem(iconRes = R.drawable.ic_nav_routing, selected = currentPage == 1, onClick = { onSelect(1) })
         NavBarItem(iconRes = R.drawable.ic_nav_globe, selected = currentPage == 2, onClick = { onSelect(2) })
@@ -1631,7 +1706,7 @@ private fun ConfigsPage(
             // currentHeaderItems).
             LazyColumn(
                 state = listState,
-                modifier = Modifier.weight(1f).fillMaxWidth().fadeTopEdge(),
+                modifier = Modifier.weight(1f).fillMaxWidth(),
                 contentPadding = PaddingValues(top = 10.dp, bottom = IslandClearance),
             ) {
                 // Explained before the tile it's about, not after - the user
@@ -1826,7 +1901,8 @@ private fun ResourcesPage(
     onAdd: () -> Unit,
     onDelete: (String) -> Unit,
 ) {
-    Column(modifier = Modifier.fillMaxSize()) {
+    val title: @Composable () -> Unit = {
+        Column {
         Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
             Text(
                 I18n.t("resources"),
@@ -1841,13 +1917,19 @@ private fun ResourcesPage(
         }
 
         Spacer(modifier = Modifier.height(10.dp))
+        }
+    }
 
+    Column(modifier = Modifier.fillMaxSize()) {
+        if (resources.isEmpty()) title()
         if (resources.isNotEmpty()) {
             LazyColumn(
-                modifier = Modifier.weight(1f).fadeTopEdge(),
+                modifier = Modifier.weight(1f),
                 verticalArrangement = Arrangement.spacedBy(14.dp),
-                contentPadding = PaddingValues(top = 10.dp, bottom = IslandClearance),
+                contentPadding = PaddingValues(bottom = IslandClearance),
             ) {
+                // The title scrolls with the list - no fixed line above it.
+                item(key = "resources-title") { title() }
                 items(resources, key = { it.id }) { resource ->
                     ResourceCard(
                         resource = resource,

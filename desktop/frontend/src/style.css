@@ -1942,18 +1942,18 @@ textarea::placeholder { color: var(--text-muted); }
 .popular-section-title:first-child { margin-top: 0; }
 
 /* --- No hard edges -------------------------------------------------------
-   The main screen's lists used to stop at a ruled line under the header and
-   another above the nav bar. Now they run to the window's bottom edge (under
-   the floating nav) and dissolve into the header over their first pixels. */
+   The header is part of the page (main.js moves #main-top into the visible
+   section's scroller), so it scrolls away with the list; at the bottom the
+   lists run on under the floating nav island to the window's edge. */
 #screen-main { position: relative; }
-#screen-main .main-body { padding-bottom: 0; }
-.config-list,
-.routing-scroll,
-.resource-list,
+#screen-main .main-body { padding: 0; }
+#screen-main .config-list,
+#screen-main .routing-scroll { padding: 0 34px 96px 20px; }
+/* Back out to the window's edges, where the header sat before. */
+.main-top { margin: 0 -34px 0 -20px; flex-shrink: 0; }
+/* The resource tiles no longer scroll on their own - their section does. */
+#screen-main .resource-list { flex: none; overflow: visible; padding: 0; }
 .content {
     -webkit-mask-image: linear-gradient(to bottom, transparent 0, #000 22px, #000 100%);
     mask-image: linear-gradient(to bottom, transparent 0, #000 22px, #000 100%);
 }
-.config-list,
-.routing-scroll,
-.resource-list { padding-top: 10px; padding-bottom: 96px; }

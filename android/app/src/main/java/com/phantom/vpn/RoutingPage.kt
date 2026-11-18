@@ -76,14 +76,6 @@ fun RoutingPage(
     onRemoveApp: (String) -> Unit,
 ) {
     Column(modifier = Modifier.fillMaxSize()) {
-        Text(
-            I18n.t("routing"),
-            color = TextSecondary,
-            fontSize = 13.sp,
-            fontWeight = FontWeight.SemiBold,
-            modifier = Modifier.fillMaxWidth(),
-        )
-        Spacer(Modifier.height(14.dp))
 
         // A manually-connected config is a whole-device VPN, exactly like
         // "Выбирать лучшую" - the only difference is who picked the server. It
@@ -93,10 +85,19 @@ fun RoutingPage(
         val blockedByManualConfig = connected && !autoEnabled && !RoutingStore.smartEnabled
 
         LazyColumn(
-            modifier = Modifier.fadeTopEdge(),
             verticalArrangement = Arrangement.spacedBy(14.dp),
-            contentPadding = PaddingValues(top = 10.dp, bottom = IslandClearance),
+            contentPadding = PaddingValues(bottom = IslandClearance),
         ) {
+            // The page title scrolls with the list - no fixed line above it.
+            item(key = "routing-title") {
+                Text(
+                    I18n.t("routing"),
+                    color = TextSecondary,
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
             item {
                 SmartVpnHeaderTile(
                     enabled = RoutingStore.smartEnabled,

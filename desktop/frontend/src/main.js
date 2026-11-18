@@ -1262,6 +1262,16 @@ function showSection(name) {
   for (const s of SECTIONS) {
     document.getElementById('section-' + s).classList.toggle('hidden', s !== name);
   }
+  // The header rides at the top of whichever section is showing.
+  const scroller = document.getElementById('section-' + name).querySelector('.config-list, .routing-scroll');
+  const top = document.getElementById('main-top');
+  if (scroller && top && top.parentElement !== scroller) {
+    scroller.prepend(top);
+    // scrollbar.js keeps whatever item was at the top in place across size
+    // changes; re-anchor it on the header now, or it scrolls the header away.
+    scroller.scrollTop = 0;
+    scroller.dispatchEvent(new Event('scroll'));
+  }
   for (const item of document.querySelectorAll('.nav-item')) {
     item.classList.toggle('active', item.dataset.section === name);
   }
@@ -1271,6 +1281,7 @@ function showSection(name) {
 for (const item of document.querySelectorAll('.nav-item')) {
   item.addEventListener('click', () => showSection(item.dataset.section));
 }
+showSection('configs');
 
 async function reloadRoutingState() {
   try {

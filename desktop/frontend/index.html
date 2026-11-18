@@ -10,6 +10,10 @@
     <div id="app">
       <!-- Main screen: config tiles on the left, resource-reachability tiles on the right -->
       <div id="screen-main" class="screen">
+        <!-- The header is the top of the page, not a bar over it: showSection
+             moves this block into the visible section's scroller, so it
+             scrolls away with the list - no line where the two meet. -->
+        <div id="main-top" class="main-top">
         <div class="header">
           <div class="emblem-wrap"><img src="./src/assets/images/phantom-emblem.png" class="emblem" alt="" /></div>
           <div class="title">Phantom</div>
@@ -20,6 +24,7 @@
 
         <div id="update-progress" class="update-progress hidden"><div id="update-progress-bar" class="update-progress-bar"></div></div>
         <div id="update-banner" class="update-banner hidden"></div>
+        </div>
 
         <!-- Three sections, one visible at a time, switched by the bottom nav -
              the same structure (and order) as the Android client's pager, so the
@@ -102,10 +107,10 @@
           </div>
 
           <div id="section-routing" class="section-page hidden">
-            <div class="panel-header">
-              <div class="panel-title" data-i18n="routing">Маршрутизация</div>
-            </div>
             <div class="routing-scroll">
+              <div class="panel-header">
+                <div class="panel-title" data-i18n="routing">Маршрутизация</div>
+              </div>
               <div class="routing-block">
                 <div id="smart-toggle-row" class="routing-tile routing-tile-row">
                   <div class="routing-tile-text">
@@ -171,11 +176,13 @@
           </div>
 
           <div id="section-resources" class="section-page hidden">
-            <div class="panel-header">
-              <div class="panel-title" data-i18n="resources">Доступность ресурсов</div>
-              <button id="btn-add-resource" class="icon-btn" data-i18n-title="add_resource" title="Добавить ресурс">&#43;</button>
+            <div class="routing-scroll">
+              <div class="panel-header">
+                <div class="panel-title" data-i18n="resources">Доступность ресурсов</div>
+                <button id="btn-add-resource" class="icon-btn" data-i18n-title="add_resource" title="Добавить ресурс">&#43;</button>
+              </div>
+              <div id="resource-list" class="resource-list"></div>
             </div>
-            <div id="resource-list" class="resource-list"></div>
           </div>
         </div>
 

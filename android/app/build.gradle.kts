@@ -24,8 +24,8 @@ android {
         applicationId = "com.phantom.vpn"
         minSdk = 24
         targetSdk = 34
-        versionCode = 50
-        versionName = "2.8.2"
+        versionCode = 51
+        versionName = "2.8.3"
     }
 
     signingConfigs {
