@@ -161,13 +161,11 @@ func dialName(ctx context.Context, cfg *TLSClientConfig, addr string) (net.Conn,
 	if err != nil {
 		return nil, nil, fmt.Errorf("%w: %w", errTCPDial, err)
 	}
-	var conn net.Conn
-	for _, target := range targets {
-		conn, err = dialer.DialContext(ctx, "tcp", target)
-		if err == nil {
-			break
-		}
-	}
+	// IPv4 and IPv6 raced, so a server whose IPv4 is blocked is reached over
+	// IPv6 in a fraction of a second instead of after a full timeout.
+	conn, err := dialRace(ctx, func(ctx context.Context, target string) (net.Conn, error) {
+		return dialer.DialContext(ctx, "tcp", target)
+	}, targets)
 	if err != nil {
 		return nil, nil, fmt.Errorf("%w: %w", errTCPDial, err)
 	}

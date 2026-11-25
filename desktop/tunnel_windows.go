@@ -117,57 +117,54 @@ func StartWindows(configYAML string, onNetworkChanged func()) (*WinTunnel, error
 	}
 
 	// Resolve every configured endpoint (cfg.ServerList - one primary or a
-	// failover list, all serving the same domain/cert). Each distinct IP needs
-	// its own /32 bypass route below, since the failover dialer may connect to
-	// any of them and whichever it picks must escape the tunnel it's building.
+	// failover list, all serving the same domain/cert), IPv4 and IPv6 alike -
+	// a server blocked by its IPv4 address may still be reachable over IPv6.
+	//
+	// Each distinct IPv4 address needs its own /32 bypass route below, since
+	// the dialer may connect to any of them and whichever it picks must escape
+	// the tunnel it's building. IPv6 needs none: this tunnel only takes over
+	// IPv4 (see halfDefaultRoutes), so an IPv6 connection to the server goes
+	// out the physical network as it is.
+	//
+	// The dialer is handed the hostnames, resolved through a StaticResolver of
+	// exactly these addresses: a fresh lookup at dial time (DNS round-robin,
+	// TTL) could otherwise land on an IPv4 address with no bypass route and be
+	// captured by the tunnel. SNI stays cfg.Domain either way.
+	//
+	// directDNSResolver, not net.DefaultResolver alone: this runs on every
+	// connect/reconnect, and net.DefaultResolver on Windows defers to whichever
+	// adapter's DNS server the OS currently prefers - right after a previous
+	// Phantom session's Wintun adapter goes away, Windows can keep preferring a
+	// now-gone adapter's DNS setting for a stretch, and a lookup landing on a
+	// dead adapter stalls instead of failing fast. LookupDual bounds how long a
+	// slow AAAA answer may add to the connect.
 	endpoints := cfg.ServerList()
-	var serverIPs []string // distinct IPs to add /32 bypass routes for
-	var dialAddrs []string // ip:port the failover dialer will use (see below)
+	var serverIPs []string // distinct IPv4 addresses to add /32 bypass routes for
+	var dialAddrs []string // host:port per endpoint, resolved through resolved
+	resolved := transport.StaticResolver{}
 	seen := map[string]bool{}
 	for _, ep := range endpoints {
-		host, port, splitErr := net.SplitHostPort(ep)
+		host, _, splitErr := net.SplitHostPort(ep)
 		if splitErr != nil {
 			return nil, fmt.Errorf("invalid server address %q: %w", ep, splitErr)
 		}
-		// LookupIP with "ip4" (rather than net.LookupHost, which resolves both
-		// families) skips the AAAA query entirely - on this network the AAAA
-		// lookup for the server's domain was stalling for several seconds before
-		// falling back to A, which was most of the total connect time. The
-		// explicit timeout keeps a slow/unresponsive resolver from stalling
-		// connect indefinitely either way.
-		//
-		// directDNSResolver, not net.DefaultResolver alone: this runs on every
-		// connect/reconnect, and net.DefaultResolver on Windows defers to
-		// whichever adapter's DNS server the OS currently prefers - right after
-		// a previous Phantom session's Wintun adapter goes away, Windows can
-		// keep preferring a now-gone adapter's DNS setting for a stretch, and a
-		// lookup landing on a dead adapter stalls instead of failing fast.
-		// Resolving via a fixed public server directly sidesteps whichever
-		// adapter Windows currently thinks is best.
 		resolveCtx, resolveCancel := context.WithTimeout(context.Background(), 5*time.Second)
-		ips, resolveErr := directDNSResolver.LookupIP(resolveCtx, "ip4", host)
+		ips, resolveErr := transport.LookupDual(resolveCtx, directDNSResolver, host)
 		resolveCancel()
 		if resolveErr != nil {
 			log.Printf("resolve endpoint %q failed (skipping): %v", ep, resolveErr)
 			continue
 		}
+		resolved[host] = append(resolved[host], ips...)
+		dialAddrs = append(dialAddrs, ep)
 		for _, ip := range ips {
-			s := ip.String()
-			// The dialer connects to these resolved IPs directly (not the
-			// hostname) so every address it can pick is guaranteed to have a
-			// /32 bypass route below - otherwise a hostname re-resolving to a
-			// different IP at dial time (DNS round-robin/TTL) would land on an
-			// IP with no bypass route and get captured by the tunnel. SNI/Host
-			// stay cfg.Domain regardless of the dial address, so the real cert
-			// still validates.
-			dialAddrs = append(dialAddrs, net.JoinHostPort(s, port))
-			if !seen[s] {
+			if s := ip.String(); ip.To4() != nil && !seen[s] {
 				seen[s] = true
 				serverIPs = append(serverIPs, s)
 			}
 		}
 	}
-	if len(serverIPs) == 0 {
+	if len(dialAddrs) == 0 {
 		return nil, fmt.Errorf("resolve server address: no endpoint resolved")
 	}
 
@@ -183,7 +180,10 @@ func StartWindows(configYAML string, onNetworkChanged func()) (*WinTunnel, error
 	// isn't fatal to the tunnel itself: those just fall back to riding the
 	// tunnel. The physical interface is the same for every endpoint, so the
 	// first resolved IP is enough.
-	physicalIfIndex, physicalIfErr := bestInterfaceIndex(serverIPs[0])
+	physicalIfIndex, physicalIfErr := uint32(0), fmt.Errorf("the server has no IPv4 address")
+	if len(serverIPs) > 0 {
+		physicalIfIndex, physicalIfErr = bestInterfaceIndex(serverIPs[0])
+	}
 	if physicalIfErr != nil {
 		log.Printf("physical interface unknown - smart routing and direct pings unavailable: %v", physicalIfErr)
 	}
@@ -202,6 +202,7 @@ func StartWindows(configYAML string, onNetworkChanged func()) (*WinTunnel, error
 		Fingerprint: cfg.Fingerprint,
 		ServerAddr:  cfg.Server,
 		ServerAddrs: dialAddrs,
+		Resolver:    resolved,
 		RelayDomain: cfg.RelayDomain(),
 		PSK:         psk,
 		ServerPub:   serverPub,

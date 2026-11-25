@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"net"
-	"sort"
 	"sync"
 	"syscall"
 	"time"
@@ -190,7 +189,8 @@ func lastGoodIP(host string) string {
 }
 
 // resolveServer turns addr ("host:port") into the concrete addresses to dial,
-// IPv4 first. A literal IP passes straight through.
+// IPv4 first, then alternating with IPv6 (see LookupDual). A literal IP passes
+// straight through.
 func resolveServer(ctx context.Context, resolver IPLookuper, addr string) ([]string, error) {
 	host, port, err := net.SplitHostPort(addr)
 	if err != nil {
@@ -203,7 +203,7 @@ func resolveServer(ctx context.Context, resolver IPLookuper, addr string) ([]str
 		resolver = net.DefaultResolver
 	}
 	lookupCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
-	ips, lookupErr := resolver.LookupIP(lookupCtx, "ip", host)
+	ips, lookupErr := LookupDual(lookupCtx, resolver, host)
 	cancel()
 	if lookupErr != nil || len(ips) == 0 {
 		if ip := lastGoodIP(host); ip != "" {
@@ -215,7 +215,6 @@ func resolveServer(ctx context.Context, resolver IPLookuper, addr string) ([]str
 		}
 		return nil, fmt.Errorf("resolve %s: %w", host, lookupErr)
 	}
-	sort.SliceStable(ips, func(i, j int) bool { return ips[i].To4() != nil && ips[j].To4() == nil })
 	out := make([]string, len(ips))
 	for i, ip := range ips {
 		out[i] = net.JoinHostPort(ip.String(), port)

@@ -123,22 +123,22 @@ func probe(configYAML string, opts Options, then func(net.Conn, *protocol.Sessio
 			continue
 		}
 
-		// "ip4" (rather than a dual-stack lookup) skips the AAAA query, which on
-		// some networks stalls for several seconds before falling back to A.
+		// Both families: a server blocked by IPv4 can still answer over IPv6.
+		// LookupDual bounds how long a slow AAAA answer may hold things up.
 		resolveCtx, resolveCancel := context.WithTimeout(context.Background(), 5*time.Second)
-		ips, resolveErr := resolver.LookupIP(resolveCtx, "ip4", host)
+		ips, resolveErr := transport.LookupDual(resolveCtx, resolver, host)
 		resolveCancel()
 		if resolveErr != nil || len(ips) == 0 {
 			lastErr = fmt.Errorf("resolve server address %q: %w", host, resolveErr)
 			continue
 		}
 
-		// Dial the address just resolved rather than the hostname: handing the
-		// dialer a hostname has it do its own lookup through the system
-		// resolver, which is the one path ProtectFD can't reach. It also means
-		// the IP shown on the tile is the one that was actually timed. SNI stays
+		// Dial the addresses just resolved (raced, IPv4 first) through a static
+		// resolver: handing the dialer the hostname alone would have it look it
+		// up again, and the timing below shouldn't include DNS. SNI stays
 		// cfg.Domain, so the real certificate still validates.
-		tlsCfg.ServerAddr = net.JoinHostPort(ips[0].String(), port)
+		tlsCfg.ServerAddr = net.JoinHostPort(host, port)
+		tlsCfg.Resolver = transport.StaticResolver{host: ips}
 		dialCtx, dialCancel := context.WithTimeout(context.Background(), 8*time.Second)
 		start := time.Now()
 		conn, crypto, dialErr := transport.Dial(dialCtx, tlsCfg)
@@ -155,8 +155,11 @@ func probe(configYAML string, opts Options, then func(net.Conn, *protocol.Sessio
 			}
 		}
 		latency := time.Since(start)
-		conn.Close()
 		ip := ips[0].String()
+		if tcp, ok := conn.RemoteAddr().(*net.TCPAddr); ok {
+			ip = tcp.IP.String() // the address that actually answered
+		}
+		conn.Close()
 		if cfg.Relay != "" {
 			// What was timed is the relay path, but the tile is about the
 			// server: its IP, and the country looked up from it.
@@ -187,7 +190,7 @@ func serverIP(resolver transport.IPLookuper, endpoints []string) string {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	ips, err := resolver.LookupIP(ctx, "ip4", host)
+	ips, err := transport.LookupDual(ctx, resolver, host)
 	if err != nil || len(ips) == 0 {
 		return ""
 	}
