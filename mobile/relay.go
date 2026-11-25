@@ -5,9 +5,12 @@ package mobile
 import (
 	"encoding/json"
 	"sync"
+	"time"
 
 	"phantom/internal/config"
+	"phantom/internal/diag"
 	"phantom/internal/pingcheck"
+	"phantom/internal/relaypath"
 )
 
 // The app's "use a relay" setting, held here so every path into the core -
@@ -69,6 +72,46 @@ func withRelay(configYAML string) string {
 		return configYAML
 	}
 	return out
+}
+
+// pingVia probes configYAML with fn through the relay or directly, whichever
+// answers - see internal/relaypath.
+//
+// A failure is logged (at most once a minute per server): the app shows a
+// failed ping only as "no answer", and without the reason a blocked server,
+// a broken relay and a bad config all look the same.
+func pingVia(configYAML string, fn func(string, pingcheck.Options) (pingcheck.Result, error)) (pingcheck.Result, error) {
+	r, err := relaypath.Ping(configYAML, withRelay(configYAML), func(y string) (pingcheck.Result, error) {
+		return fn(y, pingOptions())
+	})
+	if err != nil {
+		logPingFail(configYAML, err)
+	}
+	return r, err
+}
+
+var (
+	pingFailMu   sync.Mutex
+	pingFailLast = map[string]time.Time{}
+)
+
+func logPingFail(configYAML string, err error) {
+	host := ""
+	if cfg, perr := config.ParseClientConfig([]byte(configYAML)); perr == nil {
+		host = cfg.Domain
+	}
+	pingFailMu.Lock()
+	if time.Since(pingFailLast[host]) < time.Minute {
+		pingFailMu.Unlock()
+		return
+	}
+	pingFailLast[host] = time.Now()
+	pingFailMu.Unlock()
+	relayAddrNow := ""
+	relayMu.Lock()
+	relayAddrNow = relayAddr
+	relayMu.Unlock()
+	diag.Event(diag.CatVPN, "pingFail", "host", host, "relay", relayAddrNow != "", "err", err.Error())
 }
 
 // PingRelay times a TCP connect to a relay, around the VPN: a JSON blob

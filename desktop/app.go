@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"phantom/internal/geoip"
+	"phantom/internal/relaypath"
 	"phantom/internal/routing"
 
 	"github.com/wailsapp/wails/v2/pkg/runtime"
@@ -187,19 +188,35 @@ func (a *App) Connect(configID string, configYAML string) string {
 	a.mu.Unlock()
 
 	log.Println("connect: establishing tunnel")
-	configYAML = withRelaySetting(configYAML)
 	connectStart := time.Now()
 	diag(diagCatVPN, "connectStart",
 		"configID", configID,
 		"smartEnabled", loadSmartEnabled(),
 		"autoEnabled", loadAutoEnabled(),
 	)
-	tun, err := startTunnel(configID, configYAML, func() {
-		log.Println("underlying network changed, reconnecting")
-		diag(diagCatVPN, "networkChanged", "configID", configID)
-		runtime.EventsEmit(a.ctx, "tunnel:reconnecting")
-		a.attemptReconnect(configID, configYAML, 1)
-	})
+	// Through the relay and directly, preferred path first - see
+	// internal/relaypath: a server the relay can't reach (blocked by its IPv4
+	// address) may still answer directly, over IPv6.
+	directYAML := configYAML
+	paths := relaypath.Order(directYAML, withRelaySetting(directYAML))
+	var tun activeTunnel
+	var err error
+	for i, y := range paths {
+		used := y
+		tun, err = startTunnel(configID, used, func() {
+			log.Println("underlying network changed, reconnecting")
+			diag(diagCatVPN, "networkChanged", "configID", configID)
+			runtime.EventsEmit(a.ctx, "tunnel:reconnecting")
+			a.attemptReconnect(configID, used, 1)
+		})
+		if err == nil {
+			relaypath.Report(directYAML, used)
+			break
+		}
+		if i+1 < len(paths) {
+			diag(diagCatVPN, "pathFallback", "configID", configID, "relayFirst", used != directYAML, "err", err.Error())
+		}
+	}
 	if err != nil {
 		log.Printf("connect failed: %v", err)
 		diag(diagCatVPN, "connectFail",

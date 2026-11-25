@@ -5,6 +5,7 @@ import (
 
 	"phantom/internal/daemonapi"
 	"phantom/internal/pingcheck"
+	"phantom/internal/relaypath"
 )
 
 // pingConfig pings a config's server from outside the tunnel. This process
@@ -12,7 +13,11 @@ import (
 // running the service makes the handshake; when it isn't, there is no tunnel
 // and the default route already goes around nothing.
 func pingConfig(configYAML string) (pingcheck.Result, error) {
-	configYAML = withRelaySetting(configYAML)
+	// Through the relay or directly, whichever answers - see internal/relaypath.
+	return relaypath.Ping(configYAML, withRelaySetting(configYAML), pingOnce)
+}
+
+func pingOnce(configYAML string) (pingcheck.Result, error) {
 	var reply daemonapi.PingReply
 	err := withDaemon(false, func(c *daemonapi.Client) error {
 		var callErr error
@@ -39,7 +44,14 @@ func checkDirect() error {
 }
 
 func checkConfigInternet(configYAML string) (int64, error) {
-	configYAML = withRelaySetting(configYAML)
+	r, err := relaypath.Ping(configYAML, withRelaySetting(configYAML), func(y string) (pingcheck.Result, error) {
+		ms, err := checkConfigOnce(y)
+		return pingcheck.Result{LatencyMs: ms}, err
+	})
+	return r.LatencyMs, err
+}
+
+func checkConfigOnce(configYAML string) (int64, error) {
 	ms, err := daemonCheck(daemonapi.CheckArgs{Kind: daemonapi.CheckConfig, YAML: configYAML})
 	if errors.Is(err, daemonapi.ErrNotRunning) {
 		r, err := pingcheck.Internet(configYAML, pingcheck.Options{})

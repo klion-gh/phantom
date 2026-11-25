@@ -39,6 +39,7 @@ import (
 	"phantom/internal/geoip"
 	"phantom/internal/netstack"
 	"phantom/internal/pingcheck"
+	"phantom/internal/relaypath"
 	"phantom/internal/routing"
 	"phantom/internal/transport"
 	"phantom/internal/tunnel"
@@ -171,8 +172,37 @@ func Start(configYAML string, tunFD int, mtu int, protector Protector) (*Tunnel,
 	if mtu <= 0 {
 		mtu = 1500
 	}
+	// Through the relay and directly, preferred path first - see
+	// internal/relaypath: a server the relay can't reach (blocked by its IPv4
+	// address) may still answer directly, over IPv6.
+	paths := relaypath.Order(configYAML, withRelay(configYAML))
+	var lastErr error
+	for i, y := range paths {
+		t, err := startConfig(y, tunFD, mtu, protector)
+		if err == nil {
+			relaypath.Report(configYAML, y)
+			return t, nil
+		}
+		lastErr = err
+		var ce *connectError
+		if !errors.As(err, &ce) {
+			return nil, err
+		}
+		if i+1 < len(paths) {
+			diag.Event(diag.CatVPN, "pathFallback", "relayFirst", y != configYAML, "err", err.Error())
+		}
+	}
+	return nil, lastErr
+}
 
-	configYAML = withRelay(configYAML)
+// connectError is Start failing to reach the server at all - the one failure
+// another path (relay or direct) might not have.
+type connectError struct{ err error }
+
+func (e *connectError) Error() string { return "connect: " + e.err.Error() }
+func (e *connectError) Unwrap() error { return e.err }
+
+func startConfig(configYAML string, tunFD int, mtu int, protector Protector) (*Tunnel, error) {
 	cfg, err := config.ParseClientConfig([]byte(configYAML))
 	if err != nil {
 		return nil, fmt.Errorf("parse config: %w", err)
@@ -219,7 +249,7 @@ func Start(configYAML string, tunFD int, mtu int, protector Protector) (*Tunnel,
 	if err != nil {
 		pool.Close()
 		cancel()
-		return nil, fmt.Errorf("connect: %w", err)
+		return nil, &connectError{err}
 	}
 
 	linkEP, err := fdbased.New(&fdbased.Options{
@@ -392,7 +422,7 @@ func (t *Tunnel) IsAlive() bool {
 // this gomobile-safe, same pattern as Stats). The actual work lives in
 // internal/pingcheck, shared with the Windows app.
 func Ping(configYAML string) (string, error) {
-	result, err := pingcheck.PingWith(withRelay(configYAML), pingOptions())
+	result, err := pingVia(configYAML, pingcheck.PingWith)
 	if err != nil {
 		return "", err
 	}

@@ -6,6 +6,7 @@ import (
 	"golang.org/x/sys/windows"
 
 	"phantom/internal/pingcheck"
+	"phantom/internal/relaypath"
 )
 
 // The physical interface config pings and auto-select probes are pinned to
@@ -54,7 +55,10 @@ func bindSocketToInterface(s windows.Handle, ifIndex uint32) error {
 
 // pingConfig pings a config's server around the tunnel - see pingOptions.
 func pingConfig(configYAML string) (pingcheck.Result, error) {
-	return pingcheck.PingWith(withRelaySetting(configYAML), pingOptions())
+	// Through the relay or directly, whichever answers - see internal/relaypath.
+	return relaypath.Ping(configYAML, withRelaySetting(configYAML), func(y string) (pingcheck.Result, error) {
+		return pingcheck.PingWith(y, pingOptions())
+	})
 }
 
 // checkDirect: is there internet around the tunnel - see pingcheck.Direct.
@@ -63,7 +67,9 @@ func checkDirect() error { return pingcheck.Direct(pingOptions()) }
 // checkConfigInternet: does a config's server, dialed on its own around the
 // tunnel and through the relay when one is in use, carry internet.
 func checkConfigInternet(configYAML string) (int64, error) {
-	r, err := pingcheck.Internet(withRelaySetting(configYAML), pingOptions())
+	r, err := relaypath.Ping(configYAML, withRelaySetting(configYAML), func(y string) (pingcheck.Result, error) {
+		return pingcheck.Internet(y, pingOptions())
+	})
 	return r.LatencyMs, err
 }
 

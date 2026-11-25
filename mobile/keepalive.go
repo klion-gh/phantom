@@ -71,7 +71,7 @@ func NewKeepAlive(listener KeepAliveListener) *KeepAlive {
 		},
 		Config: func(ctx context.Context, yaml string) (int64, error) {
 			return linkguard.Bound(ctx, func() (int64, error) {
-				r, err := pingcheck.Internet(withRelay(yaml), pingOptions())
+				r, err := pingVia(yaml, pingcheck.Internet)
 				return r.LatencyMs, err
 			})
 		},
