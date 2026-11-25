@@ -1,0 +1,1216 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Пульт Phantom</title>
+<style>
+/* Layout: operator console. Status strip, then map + server list side by side, then the roadmap board in three columns. */
+:root {
+  --bg: #eceef5;
+  --surface: #ffffff;
+  --surface-2: #e3e6f0;
+  --ink: #191b2e;
+  --muted: #585d7c;
+  --line: #d2d6e5;
+  --accent: #5a44d4;
+  --accent-soft: #e6e1ff;
+  --ok: #157a3c;
+  --warn: #a65a06;
+  --bad: #c22b2b;
+  --off: #8a8fa6;
+  --sea: #dde2ef;
+  --land: #c4cadc;
+  --border: #eceef5;
+  --ru: #b8acef;
+  --font-body: "Segoe UI Variable Text", "Segoe UI", system-ui, -apple-system, "Noto Sans", sans-serif;
+  --font-mono: "Cascadia Mono", "JetBrains Mono", ui-monospace, Consolas, monospace;
+  --radius: 10px;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0f1120; --surface: #171a2c; --surface-2: #20243a; --ink: #e7e8f4; --muted: #9ca1c2;
+    --line: #2c3150; --accent: #a08fff; --accent-soft: #2b2652; --ok: #4ad37f; --warn: #f2b43c;
+    --bad: #ff7a7a; --off: #7d8299; --sea: #131628; --land: #2b3150; --border: #131628; --ru: #4a3f8f;
+    color-scheme: dark;
+  }
+}
+
+* { box-sizing: border-box; }
+/* Type grows a little with the screen: 14px on a laptop, ~16px at 1920, 17px from 2560 up. */
+body { margin: 0; background: var(--bg); color: var(--ink); font-family: var(--font-body); font-size: clamp(14px, 0.25vw + 11px, 17px); line-height: 1.5; }
+/* Uses the width of the monitor rather than a fixed 1360px column; the gutters
+   grow with it. Capped only on very wide screens, where lines would get too long. */
+.wrap { max-width: 2400px; margin: 0 auto; padding: clamp(16px, 2vw, 40px) clamp(12px, 2vw, 40px) 48px; display: grid; gap: clamp(16px, 1.4vw, 28px); }
+h1, h2, h3 { text-wrap: balance; margin: 0; }
+h1 { font-size: 1.65rem; font-weight: 700; letter-spacing: -0.01em; }
+h2 { font-size: 1.12rem; font-weight: 600; }
+.mono { font-family: var(--font-mono); font-size: 0.86em; }
+.muted { color: var(--muted); }
+.eyebrow { font-size: 0.72rem; letter-spacing: 0.09em; text-transform: uppercase; color: var(--muted); font-weight: 600; }
+
+header.top { display: flex; flex-wrap: wrap; align-items: end; justify-content: space-between; gap: 12px; }
+header.top p { margin: 4px 0 0; color: var(--muted); max-width: 70ch; }
+.src { font-size: 0.8rem; color: var(--muted); overflow-wrap: anywhere; }
+
+.stats { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
+.stat { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 14px 16px; display: grid; gap: 2px; }
+.stat .v { font-size: 1.6rem; font-weight: 600; font-variant-numeric: tabular-nums; }
+.stat .v small { font-size: 0.95rem; color: var(--muted); font-weight: 500; }
+.stat .bar { height: 6px; border-radius: 3px; background: var(--surface-2); overflow: hidden; margin-top: 6px; }
+.stat .bar span { display: block; height: 100%; background: var(--accent); }
+
+.panel { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); min-width: 0; }
+.panel-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px; padding: 14px 16px; border-bottom: 1px solid var(--line); }
+
+.geo { display: grid; grid-template-columns: minmax(0, 1fr); gap: 20px; }
+/* The map keeps its 960x500 shape (the pan/zoom maths relies on it), so its
+   height is capped by capping its width: never taller than ~62% of the window. */
+.map-box { padding: 8px; position: relative; max-width: calc(62vh * 960 / 500 + 16px); margin: 0 auto; }
+#map { width: 100%; height: auto; display: block; cursor: grab; touch-action: none; user-select: none; border-radius: 6px; }
+#map.dragging { cursor: grabbing; }
+#map:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+#map .sphere { fill: var(--sea); }
+#map .grat { fill: none; stroke: var(--line); stroke-width: 0.5; vector-effect: non-scaling-stroke; }
+#map .land { fill: var(--land); stroke: var(--border); stroke-width: 0.6; vector-effect: non-scaling-stroke; }
+#map .ru { fill: url(#hatch); stroke: var(--border); stroke-width: 0.6; vector-effect: non-scaling-stroke; }
+#map .arc { fill: none; stroke-width: 1.5; opacity: 0.75; vector-effect: non-scaling-stroke; }
+#map .srv { cursor: pointer; }
+.map-ctl { position: absolute; top: 18px; right: 18px; display: grid; gap: 6px; justify-items: end; }
+.map-ctl .zoom { display: grid; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; background: var(--surface); }
+.map-ctl .zoom button { border: 0; border-radius: 0; width: 34px; height: 34px; padding: 0; font-size: 1.1rem; line-height: 1; }
+.map-ctl .zoom button + button { border-top: 1px solid var(--line); }
+.map-ctl > button { background: var(--surface); }
+.map-hint { position: absolute; left: 18px; bottom: 16px; font-size: 0.75rem; color: var(--muted); background: color-mix(in srgb, var(--surface) 85%, transparent); padding: 2px 8px; border-radius: 6px; pointer-events: none; }
+#map .srv circle.core { stroke: var(--surface); stroke-width: 2; }
+#map .srv.sel circle.core { stroke: var(--ink); stroke-width: 2.5; }
+#map text { font-family: var(--font-body); font-size: 11px; fill: var(--ink); paint-order: stroke; stroke: var(--sea); stroke-width: 3px; }
+#map .origin circle { fill: var(--accent); }
+#map .pulse { fill: none; stroke-width: 1.5; transform-box: fill-box; transform-origin: center; animation: pulse 2.4s ease-out infinite; }
+@keyframes pulse { from { transform: scale(1); opacity: 0.8; } to { transform: scale(3.2); opacity: 0; } }
+@media (prefers-reduced-motion: reduce) { #map .pulse { animation: none; opacity: 0; } }
+.legend { display: flex; flex-wrap: wrap; gap: 14px; padding: 4px 10px 8px; font-size: 0.8rem; color: var(--muted); }
+.legend span { display: inline-flex; align-items: center; gap: 6px; }
+.legend i { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
+.legend i.hatch { border-radius: 2px; background: var(--ru); }
+
+.st-ok { --st: var(--ok); } .st-slow { --st: var(--warn); } .st-fail { --st: var(--bad); } .st-none { --st: var(--off); }
+
+.srv-list { list-style: none; margin: 0; padding: 8px; display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 330px), 1fr)); gap: 6px; }
+.srv-item { border-radius: 8px; padding: 10px; display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 4px 10px; align-items: center; align-content: start; cursor: pointer; border: 1px solid var(--line); }
+.srv-item:hover { background: var(--surface-2); }
+.srv-item.sel { border-color: var(--accent); background: var(--accent-soft); }
+.srv-item .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--st); }
+.srv-item .name { font-weight: 600; overflow-wrap: anywhere; }
+.srv-item .meta { grid-column: 2 / 4; font-size: 0.82rem; color: var(--muted); display: flex; flex-wrap: wrap; gap: 4px 12px; }
+.srv-item .why { grid-column: 2 / 4; font-size: 0.85rem; }
+.srv-item .why summary { cursor: pointer; color: var(--bad); }
+.srv-item .why pre { margin: 6px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; font-family: var(--font-mono); font-size: 0.75rem; color: var(--muted); }
+.srv-item .acts { grid-column: 2 / 4; display: flex; flex-wrap: wrap; gap: 6px; }
+.pill { font-size: 0.72rem; font-weight: 600; letter-spacing: 0.03em; padding: 2px 8px; border-radius: 99px; color: var(--st); background: color-mix(in srgb, var(--st) 14%, transparent); white-space: nowrap; }
+
+.empty { padding: 28px 18px; text-align: center; color: var(--muted); display: grid; gap: 8px; justify-items: center; }
+
+button, select, input, textarea { font: inherit; color: inherit; }
+button { cursor: pointer; border-radius: 7px; border: 1px solid var(--line); background: var(--surface); padding: 6px 12px; font-size: 0.86rem; font-weight: 500; }
+button:hover:not(:disabled) { background: var(--surface-2); }
+button:disabled { opacity: 0.6; cursor: progress; }
+button.primary { background: var(--accent); border-color: var(--accent); color: var(--surface); }
+button.primary:hover:not(:disabled) { filter: brightness(1.08); background: var(--accent); }
+button.small { padding: 3px 9px; font-size: 0.78rem; }
+button.danger { color: var(--bad); }
+button:focus-visible, select:focus-visible, input:focus-visible, textarea:focus-visible, .srv-item:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+select, input, textarea { background: var(--surface); border: 1px solid var(--line); border-radius: 7px; padding: 6px 9px; min-width: 0; }
+
+.seg { display: inline-flex; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+.seg button { border: 0; border-radius: 0; border-right: 1px solid var(--line); }
+.seg button:last-child { border-right: 0; }
+.seg button[aria-pressed="true"] { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+
+/* История: HISTORY.md, newest first. Date on the left, the entry beside it. */
+.hist-list { list-style: none; margin: 0; padding: 6px 16px 14px; display: grid; }
+.hist-item { display: grid; grid-template-columns: 7.5em minmax(0, 1fr); gap: 14px; padding: 10px 0; border-bottom: 1px solid var(--line); }
+.hist-item:last-child { border-bottom: 0; }
+.hist-date { font-family: var(--font-mono); font-size: 0.86em; color: var(--muted); padding-top: 1px; font-variant-numeric: tabular-nums; }
+.hist-body { min-width: 0; overflow-wrap: anywhere; }
+.hist-body p { margin: 0; }
+.hist-body ul { margin: 4px 0 0; padding-left: 1.2em; }
+.hist-body li { margin: 2px 0; }
+.hist-body code { font-family: var(--font-mono); font-size: 0.86em; background: var(--surface-2); padding: 0 4px; border-radius: 4px; }
+.hist-ver { color: var(--accent); font-weight: 600; }
+.hist-more { padding: 0 16px 14px; }
+@media (max-width: 640px) { .hist-item { grid-template-columns: 1fr; gap: 2px; } }
+
+.board { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; padding: 14px; }
+.col { background: var(--surface-2); border-radius: 9px; padding: 10px; display: grid; gap: 10px; align-content: start; min-width: 0; }
+.col-head { display: flex; justify-content: space-between; align-items: baseline; padding: 2px 4px; }
+.col-head h3 { font-size: 0.95rem; font-weight: 600; }
+.card { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 12px; display: grid; gap: 8px; min-width: 0; }
+.card .chips { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.prio { font-family: var(--font-mono); font-size: 0.72rem; font-weight: 500; padding: 1px 7px; border-radius: 5px; border: 1px solid currentColor; }
+.prio.P0 { color: var(--bad); } .prio.P1 { color: var(--warn); } .prio.P2 { color: var(--accent); } .prio.P3 { color: var(--off); }
+.area { font-size: 0.74rem; color: var(--muted); background: var(--surface-2); padding: 1px 8px; border-radius: 99px; }
+.card h4 { margin: 0; font-size: 0.95rem; font-weight: 600; line-height: 1.35; }
+.card details summary { font-size: 0.8rem; color: var(--muted); cursor: pointer; }
+.card details p { margin: 6px 0 0; font-size: 0.86rem; white-space: pre-wrap; }
+.card .files { font-family: var(--font-mono); font-size: 0.74rem; color: var(--muted); overflow-wrap: anywhere; }
+.card .acts { display: flex; flex-wrap: wrap; gap: 6px; }
+.col.done .card h4 { color: var(--muted); }
+
+dialog { border: 1px solid var(--line); border-radius: 12px; background: var(--surface); color: var(--ink); padding: 0; width: min(560px, calc(100vw - 32px)); }
+dialog::backdrop { background: color-mix(in srgb, var(--ink) 40%, transparent); }
+dialog form { display: grid; gap: 12px; padding: 18px; }
+.grid2 { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+label.f { display: grid; gap: 4px; font-size: 0.82rem; color: var(--muted); }
+label.f input, label.f select, label.f textarea { color: var(--ink); font-size: 0.92rem; }
+.dlg-acts { display: flex; justify-content: flex-end; gap: 8px; }
+
+.news-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 330px), 1fr)); gap: 10px; padding: 14px; }
+.news-card { text-align: left; display: grid; gap: 8px; align-content: start; padding: 14px; border: 1px solid var(--line); border-radius: 9px; background: var(--surface); font: inherit; color: inherit; cursor: pointer; }
+.news-card:hover { border-color: var(--accent); background: var(--surface); }
+.news-card .top { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.news-card h4 { margin: 0; font-size: 0.95rem; font-weight: 600; line-height: 1.35; }
+.news-card .teaser { font-size: 0.85rem; color: var(--muted); display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+.news-card .src { font-size: 0.75rem; color: var(--muted); }
+.date { font-family: var(--font-mono); font-size: 0.75rem; color: var(--muted); }
+.imp { font-size: 0.72rem; font-weight: 600; padding: 1px 8px; border-radius: 99px; color: var(--st); background: color-mix(in srgb, var(--st) 14%, transparent); }
+.imp-high { --st: var(--bad); } .imp-medium { --st: var(--warn); } .imp-low { --st: var(--off); }
+.covered { font-size: 0.72rem; font-weight: 600; padding: 1px 8px; border-radius: 99px; color: var(--ok); border: 1px solid color-mix(in srgb, var(--ok) 45%, transparent); }
+
+dialog.wide { width: min(760px, calc(100vw - 32px)); }
+.nd { display: grid; gap: 14px; padding: 18px 20px 20px; max-height: calc(100vh - 80px); overflow-y: auto; }
+.nd-head { display: flex; justify-content: space-between; align-items: center; gap: 10px; }
+.nd .chips { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.nd h2 { font-size: 1.2rem; line-height: 1.35; }
+.nd h3 { font-size: 0.78rem; letter-spacing: 0.07em; text-transform: uppercase; color: var(--muted); margin: 0 0 6px; }
+.nd p { margin: 0; white-space: pre-wrap; max-width: 70ch; }
+.nd-for { background: var(--accent-soft); border-radius: 9px; padding: 12px 14px; }
+.nd-actions, .nd-sources { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+.nd-actions li { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 10px; align-items: start; padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px; }
+.nd-actions li span { font-size: 0.9rem; }
+.task-link { font-size: 0.78rem; white-space: nowrap; }
+.nd-sources a { color: var(--accent); overflow-wrap: anywhere; }
+.card.flash { outline: 2px solid var(--accent); outline-offset: 2px; transition: outline-color 1.5s; }
+
+.foot { font-size: 0.82rem; color: var(--muted); max-width: 90ch; display: grid; gap: 6px; }
+.foot p { margin: 0; }
+#toast { position: fixed; left: 50%; transform: translateX(-50%); bottom: 18px; background: var(--ink); color: var(--bg); padding: 9px 16px; border-radius: 8px; font-size: 0.88rem; max-width: calc(100vw - 32px); }
+[hidden] { display: none !important; }
+
+/* Wide screens: the server list moves beside the map instead of under it, and
+   scrolls within the map's height. */
+@media (min-width: 1500px) {
+  .geo { grid-template-columns: minmax(0, 1.8fr) minmax(360px, 1fr); align-items: start; }
+  .geo > .panel:last-child { display: flex; flex-direction: column; max-height: calc(62vh + 120px); }
+  .geo .srv-list { overflow-y: auto; grid-template-columns: minmax(0, 1fr); }
+}
+@media (min-width: 2200px) {
+  .geo .srv-list { grid-template-columns: repeat(auto-fill, minmax(330px, 1fr)); }
+}
+@media (max-width: 900px) {
+  .board { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 760px) {
+  .stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .board { grid-template-columns: minmax(0, 1fr); }
+  .grid2 { grid-template-columns: minmax(0, 1fr); }
+}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="top">
+    <div>
+      <div class="eyebrow">Phantom · протокол v2 · локально</div>
+      <h1>Пульт Phantom</h1>
+      <p>Серверы из приложения Phantom на карте, проверка настоящим рукопожатием по кнопке и план доработки протокола против ML-классификации ТСПУ.</p>
+    </div>
+    <div class="src" id="src"></div>
+  </header>
+
+  <section class="stats" aria-label="Сводка">
+    <div class="stat"><span class="eyebrow">Отвечают</span><span class="v" id="s-online">—</span><span class="muted" id="s-online-sub">по последней проверке</span></div>
+    <div class="stat"><span class="eyebrow">Не отвечают</span><span class="v" id="s-bad">—</span><span class="muted" id="s-bad-sub">таймаут, сброс, отказ</span></div>
+    <div class="stat"><span class="eyebrow">Медианное рукопожатие</span><span class="v" id="s-ping">—</span><span class="muted">TCP + TLS + апгрейд</span></div>
+    <div class="stat"><span class="eyebrow">Дорожная карта</span><span class="v" id="s-road">—</span><div class="bar"><span id="s-road-bar" style="width:0%"></span></div></div>
+  </section>
+
+  <section class="geo">
+    <div class="panel">
+      <div class="panel-head">
+        <h2>Карта серверов</h2>
+        <span class="muted" style="font-size:.82rem">Дуги идут от точки входа клиентов в РФ</span>
+      </div>
+      <div class="map-box">
+        <svg id="map" viewBox="0 0 960 500" role="img" tabindex="0" aria-label="Карта мира с серверами Phantom. Колесо или + и − приближают, стрелки двигают."></svg>
+        <div class="map-ctl">
+          <div class="zoom">
+            <button type="button" id="zoom-in" aria-label="Приблизить" title="Приблизить">+</button>
+            <button type="button" id="zoom-out" aria-label="Отдалить" title="Отдалить">−</button>
+          </div>
+          <button type="button" class="small" id="zoom-servers">К серверам</button>
+          <button type="button" class="small" id="zoom-world">Весь мир</button>
+        </div>
+        <span class="map-hint" id="map-hint">Колесо — масштаб, перетаскивание — сдвиг</span>
+      </div>
+      <div class="legend">
+        <span><i style="background:var(--ok)"></i>отвечает</span>
+        <span><i style="background:var(--warn)"></i>медленно</span>
+        <span><i style="background:var(--bad)"></i>не отвечает</span>
+        <span><i style="background:var(--off)"></i>не проверялся</span>
+        <span><i class="hatch"></i>зона ТСПУ</span>
+      </div>
+    </div>
+
+    <div class="panel">
+      <div class="panel-head">
+        <h2>Серверы <span class="muted" id="srv-count" style="font-weight:500"></span></h2>
+        <div style="display:flex;flex-wrap:wrap;gap:8px">
+          <button type="button" id="add-srv">Добавить сервер</button>
+          <button class="primary" id="check-all" type="button">Проверить все</button>
+        </div>
+      </div>
+      <ul class="srv-list" id="srv-list"></ul>
+    </div>
+  </section>
+
+  <section class="panel" aria-labelledby="news-h">
+    <div class="panel-head">
+      <div>
+        <h2 id="news-h">Новости ТСПУ</h2>
+        <div class="muted" id="news-updated" style="font-size:.8rem"></div>
+      </div>
+      <div class="seg" id="news-filter" role="group" aria-label="Фильтр новостей">
+        <button type="button" data-f="all" aria-pressed="true">Все</button>
+        <button type="button" data-f="todo" aria-pressed="false">Не учтено</button>
+        <button type="button" data-f="high" aria-pressed="false">Важные</button>
+      </div>
+    </div>
+    <div class="news-grid" id="news-list"></div>
+  </section>
+
+  <section class="panel" aria-labelledby="road-h">
+    <div class="panel-head">
+      <h2 id="road-h">Доработка протокола</h2>
+      <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center">
+        <div class="seg" id="prio-filter" role="group" aria-label="Фильтр по приоритету">
+          <button type="button" data-p="all" aria-pressed="true">Все</button>
+          <button type="button" data-p="P0" aria-pressed="false">P0</button>
+          <button type="button" data-p="P1" aria-pressed="false">P1</button>
+          <button type="button" data-p="P2" aria-pressed="false">P2</button>
+        </div>
+        <button class="primary" id="add-task" type="button">Новая задача</button>
+      </div>
+    </div>
+    <div class="board" id="board"></div>
+  </section>
+
+  <section class="panel" aria-labelledby="hist-h">
+    <div class="panel-head">
+      <div>
+        <h2 id="hist-h">История</h2>
+        <div class="muted mono" id="hist-src" style="font-size:.8rem"></div>
+      </div>
+      <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center">
+        <div class="seg" id="hist-tab" role="group" aria-label="Раздел истории">
+          <button type="button" data-h="actions" aria-pressed="true">Действия</button>
+          <button type="button" data-h="versions" aria-pressed="false">Версии</button>
+        </div>
+        <button type="button" id="hist-reload">Обновить</button>
+      </div>
+    </div>
+    <ul class="hist-list" id="hist-list"></ul>
+    <div class="hist-more" id="hist-more"></div>
+  </section>
+
+  <div class="foot">
+    <p>Проверка — одно полное рукопожатие Phantom с этого компьютера, как у плиток в приложении. Запускается только кнопкой. Если Phantom сейчас подключён, проверка других серверов пойдёт через туннель: задержка будет с добавкой, а заблокированный напрямую сервер может выглядеть живым.</p>
+    <p>Координаты определяются по IP через внешний сервис (ipwho.is, затем ipinfo.io) один раз на каждый IP и сохраняются. Сервис узнаёт адрес сервера. Если в client.yaml задана страна (<span class="mono">country</span>), запрос не делается и сервер на карту не попадает.</p>
+  </div>
+</div>
+
+<dialog id="news-dlg" class="wide" aria-labelledby="nd-title">
+  <div class="nd">
+    <div class="nd-head">
+      <div class="chips" id="nd-chips"></div>
+      <button type="button" class="small" id="nd-close" aria-label="Закрыть">Закрыть</button>
+    </div>
+    <h2 id="nd-title"></h2>
+    <section>
+      <h3>Что произошло</h3>
+      <p id="nd-summary"></p>
+    </section>
+    <section class="nd-for">
+      <h3>Что это значит для Phantom</h3>
+      <p id="nd-for"></p>
+    </section>
+    <section id="nd-actions-wrap">
+      <h3>Что делать</h3>
+      <ul class="nd-actions" id="nd-actions"></ul>
+    </section>
+    <section>
+      <h3>Источники</h3>
+      <ul class="nd-sources" id="nd-sources"></ul>
+      <p class="muted" id="nd-conf" style="font-size:.8rem;margin-top:6px"></p>
+    </section>
+  </div>
+</dialog>
+
+<dialog id="srv-dlg">
+  <form id="srv-form" method="dialog">
+    <h2>Новый сервер</h2>
+    <label class="f">client.yaml целиком, как в приложении
+      <textarea id="f-yaml" rows="10" required spellcheck="false" class="mono" placeholder="server: &quot;203.0.113.10:443&quot;&#10;domain: &quot;example.org&quot;&#10;psk: &quot;…&quot;&#10;server_public_key: &quot;…&quot;"></textarea>
+    </label>
+    <p class="muted" style="margin:0;font-size:.82rem">Сервер сохранится только в пульте (в console.json, рядом с конфигами приложения) и сразу будет проверен. В приложение Phantom он не добавится.</p>
+    <div class="dlg-acts">
+      <button type="button" id="srv-cancel">Отмена</button>
+      <button type="submit" class="primary" id="srv-save">Добавить и проверить</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="task-dlg">
+  <form id="task-form" method="dialog">
+    <h2 id="task-dlg-title">Задача</h2>
+    <label class="f">Название<input id="t-title" required maxlength="140"></label>
+    <div class="grid2">
+      <label class="f">Приоритет
+        <select id="t-prio"><option>P0</option><option>P1</option><option>P2</option><option>P3</option></select>
+      </label>
+      <label class="f">Область
+        <select id="t-area">
+          <option>Отпечаток TLS</option><option>Форма трафика</option><option>Инфраструктура</option>
+          <option>Замеры</option><option>Криптография</option><option>Клиенты</option>
+        </select>
+      </label>
+      <label class="f">Статус
+        <select id="t-status"><option value="todo">Запланировано</option><option value="doing">В работе</option><option value="done">Готово</option></select>
+      </label>
+      <label class="f">Файлы<input id="t-files" maxlength="200" placeholder="internal/transport/…"></label>
+    </div>
+    <label class="f">Описание<textarea id="t-detail" rows="5" maxlength="2000"></textarea></label>
+    <div class="dlg-acts">
+      <button type="button" id="task-cancel">Отмена</button>
+      <button type="submit" class="primary">Сохранить</button>
+    </div>
+  </form>
+</dialog>
+
+<div id="toast" hidden></div>
+
+<script>
+(function () {
+  "use strict";
+  const STATUS = {
+    ok: { label: "отвечает", color: "var(--ok)" },
+    slow: { label: "медленно", color: "var(--warn)" },
+    fail: { label: "не отвечает", color: "var(--bad)" },
+    none: { label: "не проверялся", color: "var(--off)" },
+  };
+  const KIND = {
+    timeout: "нет ответа (таймаут)",
+    reset: "соединение сброшено",
+    refused: "порт закрыт",
+    dns: "домен не резолвится",
+    auth: "сервер не принял ключи",
+    other: "ошибка",
+  };
+  const COLS = [
+    { id: "todo", title: "Запланировано" },
+    { id: "doing", title: "В работе" },
+    { id: "done", title: "Готово" },
+  ];
+  const PRIO_RANK = { P0: 0, P1: 1, P2: 2, P3: 3 };
+  const ORIGIN = { name: "Клиенты, РФ", lat: 55.76, lon: 37.62 };
+  const SVG = "http://www.w3.org/2000/svg";
+
+  const state = { servers: [], tasks: [], selected: null, prio: "all", checking: new Set() };
+  const $ = (id) => document.getElementById(id);
+
+  // ---------- helpers ----------
+  async function api(method, path, body) {
+    const res = await fetch(path, {
+      method,
+      headers: { "X-Phantom-Console": "1", ...(body !== undefined ? { "Content-Type": "application/json" } : {}) },
+      body: body !== undefined ? JSON.stringify(body) : undefined,
+    });
+    if (!res.ok) throw new Error((await res.text()).trim() || res.statusText);
+    return res.json();
+  }
+
+  function el(tag, attrs, ...kids) {
+    const n = document.createElement(tag);
+    if (attrs) for (const [k, v] of Object.entries(attrs)) {
+      if (v == null || v === false) continue;
+      if (k === "class") n.className = v;
+      else if (k === "text") n.textContent = v;
+      else if (k.startsWith("on")) n.addEventListener(k.slice(2), v);
+      else n.setAttribute(k, v === true ? "" : v);
+    }
+    for (const kid of kids) if (kid != null) n.append(kid);
+    return n;
+  }
+  function svgEl(tag, attrs) {
+    const n = document.createElementNS(SVG, tag);
+    for (const [k, v] of Object.entries(attrs || {})) n.setAttribute(k, v);
+    return n;
+  }
+
+  let toastTimer;
+  function toast(msg) {
+    const t = $("toast");
+    t.textContent = msg; t.hidden = false;
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => { t.hidden = true; }, 3600);
+  }
+
+  function ago(iso) {
+    if (!iso) return "не проверялся";
+    const s = (Date.now() - new Date(iso).getTime()) / 1000;
+    if (!isFinite(s)) return "не проверялся";
+    if (s < 90) return "проверен только что";
+    const m = s / 60;
+    if (m < 60) return "проверен " + Math.round(m) + " мин назад";
+    const h = m / 60;
+    if (h < 36) return "проверен " + Math.round(h) + " ч назад";
+    return "проверен " + Math.round(h / 24) + " дн назад";
+  }
+
+  function flag(code) {
+    if (!/^[A-Za-z]{2}$/.test(code || "")) return "";
+    return String.fromCodePoint(...[...code.toUpperCase()].map((c) => 0x1f1a5 + c.charCodeAt(0)));
+  }
+
+  const statusOf = (s) => (s.check ? s.check.status : "none");
+
+  // ---------- map: TopoJSON decode + Natural Earth projection, no libraries ----------
+  const W = 960, H = 500, PAD = 6;
+  const RAD = Math.PI / 180;
+  function ne1(lon, lat) {
+    const l = lon * RAD, p = lat * RAD, p2 = p * p, p4 = p2 * p2;
+    return [
+      l * (0.8707 - 0.131979 * p2 + p4 * (-0.013791 + p4 * (0.003971 * p2 - 0.001529 * p4))),
+      p * (1.007226 + p2 * (0.015085 + p4 * (-0.044475 + 0.028874 * p2 - 0.005916 * p4))),
+    ];
+  }
+  const XMAX = ne1(180, 0)[0], YMAX = ne1(0, 90)[1];
+  const K = Math.min((W - 2 * PAD) / (2 * XMAX), (H - 2 * PAD) / (2 * YMAX));
+  function project(lon, lat) {
+    const [x, y] = ne1(lon, lat);
+    return [W / 2 + x * K, H / 2 - y * K];
+  }
+  // Points to an SVG path, breaking where consecutive points jump across the
+  // map (a line crossing the antimeridian).
+  function pathOf(points, close) {
+    let d = "", prev = null;
+    for (const [lon, lat] of points) {
+      const [x, y] = project(lon, lat);
+      d += (prev && Math.abs(x - prev) < W / 2 ? "L" : "M") + x.toFixed(1) + "," + y.toFixed(1);
+      prev = x;
+    }
+    return d + (close ? "Z" : "");
+  }
+
+  function decode(topo) {
+    const [sx, sy] = topo.transform.scale, [tx, ty] = topo.transform.translate;
+    const arcs = topo.arcs.map((arc) => {
+      let x = 0, y = 0;
+      return arc.map(([dx, dy]) => { x += dx; y += dy; return [x * sx + tx, y * sy + ty]; });
+    });
+    const ring = (idx) => {
+      const pts = [];
+      for (const i of idx) {
+        const a = i < 0 ? arcs[~i].slice().reverse() : arcs[i];
+        pts.push(...(pts.length ? a.slice(1) : a));
+      }
+      return pts;
+    };
+    return topo.objects.countries.geometries.map((g) => {
+      const polys = g.type === "Polygon" ? [g.arcs] : g.type === "MultiPolygon" ? g.arcs : [];
+      return { id: g.id, name: (g.properties && g.properties.name) || "", d: polys.map((p) => p.map((r) => pathOf(ring(r), true)).join("")).join("") };
+    });
+  }
+
+  // Great circle from a to b, sampled so it projects as a smooth curve.
+  function greatCircle(a, b, n) {
+    const toV = ([lon, lat]) => [Math.cos(lat * RAD) * Math.cos(lon * RAD), Math.cos(lat * RAD) * Math.sin(lon * RAD), Math.sin(lat * RAD)];
+    const va = toV(a), vb = toV(b);
+    const dot = Math.max(-1, Math.min(1, va[0] * vb[0] + va[1] * vb[1] + va[2] * vb[2]));
+    const om = Math.acos(dot);
+    if (om < 1e-6) return [a, b];
+    const pts = [];
+    for (let i = 0; i <= n; i++) {
+      const t = i / n, s1 = Math.sin((1 - t) * om) / Math.sin(om), s2 = Math.sin(t * om) / Math.sin(om);
+      const v = [s1 * va[0] + s2 * vb[0], s1 * va[1] + s2 * vb[1], s1 * va[2] + s2 * vb[2]];
+      pts.push([Math.atan2(v[1], v[0]) / RAD, Math.atan2(v[2], Math.hypot(v[0], v[1])) / RAD]);
+    }
+    return pts;
+  }
+
+  const map = $("map");
+  const layers = {};
+  function drawBase(topo) {
+    const defs = svgEl("defs");
+    const pat = svgEl("pattern", { id: "hatch", width: 5, height: 5, patternUnits: "userSpaceOnUse", patternTransform: "rotate(45)" });
+    const hRect = svgEl("rect", { width: 5, height: 5, fill: "var(--land)" });
+    const hLine = svgEl("line", { x1: 0, y1: 0, x2: 0, y2: 5, stroke: "var(--ru)", "stroke-width": 3 });
+    pat.append(hRect, hLine);
+    defs.append(pat);
+    layers.hatch = { pat, hRect, hLine };
+    map.append(defs);
+
+    const edge = [];
+    for (let lat = -90; lat <= 90; lat += 2) edge.push([180, lat]);
+    for (let lat = 90; lat >= -90; lat -= 2) edge.push([-180, lat]);
+    const sphere = edge.map(([lon, lat]) => project(lon, lat));
+    map.append(svgEl("path", { class: "sphere", d: "M" + sphere.map((p) => p.map((v) => v.toFixed(1)).join(",")).join("L") + "Z" }));
+
+    let g = "";
+    for (let lon = -180; lon <= 180; lon += 30) { const pts = []; for (let lat = -80; lat <= 80; lat += 4) pts.push([lon, lat]); g += pathOf(pts); }
+    for (let lat = -60; lat <= 60; lat += 30) { const pts = []; for (let lon = -180; lon <= 180; lon += 4) pts.push([lon, lat]); g += pathOf(pts); }
+    map.append(svgEl("path", { class: "grat", d: g }));
+
+    const cg = svgEl("g");
+    for (const c of decode(topo)) {
+      const p = svgEl("path", { class: c.id === "643" ? "ru" : "land", d: c.d });
+      const t = svgEl("title"); t.textContent = c.id === "643" ? "Россия — зона ТСПУ" : c.name;
+      p.append(t); cg.append(p);
+    }
+    map.append(cg);
+
+    layers.arcs = svgEl("g"); layers.origin = svgEl("g", { class: "origin" }); layers.srv = svgEl("g");
+    map.append(layers.arcs, layers.origin, layers.srv);
+  }
+
+  // ---------- zoom and pan: the viewBox is the camera ----------
+  // Map geometry stays in its 960×500 projection space; markers and labels
+  // are drawn at scale 1/k so they keep their on-screen size at any zoom.
+  const MAX_K = 16;
+  const view = { x: 0, y: 0, w: W, h: H };
+  const zoomK = () => W / view.w;
+
+  function clampView() {
+    view.w = Math.min(W, Math.max(W / MAX_K, view.w));
+    view.h = view.w * H / W;
+    view.x = Math.min(W - view.w, Math.max(0, view.x));
+    view.y = Math.min(H - view.h, Math.max(0, view.y));
+  }
+
+  let frame = 0;
+  function applyView() {
+    clampView();
+    if (frame) return;
+    frame = requestAnimationFrame(() => {
+      frame = 0;
+      map.setAttribute("viewBox", `${view.x} ${view.y} ${view.w} ${view.h}`);
+      if (layers.hatch) {
+        const s = 5 / zoomK();
+        for (const n of [layers.hatch.pat, layers.hatch.hRect]) { n.setAttribute("width", s); n.setAttribute("height", s); }
+        layers.hatch.hLine.setAttribute("y2", s);
+        layers.hatch.hLine.setAttribute("stroke-width", 3 / zoomK());
+      }
+      renderMap();
+      $("zoom-in").disabled = zoomK() >= MAX_K - 0.01;
+      $("zoom-out").disabled = zoomK() <= 1.01;
+    });
+  }
+
+  // Zoom by factor, keeping the map point (px, py) under the same screen spot.
+  function zoomAt(px, py, factor) {
+    const w = Math.min(W, Math.max(W / MAX_K, view.w / factor));
+    const r = w / view.w;
+    view.x = px - (px - view.x) * r;
+    view.y = py - (py - view.y) * r;
+    view.w = w;
+    applyView();
+  }
+  const center = () => [view.x + view.w / 2, view.y + view.h / 2];
+
+  function toMap(clientX, clientY) {
+    const r = map.getBoundingClientRect();
+    return [view.x + (clientX - r.left) / r.width * view.w, view.y + (clientY - r.top) / r.height * view.h];
+  }
+
+  function fitServers() {
+    const pts = state.servers.filter((s) => s.geo).map((s) => project(s.geo.lon, s.geo.lat));
+    pts.push(project(ORIGIN.lon, ORIGIN.lat));
+    const xs = pts.map((p) => p[0]), ys = pts.map((p) => p[1]);
+    const pad = 40;
+    let x0 = Math.min(...xs) - pad, x1 = Math.max(...xs) + pad, y0 = Math.min(...ys) - pad, y1 = Math.max(...ys) + pad;
+    let w = Math.max(x1 - x0, (y1 - y0) * W / H, W / 8);
+    view.w = w; view.h = w * H / W;
+    view.x = (x0 + x1) / 2 - w / 2; view.y = (y0 + y1) / 2 - view.h / 2;
+    applyView();
+  }
+
+  $("zoom-in").addEventListener("click", () => zoomAt(...center(), 1.6));
+  $("zoom-out").addEventListener("click", () => zoomAt(...center(), 1 / 1.6));
+  $("zoom-world").addEventListener("click", () => { Object.assign(view, { x: 0, y: 0, w: W, h: H }); applyView(); });
+  $("zoom-servers").addEventListener("click", fitServers);
+
+  map.addEventListener("wheel", (e) => {
+    e.preventDefault();
+    const scale = e.deltaMode === 1 ? 40 : e.deltaMode === 2 ? 400 : 1;
+    zoomAt(...toMap(e.clientX, e.clientY), Math.exp(-e.deltaY * scale * 0.0015));
+  }, { passive: false });
+  map.addEventListener("dblclick", (e) => { e.preventDefault(); zoomAt(...toMap(e.clientX, e.clientY), 2); });
+  map.addEventListener("keydown", (e) => {
+    const step = view.w * 0.12;
+    const act = {
+      "+": () => zoomAt(...center(), 1.6), "=": () => zoomAt(...center(), 1.6), "-": () => zoomAt(...center(), 1 / 1.6),
+      ArrowLeft: () => { view.x -= step; applyView(); }, ArrowRight: () => { view.x += step; applyView(); },
+      ArrowUp: () => { view.y -= step; applyView(); }, ArrowDown: () => { view.y += step; applyView(); },
+      "0": () => $("zoom-world").click(),
+    }[e.key];
+    if (act) { e.preventDefault(); act(); }
+  });
+
+  // One pointer drags, two pinch. A press that barely moves is a click, so a
+  // server dot is selected on release rather than through its own click
+  // handler (pointer capture would retarget that click to the svg).
+  const pointers = new Map();
+  let gesture = null;
+  map.addEventListener("pointerdown", (e) => {
+    if (e.button !== 0) return;
+    pointers.set(e.pointerId, [e.clientX, e.clientY]);
+    const hit = e.target.closest && e.target.closest(".srv");
+    gesture = {
+      moved: false, srv: pointers.size === 1 && hit ? hit.dataset.id : null,
+      start: new Map(pointers), view: { ...view },
+    };
+  });
+  map.addEventListener("pointermove", (e) => {
+    if (!gesture || !pointers.has(e.pointerId)) return;
+    pointers.set(e.pointerId, [e.clientX, e.clientY]);
+    const r = map.getBoundingClientRect(), perPx = gesture.view.w / r.width;
+    const [a, b] = [...pointers.values()], [a0, b0] = [...gesture.start.values()];
+    if (!gesture.moved) {
+      if (Math.hypot(a[0] - a0[0], a[1] - a0[1]) < 4 && pointers.size === 1) return;
+      gesture.moved = true;
+      map.setPointerCapture(e.pointerId);
+      map.classList.add("dragging");
+    }
+    if (pointers.size >= 2 && b && b0) {
+      const d = Math.hypot(a[0] - b[0], a[1] - b[1]), d0 = Math.hypot(a0[0] - b0[0], a0[1] - b0[1]) || 1;
+      const mid0 = [(a0[0] + b0[0]) / 2, (a0[1] + b0[1]) / 2], mid = [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2];
+      const px = gesture.view.x + (mid0[0] - r.left) * perPx, py = gesture.view.y + (mid0[1] - r.top) * perPx;
+      const w = Math.min(W, Math.max(W / MAX_K, gesture.view.w * d0 / d));
+      view.w = w;
+      view.x = px - (mid[0] - r.left) * w / r.width;
+      view.y = py - (mid[1] - r.top) * w / r.width;
+    } else {
+      view.x = gesture.view.x - (a[0] - a0[0]) * perPx;
+      view.y = gesture.view.y - (a[1] - a0[1]) * perPx;
+    }
+    applyView();
+  });
+  function endPointer(e) {
+    if (!pointers.has(e.pointerId)) return;
+    pointers.delete(e.pointerId);
+    if (gesture && !gesture.moved && gesture.srv && e.type === "pointerup") select(gesture.srv);
+    if (pointers.size === 0) { gesture = null; map.classList.remove("dragging"); }
+    else gesture = { moved: true, srv: null, start: new Map(pointers), view: { ...view } };
+  }
+  map.addEventListener("pointerup", endPointer);
+  map.addEventListener("pointercancel", endPointer);
+
+  function renderMap() {
+    if (!layers.srv) return;
+    const k = zoomK(), inv = (1 / k).toFixed(4);
+    layers.arcs.replaceChildren(); layers.srv.replaceChildren(); layers.origin.replaceChildren();
+    const placed = state.servers.filter((s) => s.geo);
+    for (const s of placed) {
+      const st = statusOf(s), color = STATUS[st].color;
+      const arc = svgEl("path", { class: "arc " + st, stroke: color, d: pathOf(greatCircle([ORIGIN.lon, ORIGIN.lat], [s.geo.lon, s.geo.lat], 64)) });
+      if (st === "fail") arc.setAttribute("stroke-dasharray", "3 4"); // in screen pixels, as non-scaling-stroke draws it
+      layers.arcs.append(arc);
+    }
+    const ordered = [...placed].sort((a, b) => (a.id === state.selected) - (b.id === state.selected));
+    const labels = labelPlacement(ordered);
+
+    const [ox, oy] = project(ORIGIN.lon, ORIGIN.lat);
+    const og = svgEl("g", { transform: `translate(${ox.toFixed(2)},${oy.toFixed(2)}) scale(${inv})` });
+    const ol = svgEl("text", { x: 8, y: -7 }); ol.textContent = ORIGIN.name;
+    og.append(svgEl("circle", { r: 4.5 }), ol);
+    layers.origin.append(og);
+
+    for (const s of ordered) {
+      const st = statusOf(s), color = STATUS[st].color;
+      const [x, y] = project(s.geo.lon, s.geo.lat);
+      const g = svgEl("g", { class: "srv" + (s.id === state.selected ? " sel" : ""), "data-id": s.id, transform: `translate(${x.toFixed(2)},${y.toFixed(2)}) scale(${inv})` });
+      if (st === "ok") g.append(svgEl("circle", { class: "pulse", r: 5, stroke: color }));
+      g.append(svgEl("circle", { class: "core", r: 6, fill: color }));
+      const side = labels.get(s.id);
+      const t = svgEl("text", side === "left" ? { x: -10, y: 4, "text-anchor": "end" } : { x: 10, y: 4 });
+      t.textContent = side ? s.domain || s.ip : "";
+      const title = svgEl("title");
+      title.textContent = `${s.domain} — ${STATUS[st].label}${s.check && s.check.latencyMs ? ", " + s.check.latencyMs + " мс" : ""}`;
+      g.append(t, title);
+      layers.srv.append(g);
+    }
+  }
+
+  // Servers cluster in Europe, so labels are placed greedily in screen space:
+  // the selected server first, then the rest; each tries the right side, then
+  // the left, and goes unlabelled if both would overlap a label or dot already
+  // placed. Zooming in spreads the dots and brings the labels back; the name
+  // is always in the tooltip and the list.
+  function labelPlacement(list) {
+    const k = zoomK();
+    const toScreen = (lon, lat) => { const [x, y] = project(lon, lat); return [(x - view.x) * k, (y - view.y) * k]; };
+    const pts = list.map((s) => toScreen(s.geo.lon, s.geo.lat));
+    const boxes = pts.map(([x, y]) => [x - 7, y - 7, x + 7, y + 7]);
+    const [ox, oy] = toScreen(ORIGIN.lon, ORIGIN.lat);
+    boxes.push([ox - 6, oy - 20, ox + 8 + ORIGIN.name.length * 6.2, oy + 6]);
+    const hit = (b) => boxes.some((o) => b[0] < o[2] && b[2] > o[0] && b[1] < o[3] && b[3] > o[1]);
+    const out = new Map();
+    const order = list.map((s, i) => i).sort((a, b) => (list[b].id === state.selected) - (list[a].id === state.selected));
+    for (const i of order) {
+      const s = list[i], [x, y] = pts[i], w = (s.domain || s.ip || "").length * 6.2;
+      const own = boxes[i]; boxes[i] = [0, 0, 0, 0];
+      const right = [x + 9, y - 8, x + 11 + w, y + 7], left = [x - 11 - w, y - 8, x - 9, y + 7];
+      if (!hit(right)) { out.set(s.id, "right"); boxes.push(right); }
+      else if (!hit(left)) { out.set(s.id, "left"); boxes.push(left); }
+      boxes[i] = own;
+    }
+    return out;
+  }
+
+  // ---------- servers ----------
+  function select(id) {
+    state.selected = state.selected === id ? null : id;
+    renderServers(); renderMap();
+    const item = document.querySelector(`.srv-item[data-id="${CSS.escape(id)}"]`);
+    if (item && state.selected) item.scrollIntoView({ block: "nearest", behavior: "smooth" });
+  }
+
+  function renderServers() {
+    const ul = $("srv-list");
+    ul.replaceChildren();
+    $("srv-count").textContent = state.servers.length ? "· " + state.servers.length : "";
+    $("check-all").disabled = !state.servers.length || state.checking.size > 0;
+    $("check-all").textContent = state.checking.size ? "Проверяю…" : "Проверить все";
+    if (!state.servers.length) {
+      ul.append(el("li", { class: "empty" },
+        el("strong", { text: state.loaded ? "Сохранённых конфигураций нет" : "Загружаю…" }),
+        el("span", { text: "Нажмите «Добавить сервер» и вставьте client.yaml, или добавьте его в приложении Phantom и обновите страницу." })));
+      return;
+    }
+    const order = { fail: 0, slow: 1, none: 2, ok: 3 };
+    const list = [...state.servers].sort((a, b) => order[statusOf(a)] - order[statusOf(b)] || (a.domain || "").localeCompare(b.domain || ""));
+    for (const s of list) {
+      const st = statusOf(s), busy = state.checking.has(s.id) || state.checking.has("*");
+      const geo = s.geo;
+      const place = geo ? [geo.city, geo.country || s.country].filter(Boolean).join(", ") : s.country;
+      const meta = el("div", { class: "meta" },
+        place ? el("span", { text: (flag((geo && geo.countryCode) || s.countryCode) + " " + place).trim() }) : null,
+        s.ip ? el("span", { class: "mono", text: s.ip }) : null,
+        s.endpoints && s.endpoints.length > 1 ? el("span", { text: s.endpoints.length + " адреса" }) : null,
+        geo && geo.org ? el("span", { text: geo.org }) : null,
+        s.check && s.check.latencyMs ? el("span", { class: "mono", text: s.check.latencyMs + " мс" }) : null,
+        el("span", { text: busy ? "проверяю…" : ago(s.check && s.check.at) }));
+      const notes = [];
+      if (s.invalid) notes.push(el("div", { class: "why" }, el("details", null, el("summary", { text: "Конфиг не читается" }), el("pre", { text: s.invalid }))));
+      if (st === "fail") notes.push(el("div", { class: "why" }, el("details", null, el("summary", { text: KIND[s.check.kind] || KIND.other }), el("pre", { text: s.check.error || "" }))));
+      if (!geo && s.geoOff) notes.push(el("div", { class: "meta", text: "Нет на карте: в конфиге задана страна, поиск по IP отключён" }));
+      else if (!geo && !s.ip) notes.push(el("div", { class: "meta", text: "Нет на карте: IP станет известен после проверки" }));
+      else if (!geo) notes.push(el("div", { class: "meta", text: "Нет на карте: сервис геолокации не ответил, повторю при следующей проверке" }));
+
+      const li = el("li", { class: `srv-item st-${st}${state.selected === s.id ? " sel" : ""}`, "data-id": s.id, tabindex: "0",
+        onclick: () => select(s.id), onkeydown: (e) => { if (e.key === "Enter" && e.target === li) select(s.id); } },
+        el("span", { class: "dot" }), el("span", { class: "name", text: s.domain || "(без домена)" }), el("span", { class: "pill", text: STATUS[st].label }),
+        meta, ...notes,
+        el("div", { class: "acts" }, el("button", { class: "small", type: "button", disabled: busy || !!s.invalid, text: busy ? "Проверяю…" : "Проверить",
+          onclick: (e) => { e.stopPropagation(); check([s.id]); } }),
+          s.source === "console" ? confirmButton("Удалить", () => deleteServer(s.id)) : null,
+          s.source === "console" ? el("span", { class: "muted", style: "font-size:.76rem;align-self:center", text: "добавлен в пульте" }) : null));
+      ul.append(li);
+    }
+  }
+
+  async function check(ids) {
+    const key = ids ? ids[0] : "*";
+    state.checking.add(key); renderServers();
+    try {
+      const r = await api("POST", "/api/check", { ids: ids || [] });
+      state.servers = r.servers;
+      const checked = r.servers.filter((s) => !ids || ids.includes(s.id));
+      const bad = checked.filter((s) => statusOf(s) === "fail").length;
+      toast(bad ? `Проверено: ${checked.length}, не отвечают: ${bad}` : `Проверено: ${checked.length}, все отвечают`);
+    } catch (err) {
+      toast("Проверка не удалась: " + err.message);
+    } finally {
+      state.checking.delete(key);
+      renderStats(); renderServers(); renderMap();
+    }
+  }
+  $("check-all").addEventListener("click", () => check(null));
+
+  $("add-srv").addEventListener("click", () => { $("f-yaml").value = ""; $("srv-dlg").showModal(); });
+  $("srv-cancel").addEventListener("click", () => $("srv-dlg").close());
+  $("srv-form").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const save = $("srv-save");
+    save.disabled = true; save.textContent = "Проверяю…";
+    try {
+      const r = await api("POST", "/api/servers", { yaml: $("f-yaml").value });
+      state.servers = r.servers; state.selected = r.id;
+      $("srv-dlg").close();
+      const s = r.servers.find((x) => x.id === r.id);
+      toast(s && statusOf(s) === "fail" ? "Сервер добавлен, но не ответил: " + (KIND[s.check.kind] || KIND.other) : "Сервер добавлен и отвечает");
+    } catch (err) {
+      toast(err.message); // keep the dialog open with the pasted text
+    } finally {
+      save.disabled = false; save.textContent = "Добавить и проверить";
+      renderStats(); renderServers(); renderMap();
+    }
+  });
+
+  async function deleteServer(id) {
+    try { state.servers = (await api("DELETE", "/api/servers/" + encodeURIComponent(id))).servers; toast("Сервер удалён из пульта"); }
+    catch (err) { toast("Не удалилось: " + err.message); }
+    if (state.selected === id) state.selected = null;
+    renderStats(); renderServers(); renderMap();
+  }
+
+  // ---------- roadmap ----------
+  function renderBoard() {
+    const board = $("board");
+    board.replaceChildren();
+    const tasks = state.tasks.filter((t) => state.prio === "all" || t.priority === state.prio);
+    for (const col of COLS) {
+      const items = tasks.filter((t) => (t.status || "todo") === col.id)
+        .sort((a, b) => (PRIO_RANK[a.priority] ?? 9) - (PRIO_RANK[b.priority] ?? 9) || (a.order ?? 0) - (b.order ?? 0));
+      const c = el("div", { class: "col " + col.id },
+        el("div", { class: "col-head" }, el("h3", { text: col.title }), el("span", { class: "muted mono", text: String(items.length) })));
+      if (!items.length) c.append(el("div", { class: "muted", style: "font-size:.84rem;padding:6px 4px", text: "Пусто" }));
+      for (const t of items) c.append(card(t, col.id));
+      board.append(c);
+    }
+  }
+
+  function confirmButton(label, action) {
+    let armed = false, timer;
+    const b = el("button", { class: "small danger", type: "button", text: label });
+    b.addEventListener("click", (e) => {
+      e.stopPropagation();
+      if (!armed) { armed = true; b.textContent = "Точно удалить?"; timer = setTimeout(() => { armed = false; b.textContent = label; }, 3000); return; }
+      clearTimeout(timer); action();
+    });
+    return b;
+  }
+
+  function card(t, colId) {
+    const idx = COLS.findIndex((c) => c.id === colId);
+    const acts = el("div", { class: "acts" });
+    if (idx > 0) acts.append(el("button", { class: "small", type: "button", text: "← " + COLS[idx - 1].title, onclick: () => saveTask({ ...t, status: COLS[idx - 1].id }) }));
+    if (idx < COLS.length - 1) acts.append(el("button", { class: "small", type: "button", text: COLS[idx + 1].title + " →", onclick: () => saveTask({ ...t, status: COLS[idx + 1].id }) }));
+    acts.append(el("button", { class: "small", type: "button", text: "Изменить", onclick: () => openTask(t) }));
+    acts.append(confirmButton("Удалить", () => deleteTask(t.id)));
+    return el("article", { class: "card", "data-task-id": t.id },
+      el("div", { class: "chips" }, el("span", { class: "prio " + (t.priority || "P3"), text: t.priority || "P3" }), t.area ? el("span", { class: "area", text: t.area }) : null),
+      el("h4", { text: t.title }),
+      t.detail ? el("details", null, el("summary", { text: "Подробнее" }), el("p", { text: t.detail })) : null,
+      t.files ? el("div", { class: "files", text: t.files }) : null,
+      acts);
+  }
+
+  async function saveTask(t, msg) {
+    try { state.tasks = (await api("POST", "/api/tasks", t)).tasks; if (msg) toast(msg); }
+    catch (err) { toast("Не сохранилось: " + err.message); }
+    renderStats(); renderBoard();
+  }
+  async function deleteTask(id) {
+    try { state.tasks = (await api("DELETE", "/api/tasks/" + encodeURIComponent(id))).tasks; toast("Задача удалена"); }
+    catch (err) { toast("Не удалилось: " + err.message); }
+    renderStats(); renderBoard();
+  }
+
+  let editingTask = null;
+  function openTask(t) {
+    editingTask = t || null;
+    $("task-dlg-title").textContent = t ? "Изменить задачу" : "Новая задача";
+    $("t-title").value = t ? t.title : ""; $("t-prio").value = t ? t.priority : "P1";
+    $("t-area").value = t ? t.area : "Форма трафика"; $("t-status").value = t ? t.status : "todo";
+    $("t-files").value = (t && t.files) || ""; $("t-detail").value = (t && t.detail) || "";
+    $("task-dlg").showModal();
+  }
+  $("add-task").addEventListener("click", () => openTask());
+  $("task-cancel").addEventListener("click", () => $("task-dlg").close());
+  $("task-form").addEventListener("submit", (e) => {
+    e.preventDefault();
+    const t = {
+      ...(editingTask || {}),
+      title: $("t-title").value.trim(), priority: $("t-prio").value, area: $("t-area").value,
+      status: $("t-status").value, files: $("t-files").value.trim(), detail: $("t-detail").value.trim(),
+    };
+    $("task-dlg").close();
+    saveTask(t, "Задача сохранена");
+  });
+
+  $("prio-filter").addEventListener("click", (e) => {
+    const b = e.target.closest("button[data-p]"); if (!b) return;
+    state.prio = b.dataset.p;
+    for (const x of $("prio-filter").querySelectorAll("button")) x.setAttribute("aria-pressed", String(x === b));
+    try { localStorage.setItem("phantom-console-prio", state.prio); } catch (_) {}
+    renderBoard();
+  });
+
+  // ---------- news ----------
+  const IMPACT = { high: "важно для Phantom", medium: "стоит учесть", low: "фон" };
+  const CONFIDENCE = {
+    confirmed: "Достоверность: подтверждено первоисточником (официальное заявление, закон, исследование).",
+    partial: "Достоверность: частично — техника описана исследователями или журналистами, официально не подтверждена.",
+    rumour: "Достоверность: слухи — сообщения пользователей без измерений.",
+  };
+  state.news = []; state.newsFilter = "all";
+
+  function fmtDate(d) {
+    const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(d || "");
+    return m ? `${m[3]}.${m[2]}.${m[1]}` : d || "";
+  }
+
+  function renderNews() {
+    const list = $("news-list");
+    list.replaceChildren();
+    $("news-updated").textContent = state.newsUpdatedAt
+      ? "Собрано " + new Date(state.newsUpdatedAt).toLocaleString("ru-RU", { dateStyle: "long", timeStyle: "short" }) + ". Чтобы обновить, попросите Claude «обнови новости ТСПУ»."
+      : "";
+    const items = state.news
+      .filter((n) => state.newsFilter === "all" || (state.newsFilter === "todo" ? n.status !== "covered" : n.impact === "high"))
+      .sort((a, b) => (b.date || "").localeCompare(a.date || ""));
+    if (!items.length) {
+      list.append(el("div", { class: "empty", style: "grid-column:1/-1" },
+        el("strong", { text: state.news.length ? "Под этот фильтр ничего не подходит" : "Новостей пока нет" }),
+        el("span", { text: "Новости с разбором собирает Claude: попросите «обнови новости ТСПУ»." })));
+      return;
+    }
+    for (const n of items) {
+      list.append(el("button", { type: "button", class: "news-card", onclick: () => openNews(n.id) },
+        el("div", { class: "top" },
+          el("span", { class: "date", text: fmtDate(n.date) }),
+          el("span", { class: "imp imp-" + (n.impact || "low"), text: IMPACT[n.impact] || IMPACT.low }),
+          n.status === "covered" ? el("span", { class: "covered", text: "уже учтено" }) : null),
+        el("h4", { text: n.title }),
+        el("div", { class: "teaser", text: n.forPhantom || n.summary || "" }),
+        n.sources && n.sources.length ? el("div", { class: "src", text: n.sources.map((s) => s.name).join(" · ") }) : null));
+    }
+  }
+
+  let openNewsId = null;
+  function openNews(id) {
+    const n = state.news.find((x) => x.id === id);
+    if (!n) return;
+    openNewsId = id;
+    $("nd-chips").replaceChildren(...[
+      el("span", { class: "date", text: fmtDate(n.date) }),
+      el("span", { class: "imp imp-" + (n.impact || "low"), text: IMPACT[n.impact] || IMPACT.low }),
+      n.status === "covered" ? el("span", { class: "covered", text: "уже учтено" }) : null,
+    ].filter(Boolean)); // replaceChildren would print a null as the text "null"
+    $("nd-title").textContent = n.title;
+    $("nd-summary").textContent = n.summary || "";
+    $("nd-for").textContent = n.forPhantom || "";
+
+    const ul = $("nd-actions");
+    ul.replaceChildren();
+    $("nd-actions-wrap").hidden = !(n.actions && n.actions.length);
+    (n.actions || []).forEach((a, i) => {
+      const task = a.taskId && state.tasks.find((t) => t.id === a.taskId);
+      const side = task
+        ? el("button", { type: "button", class: "small task-link", text: `${task.priority} · ${COLS.find((c) => c.id === task.status)?.title || task.status} →`,
+            title: task.title, onclick: () => showTask(task.id) })
+        : el("button", { type: "button", class: "small primary", text: "В задачи", onclick: (e) => addActionTask(n, i, e.currentTarget) });
+      ul.append(el("li", null, el("span", { text: a.text }), side));
+    });
+
+    const src = $("nd-sources");
+    src.replaceChildren();
+    for (const s of n.sources || []) {
+      src.append(el("li", null, el("a", { href: s.url, target: "_blank", rel: "noopener noreferrer", text: s.name })));
+    }
+    $("nd-conf").textContent = CONFIDENCE[n.confidence] || "";
+    if (!$("news-dlg").open) $("news-dlg").showModal();
+  }
+  $("nd-close").addEventListener("click", () => $("news-dlg").close());
+  $("news-dlg").addEventListener("click", (e) => { if (e.target === $("news-dlg")) $("news-dlg").close(); });
+  $("news-dlg").addEventListener("close", () => { openNewsId = null; });
+
+  // Turns a recommended action into a card on the board and links the two,
+  // so the news shows where the work stands from then on.
+  async function addActionTask(n, i, btn) {
+    const a = n.actions[i];
+    btn.disabled = true;
+    try {
+      const before = new Set(state.tasks.map((t) => t.id));
+      const r = await api("POST", "/api/tasks", {
+        title: a.text.length > 120 ? a.text.slice(0, 117) + "…" : a.text,
+        priority: a.priority || "P1", area: a.area || "Форма трафика", status: "todo",
+        files: a.files || "", detail: `${a.text}\n\nИз новости «${n.title}» (${fmtDate(n.date)}).`,
+      });
+      state.tasks = r.tasks;
+      const created = r.tasks.find((t) => !before.has(t.id));
+      const updated = { ...n, actions: n.actions.map((x, j) => (j === i ? { ...x, taskId: created && created.id } : x)) };
+      const rn = await api("POST", "/api/news?touch=0", updated);
+      state.news = rn.news;
+      toast("Задача добавлена на доску");
+      renderStats(); renderBoard(); renderNews(); openNews(n.id);
+    } catch (err) {
+      btn.disabled = false;
+      toast("Не получилось добавить: " + err.message);
+    }
+  }
+
+  function showTask(id) {
+    $("news-dlg").close();
+    if (state.prio !== "all") $("prio-filter").querySelector('button[data-p="all"]').click();
+    const card = document.querySelector(`.card[data-task-id="${CSS.escape(id)}"]`);
+    if (!card) return;
+    // Closing a modal dialog hands focus back to the news card that opened
+    // it, and the browser scrolls to that card - so scroll to the task only
+    // after that has happened, or it is undone.
+    setTimeout(() => {
+      // Instant rather than smooth: smooth scrolling doesn't run at all in
+      // some embedded browsers, and the flash already shows where to look.
+      card.scrollIntoView({ block: "center" });
+      card.classList.add("flash");
+      setTimeout(() => card.classList.remove("flash"), 1600);
+    }, 50);
+  }
+
+  $("news-filter").addEventListener("click", (e) => {
+    const b = e.target.closest("button[data-f]"); if (!b) return;
+    state.newsFilter = b.dataset.f;
+    for (const x of $("news-filter").querySelectorAll("button")) x.setAttribute("aria-pressed", String(x === b));
+    renderNews();
+  });
+
+  // ---------- stats ----------
+
+  // ---- История (HISTORY.md, read by the server on every request) ----
+  const hist = { data: null, tab: "actions", all: false };
+  const HIST_SHOW = 15;
+  function mdInline(t) {
+    const e = (x) => x.replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+    return e(t)
+      .replace(/`([^`]+)`/g, "<code>$1</code>")
+      .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
+  }
+  // An entry: a first paragraph, then nested "- " items (one level is enough for HISTORY.md).
+  function mdEntry(text) {
+    const lines = text.split("\n");
+    let html = "", inList = false, para = [];
+    const flushPara = () => { if (para.length) { html += "<p>" + mdInline(para.join(" ")) + "</p>"; para = []; } };
+    for (const raw of lines) {
+      const l = raw.trim();
+      if (l.startsWith("- ")) {
+        flushPara();
+        if (!inList) { html += "<ul>"; inList = true; }
+        html += "<li>" + mdInline(l.slice(2)) + "</li>";
+      } else if (l === "") {
+        continue;
+      } else if (inList) {
+        html = html.replace(/<\/li>$/, " " + mdInline(l) + "</li>");
+      } else {
+        para.push(l);
+      }
+    }
+    flushPara();
+    if (inList) html += "</ul>";
+    return html;
+  }
+  function renderHistory() {
+    const list = $("hist-list"), more = $("hist-more");
+    list.innerHTML = ""; more.innerHTML = "";
+    if (!hist.data) return;
+    const items = hist.data[hist.tab] || [];
+    if (!items.length) {
+      list.innerHTML = '<li class="hist-item"><span></span><span class="muted">Пока пусто.</span></li>';
+      return;
+    }
+    const shown = hist.all ? items : items.slice(0, HIST_SHOW);
+    for (const it of shown) {
+      const li = document.createElement("li");
+      li.className = "hist-item";
+      const d = document.createElement("span");
+      d.className = "hist-date"; d.textContent = it.date || "";
+      const b = document.createElement("div");
+      b.className = "hist-body" + (hist.tab === "versions" ? " hist-ver-row" : "");
+      b.innerHTML = mdEntry(it.text);
+      li.append(d, b);
+      list.append(li);
+    }
+    if (items.length > HIST_SHOW) {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.textContent = hist.all ? "Свернуть" : `Показать все (${items.length})`;
+      btn.onclick = () => { hist.all = !hist.all; renderHistory(); };
+      more.append(btn);
+    }
+  }
+  async function loadHistory() {
+    try {
+      hist.data = await api("GET", "/api/history");
+      $("hist-src").textContent = hist.data.path;
+    } catch (err) {
+      hist.data = { actions: [], versions: [] };
+      $("hist-src").textContent = err.message;
+    }
+    renderHistory();
+  }
+  $("hist-tab").addEventListener("click", (ev) => {
+    const b = ev.target.closest("button[data-h]");
+    if (!b) return;
+    for (const x of $("hist-tab").querySelectorAll("button")) x.setAttribute("aria-pressed", String(x === b));
+    hist.tab = b.dataset.h; hist.all = false;
+    renderHistory();
+  });
+  $("hist-reload").addEventListener("click", loadHistory);
+
+  function renderStats() {
+    const s = state.servers;
+    const up = s.filter((x) => ["ok", "slow"].includes(statusOf(x)));
+    const down = s.filter((x) => statusOf(x) === "fail");
+    const unchecked = s.filter((x) => statusOf(x) === "none").length;
+    $("s-online").replaceChildren(document.createTextNode(String(up.length)), el("small", { text: " / " + s.length }));
+    $("s-online-sub").textContent = unchecked ? `${unchecked} ещё не проверялись` : "по последней проверке";
+    $("s-bad").textContent = String(down.length);
+    const ms = up.map((x) => x.check.latencyMs).filter((p) => p > 0).sort((a, b) => a - b);
+    const med = ms.length ? (ms.length % 2 ? ms[(ms.length - 1) / 2] : Math.round((ms[ms.length / 2 - 1] + ms[ms.length / 2]) / 2)) : null;
+    $("s-ping").replaceChildren(document.createTextNode(med == null ? "—" : String(med)), med == null ? "" : el("small", { text: " мс" }));
+    const t = state.tasks, done = t.filter((x) => x.status === "done").length;
+    $("s-road").replaceChildren(document.createTextNode(String(done)), el("small", { text: " / " + t.length + " готово" }));
+    $("s-road-bar").style.width = (t.length ? Math.round((done / t.length) * 100) : 0) + "%";
+  }
+
+  // ---------- boot ----------
+  (async () => {
+    try {
+      const saved = localStorage.getItem("phantom-console-prio");
+      const b = saved && $("prio-filter").querySelector(`button[data-p="${saved}"]`);
+      if (b) b.click();
+    } catch (_) {}
+
+    renderStats(); renderServers(); renderBoard();
+    loadHistory();
+    try {
+      const [topo, st] = await Promise.all([fetch("/world.json").then((r) => r.json()), api("GET", "/api/state")]);
+      drawBase(topo);
+      state.servers = st.servers; state.tasks = st.tasks; state.loaded = true;
+      state.news = st.news || []; state.newsUpdatedAt = st.newsUpdatedAt || "";
+      $("src").textContent = "Конфиги: " + st.configsPath;
+      renderStats(); renderServers(); renderBoard(); renderNews(); applyView();
+      // Place servers whose IP is known but not yet looked up - once per IP, kept after that.
+      if (state.servers.some((s) => s.ip && !s.geo && !s.geoOff)) {
+        state.servers = (await api("POST", "/api/locate", {})).servers;
+        renderServers(); renderMap();
+      }
+    } catch (err) {
+      toast("Не удалось загрузить данные: " + err.message);
+    }
+  })();
+})();
+</script>
+</body>
+</html>

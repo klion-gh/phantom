@@ -1,0 +1,252 @@
+[
+  {
+    "id": "t01",
+    "priority": "P0",
+    "area": "Замеры",
+    "status": "todo",
+    "order": 1,
+    "title": "Стенд замеров: pcap Phantom против браузера + простой классификатор",
+    "files": "новый: tools/flowlab/",
+    "detail": "Записать трафик Phantom и обычного браузера на одних и тех же сайтах. Признаки: размеры пакетов, межпакетные интервалы, всплески, время жизни соединения, соотношение up/down. Обучить gradient boosting. Если простой классификатор их различает, ТСПУ различит тем более. На этом стенде проверять каждую правку из P1."
+  },
+  {
+    "id": "t02",
+    "priority": "P0",
+    "area": "Отпечаток TLS",
+    "status": "todo",
+    "order": 2,
+    "title": "Обновить отпечаток Firefox на свежий (не Chrome)",
+    "files": "internal/transport/fingerprint.go:44",
+    "detail": "Сейчас по умолчанию HelloFirefox_120 (2023). Firefox выбран намеренно: по разбору правил ТСПУ июня 2026 (fingerprint.go:16) Chrome, Safari и iOS в списке отпечатков, по которым срабатывает заморозка, а Firefox проходит. Обновить до профиля свежего Firefox, если он есть в uTLS, и проверить TestEveryFingerprintCompletesTheFullHandshake. На Chrome не переходить."
+  },
+  {
+    "id": "t03",
+    "priority": "P0",
+    "area": "Инфраструктура",
+    "status": "todo",
+    "order": 3,
+    "title": "Порт 443 по умолчанию вместо 8443",
+    "files": "internal/provision/install.sh:127, internal/provision/provision.go:156, scripts/install.sh",
+    "detail": "Обычный сайт работает на 443. Номер порта — дешёвый признак для классификатора. Поменять умолчание в установщике и в настройке сервера из приложений."
+  },
+  {
+    "id": "t04",
+    "priority": "P0",
+    "area": "Отпечаток TLS",
+    "status": "todo",
+    "order": 4,
+    "title": "ALPN h2: заглушка по HTTP/2, затем WebSocket поверх h2 (RFC 8441)",
+    "files": "internal/transport/tls_server.go:159, internal/handshake/handshake.go",
+    "detail": "Сервер согласует только http/1.1, хотя ClientHello браузера предлагает h2. Современный сайт с Let's Encrypt почти всегда отвечает h2. Минимум: отдавать заглушку по h2. Полностью: рукопожатие через extended CONNECT в h2."
+  },
+  {
+    "id": "t05",
+    "priority": "P0",
+    "area": "Инфраструктура",
+    "status": "todo",
+    "order": 5,
+    "title": "Правдоподобный сайт-заглушка и домен с историей",
+    "files": "internal/transport/decoy.go",
+    "detail": "Сейчас заглушка — плейсхолдер. При активном зондировании с автоматической оценкой сайта нужен содержательный сайт, соответствующий домену. Свежий сертификат сразу попадает в CT-логи, которые сканируют, поэтому лучше домен с историей."
+  },
+  {
+    "id": "t06",
+    "priority": "P1",
+    "area": "Форма трафика",
+    "status": "todo",
+    "order": 6,
+    "title": "Маскировка TLS-внутри-TLS",
+    "files": "internal/protocol/frame.go, internal/tunnel/multiplexer.go, internal/tunnel/stream.go",
+    "detail": "Вложенное TLS-рукопожатие даёт узнаваемую последовательность: ClientHello 0,5–1,8 КБ, ответ 3–6 КБ, короткий ping-pong. Padding прячет размер, но не порядок и тайминги. Идеи: OPEN вместе с первыми данными в одной записи, раздувать первые N кадров потока, склеивать мелкие кадры, небольшие случайные задержки."
+  },
+  {
+    "id": "t07",
+    "priority": "P1",
+    "area": "Форма трафика",
+    "status": "todo",
+    "order": 7,
+    "title": "Ротация соединений пула по возрасту и объёму",
+    "files": "internal/transport/connpool.go:192",
+    "detail": "В обычном режиме все потоки идут через одно вечное TLS-соединение (connpool.go:69), остальные места пула заполняются только на время замены упавшего. Переподключение — только при обрыве. Пересоздавать по случайному возрасту (2–10 мин) и объёму, плавно переводя потоки на новое соединение."
+  },
+  {
+    "id": "t09",
+    "priority": "P2",
+    "area": "Инфраструктура",
+    "status": "todo",
+    "order": 9,
+    "title": "Режим промежуточного сервера в РФ (relay)",
+    "files": "cmd/server, internal/proxy/direct.go",
+    "detail": "Клиент → российский VPS → зарубежный сервер. Ограничения ТСПУ на трафик к зарубежным хостингам (например, заморозка TCP после ~15–20 КБ) на внутренний трафик обычно не действуют. Сервер Phantom, пересылающий туннель другому Phantom."
+  },
+  {
+    "id": "t10",
+    "priority": "P2",
+    "area": "Инфраструктура",
+    "status": "todo",
+    "order": 10,
+    "title": "Необязательный транспорт в стиле XHTTP (через CDN)",
+    "files": "internal/transport",
+    "detail": "Против белых списков в мобильных сетях помогает только CDN. Загрузка и выгрузка через отдельные HTTP-запросы: проходит через CDN и мешает анализу отдельного соединения. Противоречит решению не зависеть от третьих сторон, поэтому опционально."
+  },
+  {
+    "id": "t11",
+    "priority": "P3",
+    "area": "Криптография",
+    "status": "todo",
+    "order": 11,
+    "title": "Постквантовый обмен во внутреннем рукопожатии",
+    "files": "internal/handshake/handshake.go, internal/protocol/crypto.go",
+    "detail": "На обнаружение не влияет (PROTOCOL.md §13 п.2). Отложить до смены версии протокола."
+  },
+  {
+    "id": "n1",
+    "priority": "P0",
+    "area": "Форма трафика",
+    "status": "todo",
+    "order": 12,
+    "title": "Пинг активного сервера внутри туннеля и keepalive",
+    "files": "internal/tunnel/multiplexer.go, desktop/app.go, mobile/mobile.go",
+    "detail": "Активный сервер мерить временем ответа на служебный FramePing внутри уже открытого соединения, без нового рукопожатия. Pong сопоставлять с ping по токену и отправлять не из readLoop. Заодно keepalive раз в 20–40 с со случайным сдвигом: проверка живости соединения и защита от протухания NAT. Заменяет прошлую задачу про keepalive."
+  },
+  {
+    "id": "n2",
+    "priority": "P0",
+    "area": "Клиенты",
+    "status": "todo",
+    "order": 13,
+    "title": "Неактивные серверы: проверка при открытии окна и раз в 5–10 минут",
+    "files": "desktop/frontend/src/main.js:207, android/app/src/main/java/com/phantom/vpn/PingStore.kt:77",
+    "detail": "Сейчас каждый сохранённый сервер получает полное рукопожатие каждые 6–10 с, пока окно открыто. Проверять при открытии окна, дальше раз в 5–10 минут со случайным сдвигом и по кнопке. Рукопожатий станет примерно в 50 раз меньше."
+  },
+  {
+    "id": "n3",
+    "priority": "P1",
+    "area": "Клиенты",
+    "status": "todo",
+    "order": 14,
+    "title": "«Выбирать лучшую»: пробы раз в 2–5 минут, падение текущего — по пингу в туннеле",
+    "files": "internal/routing/selector.go:26",
+    "detail": "Пробы кандидатов сейчас идут каждые 30 с, каждая — полное рукопожатие. Реже, со случайным сдвигом. Чтобы переключение с упавшего сервера не замедлилось, его падение ловить по пингу внутри туннеля (задача n1), а не по пробам."
+  },
+  {
+    "id": "n4",
+    "priority": "P1",
+    "area": "Форма трафика",
+    "status": "todo",
+    "order": 15,
+    "title": "Раскладка потоков на 2 TLS-соединения",
+    "files": "internal/transport/connpool.go:61",
+    "detail": "Сейчас все потоки идут в одном соединении, и Telegram и крупные загрузки упираются в одно окно перегрузки. Держать 2 долгих соединения, новый поток отправлять в менее загруженное. Рукопожатия по-прежнему разнесены минимум на 500 мс, так что под правило о быстрых повторах это не попадает."
+  },
+  {
+    "id": "n5",
+    "priority": "P1",
+    "area": "Инфраструктура",
+    "status": "todo",
+    "order": 16,
+    "title": "BBR, fq и буферы TCP на сервере",
+    "files": "scripts/install.sh, internal/provision/install.sh",
+    "detail": "Ускоряет скачивание (сервер → клиент) на маршрутах с потерями. Ставить через /etc/sysctl.d/, при удалении Phantom убирать. На отправку не влияет: её регулирует TCP-стек клиента."
+  },
+  {
+    "id": "n6",
+    "priority": "P2",
+    "area": "Клиенты",
+    "status": "todo",
+    "order": 17,
+    "title": "CDN-серверы Telegram в каталоге «Умного VPN»",
+    "files": "internal/routing/catalog.go:36",
+    "detail": "Медиа из больших каналов Telegram может отдавать с отдельных CDN-серверов, которых нет в списке. Сначала найти их адреса в официальных источниках. В полном режиме не влияет."
+  },
+  {
+    "id": "c1",
+    "priority": "P1",
+    "area": "Клиенты",
+    "status": "done",
+    "order": 18,
+    "title": "Блокировка рекламы YouTube на клиентах",
+    "files": "internal/routing/adblock.go, desktop/apps.go, MainActivity.kt",
+    "detail": "DNS-блокировка рекламных хостов Google/YouTube, переключатель в обоих клиентах. Выпущено в v2.8.0-beta.1; проверить на устройствах."
+  },
+  {
+    "id": "c2",
+    "priority": "P1",
+    "area": "Клиенты",
+    "status": "done",
+    "order": 19,
+    "title": "«Подключиться к лучшей» → «Подключено» с анимацией",
+    "files": "desktop/frontend/src/main.js, MainActivity.kt",
+    "detail": "Выпущено в v2.8.0-beta.1."
+  },
+  {
+    "id": "c3",
+    "priority": "P1",
+    "area": "Клиенты",
+    "status": "done",
+    "order": 20,
+    "title": "Конфигурации для обхода: нажатие на текущую переключает/отключает, галочка",
+    "files": "internal/routing/selector.go, desktop/app.go, RoutingPage.kt",
+    "detail": "Выпущено в v2.8.0-beta.1."
+  },
+  {
+    "id": "c4",
+    "priority": "P1",
+    "area": "Клиенты",
+    "status": "done",
+    "order": 21,
+    "title": "Плитка «Приложения под обход» (Windows: процессы/путь, Android: установленные)",
+    "files": "desktop/apps_windows.go, AppRouting.kt, AppPickerScreen.kt",
+    "detail": "Выпущено в v2.8.0-beta.1; проверить на устройствах."
+  },
+  {
+    "id": "c5",
+    "priority": "P1",
+    "area": "Клиенты",
+    "status": "done",
+    "order": 22,
+    "title": "Android: приложения под обход видят все установленные (<queries>)",
+    "files": "android/app/src/main/AndroidManifest.xml",
+    "detail": "Выпущено в v2.8.1-beta.1."
+  },
+  {
+    "id": "c6",
+    "priority": "P1",
+    "area": "Клиенты",
+    "status": "done",
+    "order": 23,
+    "title": "Популярные ресурсы: Claude вместо Slack, разделы Соцсети/Музыка/ИИ",
+    "files": "internal/routing/catalog.go",
+    "detail": "Выпущено в v2.8.1-beta.1."
+  },
+  {
+    "id": "c7",
+    "priority": "P1",
+    "area": "Клиенты",
+    "status": "done",
+    "order": 24,
+    "title": "Дизайн без рамок: плавающий размытый островок навигации",
+    "files": "desktop/frontend/src/style.css, MainActivity.kt",
+    "detail": "Выпущено в v2.8.2-beta.1."
+  },
+  {
+    "id": "c8",
+    "priority": "P1",
+    "area": "Клиенты",
+    "status": "done",
+    "order": 25,
+    "title": "Шапка прокручивается вместе со страницей; островок Android во всю ширину",
+    "files": "MainActivity.kt, desktop/frontend/src/main.js, index.html, style.css",
+    "detail": "Выпущено в v2.8.3-beta.1."
+  },
+  {
+    "id": "c9",
+    "priority": "P2",
+    "area": "Клиенты",
+    "status": "done",
+    "order": 26,
+    "title": "Островок: градиентная рамка и меньше размытия (Android), вдвое шире (Windows)",
+    "files": "MainActivity.kt, desktop/frontend/src/style.css",
+    "detail": "Выпущено в v2.8.4-beta.1."
+  }
+]
