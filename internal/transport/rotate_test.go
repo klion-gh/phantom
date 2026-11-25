@@ -55,7 +55,7 @@ func TestDrainingConnectionKeepsItsStreams(t *testing.T) {
 
 func TestRotationLimitsWithinBounds(t *testing.T) {
 	for i := 0; i < 1000; i++ {
-		age, bytes := rotationLimits()
+		age, bytes := currentRotation().limits()
 		if age < rotateAgeMin || age > rotateAgeMax || bytes < rotateBytesMin || bytes > rotateBytesMax {
 			t.Fatalf("%s %d out of bounds", age, bytes)
 		}

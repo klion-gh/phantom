@@ -63,6 +63,8 @@ type ConnPool struct {
 	// waits for mu, isn't held up behind it for the full dial timeout.
 	life       context.Context
 	cancelLife context.CancelFunc
+
+	rot rotation // see rotate.go
 }
 
 type poolConn struct {
@@ -88,6 +90,7 @@ func NewConnPool(maxConns int, dialFunc func(ctx context.Context) (net.Conn, *pr
 		maxConns:   maxConns,
 		life:       life,
 		cancelLife: cancelLife,
+		rot:        currentRotation(),
 	}
 }
 
@@ -239,7 +242,7 @@ func (p *ConnPool) newConn(ctx context.Context) (*poolConn, error) {
 
 	mux := tunnel.NewMultiplexer(conn, crypto)
 
-	maxAge, maxBytes := rotationLimits()
+	maxAge, maxBytes := p.rot.limits()
 	pc := &poolConn{
 		conn:     conn,
 		crypto:   crypto,

@@ -33,17 +33,30 @@ var (
 	rotateCheck = 15 * time.Second
 )
 
+// rotation is the settings above as one pool took them when it was made, so
+// its background goroutines never read the package variables (tests change
+// them).
+type rotation struct {
+	ageMin, ageMax     time.Duration
+	bytesMin, bytesMax int64
+	drainLimit, check  time.Duration
+}
+
+func currentRotation() rotation {
+	return rotation{rotateAgeMin, rotateAgeMax, rotateBytesMin, rotateBytesMax, drainLimit, rotateCheck}
+}
+
 func randBetween(lo, hi int64) int64 { return lo + rand.Int64N(hi-lo+1) }
 
-// rotationLimits picks one connection's age and volume - see above.
-func rotationLimits() (time.Duration, int64) {
-	return time.Duration(randBetween(int64(rotateAgeMin), int64(rotateAgeMax))),
-		randBetween(rotateBytesMin, rotateBytesMax)
+// limits picks one connection's age and volume - see above.
+func (r rotation) limits() (time.Duration, int64) {
+	return time.Duration(randBetween(int64(r.ageMin), int64(r.ageMax))),
+		randBetween(r.bytesMin, r.bytesMax)
 }
 
 // watchAge retires pc once it is past its age or volume.
 func (p *ConnPool) watchAge(pc *poolConn) {
-	ticker := time.NewTicker(rotateCheck)
+	ticker := time.NewTicker(p.rot.check)
 	defer ticker.Stop()
 	var retryAt time.Time
 	for {
@@ -113,7 +126,7 @@ func (p *ConnPool) rotateOut(pc *poolConn) bool {
 
 // drain closes pc once its last stream has ended, or after drainLimit.
 func (p *ConnPool) drain(pc *poolConn) {
-	deadline := time.NewTimer(drainLimit)
+	deadline := time.NewTimer(p.rot.drainLimit)
 	defer deadline.Stop()
 	ticker := time.NewTicker(2 * time.Second)
 	defer ticker.Stop()
