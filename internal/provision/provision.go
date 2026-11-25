@@ -53,7 +53,7 @@ type Request struct {
 	User     string `json:"user"`     // "" means root
 	Password string `json:"password"` // SSH password; also given to sudo for a non-root user
 	Domain   string `json:"domain"`   // must already point at Host
-	Port     int    `json:"port"`     // Phantom's port, 0 means 8443
+	Port     int    `json:"port"`     // Phantom's port, 0 lets the installer pick (443, or 8443 if 443 is taken)
 	// KnownHostKey is the host key fingerprint remembered from an earlier
 	// connection to this server ("" the first time). A different key is
 	// refused: either the server was reinstalled or someone is in between.
@@ -152,9 +152,6 @@ func (r *Request) normalize() error {
 	if r.SSHPort == 0 {
 		r.SSHPort = 22
 	}
-	if r.Port == 0 {
-		r.Port = 8443
-	}
 	switch {
 	case r.Host == "" || strings.ContainsAny(r.Host, " /@"):
 		return fail(CodeInvalid, "host")
@@ -166,7 +163,7 @@ func (r *Request) normalize() error {
 		return fail(CodeInvalid, "domain")
 	case r.SSHPort < 1 || r.SSHPort > 65535:
 		return fail(CodeInvalid, "sshPort")
-	case r.Port < 1 || r.Port > 65535 || r.Port == 80:
+	case r.Port < 0 || r.Port > 65535 || r.Port == 80:
 		return fail(CodeInvalid, "port")
 	}
 	return nil
@@ -433,7 +430,11 @@ func (p *run) install() (string, error) {
 	}
 	defer p.exec("rm -f "+remoteScript, "")
 
-	env := fmt.Sprintf("env PHANTOM_APP=1 PHANTOM_DOMAIN=%s PHANTOM_PORT=%d sh %s", p.req.Domain, p.req.Port, remoteScript)
+	port := ""
+	if p.req.Port != 0 {
+		port = fmt.Sprintf(" PHANTOM_PORT=%d", p.req.Port)
+	}
+	env := fmt.Sprintf("env PHANTOM_APP=1 PHANTOM_DOMAIN=%s%s sh %s", p.req.Domain, port, remoteScript)
 	cmd, in := p.asRoot(env)
 
 	ctx, cancel := context.WithTimeout(p.ctx, installBudget)

@@ -55,6 +55,7 @@ func (a *App) startup(ctx context.Context) {
 	// than reaching into the tunnel itself. Without this hook the selector
 	// picks a server and nothing ever acts on it.
 	onSelectorSwitch = func(configID string) { a.switchToConfig(configID) }
+	selectorCurrentCheck = a.checkCurrentInTunnel
 	removeSplitTunnelLeftovers()
 	applyRoutingToEngine()
 	// On Linux the tunnel lives in phantomd and can outlive this window (a
@@ -680,4 +681,19 @@ func (a *App) SetBetaUpdates(enabled bool) {
 // call never actually returns, since the process relaunches and exits.
 func (a *App) ApplyUpdate() string {
 	return applyPendingUpdate(a.ctx)
+}
+
+// checkCurrentInTunnel is the selector's in-tunnel check of the config
+// carrying traffic: a page fetched through the tunnel up to it, no new
+// handshake. ok is false when no tunnel goes to c.
+func (a *App) checkCurrentInTunnel(c routing.Candidate) (bool, error) {
+	a.mu.Lock()
+	t, id := a.tunnel, a.activeConfigID
+	a.mu.Unlock()
+	if t == nil || id != c.ID {
+		return false, nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	defer cancel()
+	return true, t.CheckInternet(ctx)
 }

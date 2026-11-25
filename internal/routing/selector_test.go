@@ -280,3 +280,70 @@ func waitForProbed(t *testing.T, s *Selector, id string) {
 	}
 	t.Fatalf("config %q was not probed promptly after being added: %v", id, s.Snapshot())
 }
+
+// The config carrying traffic is checked through the tunnel, not with a new
+// handshake - and its last probed latency stands.
+func TestSelectorChecksCurrentInTunnel(t *testing.T) {
+	s, fake, _ := newTestSelector(t, map[string]int64{"a": 50, "b": 300})
+	s.SetCandidates(candidates("a", "b"))
+	s.Probe() // picks a
+	if s.Current() != "a" {
+		t.Fatalf("current %q", s.Current())
+	}
+	checked := 0
+	s.SetCurrentCheck(func(c Candidate) (bool, error) {
+		checked++
+		return true, nil
+	})
+	fake.kill("a") // a handshake probe of a would now fail
+	s.Probe()
+	if checked != 1 {
+		t.Fatalf("current checked %d times", checked)
+	}
+	for _, h := range s.Snapshot() {
+		if h.ID == "a" && (!h.Alive || h.LatencyMs != 50) {
+			t.Fatalf("a: %+v", h)
+		}
+	}
+}
+
+// Two failed in-tunnel checks confirm the current config dead.
+func TestSelectorWatchConfirmsCurrentDead(t *testing.T) {
+	s, _, _ := newTestSelector(t, map[string]int64{"a": 50, "b": 300})
+	s.SetCandidates(candidates("a", "b"))
+	s.Probe()
+	s.SetCurrentCheck(func(c Candidate) (bool, error) { return true, errors.New("no internet") })
+	if s.watchCurrent() {
+		t.Fatal("one failure should not be enough")
+	}
+	if !s.watchCurrent() {
+		t.Fatal("two failures should confirm it dead")
+	}
+	s.Probe()
+	if s.Current() != "b" {
+		t.Fatalf("should have moved to b, on %q", s.Current())
+	}
+}
+
+// No tunnel to check through: back to a handshake probe.
+func TestSelectorFallsBackToProbeWithoutTunnel(t *testing.T) {
+	s, fake, _ := newTestSelector(t, map[string]int64{"a": 50, "b": 300})
+	s.SetCandidates(candidates("a", "b"))
+	s.Probe()
+	s.SetCurrentCheck(func(c Candidate) (bool, error) { return false, nil })
+	fake.kill("a")
+	s.Probe()
+	for _, h := range s.Snapshot() {
+		if h.ID == "a" && h.Alive {
+			t.Fatal("a should have been probed and found dead")
+		}
+	}
+}
+
+func TestNextProbeInWithinBounds(t *testing.T) {
+	for i := 0; i < 1000; i++ {
+		if d := nextProbeIn(); d < probeIntervalMin || d > probeIntervalMax {
+			t.Fatalf("%s out of bounds", d)
+		}
+	}
+}

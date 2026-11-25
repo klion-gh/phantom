@@ -2,6 +2,7 @@ package routing
 
 import (
 	"fmt"
+	"math/rand/v2"
 	"sort"
 	"strings"
 	"sync"
@@ -21,9 +22,21 @@ import (
 // exists, and only a genuinely large, sustained advantage (or the current one
 // actually failing) is allowed to move it.
 const (
-	// How often each candidate is probed. A full handshake per probe per
-	// config, so this is deliberately not aggressive.
-	probeInterval = 30 * time.Second
+	// How often the candidates are probed: a random moment between these two
+	// each round. A probe is a full TCP+TLS+Phantom handshake to the server -
+	// every 30s, as it used to be, that came to 120 handshakes an hour to each
+	// server from every device, around the clock, on a fixed beat: nothing a
+	// browser produces, and the kind of regularity traffic analysis keys on.
+	// The jitter keeps rounds from lining up into a pattern of their own.
+	probeIntervalMin = 2 * time.Minute
+	probeIntervalMax = 5 * time.Minute
+
+	// How often the config carrying traffic is checked, when it can be
+	// checked inside the tunnel already up (see SetCurrentCheck) - a request
+	// through the existing connection, no new handshake. That keeps failover
+	// as quick as the old 30s probe rounds made it while the handshake probes
+	// themselves became rare.
+	watchInterval = 30 * time.Second
 
 	// Consecutive failed probes before a *currently selected* config is
 	// considered dead. One failure is usually a blip; two in a row across a
@@ -43,13 +56,24 @@ const (
 	betterRatio    = 2.0
 	betterMarginMs = 150
 
-	// ...and do it in this many probe rounds in a row (a minute and a half
-	// at probeInterval). One round proves nothing: a field log had the
+	// ...and do it in this many probe rounds in a row (several minutes at
+	// the probe interval). One round proves nothing: a field log had the
 	// current config read 474ms against the other's 232ms once, after half
 	// an hour of the two being level - and the switch that followed tore
 	// down every connection on the device for a latency blip.
 	betterRounds = 3
 )
+
+// nextProbeIn is the wait before the next probe round - see probeIntervalMin.
+func nextProbeIn() time.Duration {
+	return probeIntervalMin + rand.N(probeIntervalMax-probeIntervalMin+1)
+}
+
+// CurrentCheckFunc checks the config carrying traffic through the tunnel
+// already up to it, without a new handshake. ok is false when there is no
+// tunnel to that config to check through (not connected, or connected to
+// something else) - the selector then falls back to a handshake probe.
+type CurrentCheckFunc func(c Candidate) (ok bool, err error)
 
 // Candidate is one of the user's saved configs, as offered to the selector.
 type Candidate struct {
@@ -131,6 +155,8 @@ type Selector struct {
 
 	probe    ProbeFunc
 	onSwitch func(Candidate)
+	// Optional - see SetCurrentCheck.
+	currentCheck CurrentCheckFunc
 
 	stop    chan struct{}
 	stopped bool
@@ -155,6 +181,15 @@ func NewSelector(probe ProbeFunc, onSwitch func(Candidate)) *Selector {
 	}
 }
 
+// SetCurrentCheck installs check for the config carrying traffic: instead of
+// a handshake probe each round, it is checked through the tunnel, every
+// watchInterval. Call before Start.
+func (s *Selector) SetCurrentCheck(check CurrentCheckFunc) {
+	s.mu.Lock()
+	s.currentCheck = check
+	s.mu.Unlock()
+}
+
 // SetCandidates replaces the pool the selector chooses from, preserving what
 // it already knows about configs that are still in the list. If the current
 // selection is no longer among them, a replacement is picked straight away
@@ -162,11 +197,9 @@ func NewSelector(probe ProbeFunc, onSwitch func(Candidate)) *Selector {
 //
 // A config that wasn't in the pool before (the user just ticked it, or edited
 // its yaml) is probed right away rather than waiting out the rest of the
-// probeInterval tick. Without that, ticking a config in the UI left it showing
-// "проверка" for up to 30 seconds while the identical server on the
-// Конфигурации screen - which each tile pings on its own 6-10s schedule -
-// showed a latency almost immediately, which reads as the routing screen being
-// broken rather than merely unhurried.
+// probe interval. Without that, ticking a config in the UI left it showing
+// "проверка" for minutes, which reads as the routing screen being broken
+// rather than merely unhurried.
 func (s *Selector) SetCandidates(candidates []Candidate) {
 	s.mu.Lock()
 	previous := map[string]*candidateState{}
@@ -277,17 +310,29 @@ func (s *Selector) Snapshot() []Health {
 func (s *Selector) Start() {
 	go func() {
 		s.Probe() // don't make the user wait a full interval for the first pick
-		ticker := time.NewTicker(probeInterval)
-		defer ticker.Stop()
+		next := time.NewTimer(nextProbeIn())
+		defer next.Stop()
+		watch := time.NewTicker(watchInterval)
+		defer watch.Stop()
+		round := func() {
+			s.Probe()
+			next.Reset(nextProbeIn())
+		}
 		for {
 			select {
 			case <-s.stop:
 				return
 			case <-s.kick:
 				// A candidate was just added or edited - see SetCandidates.
-				s.Probe()
-			case <-ticker.C:
-				s.Probe()
+				round()
+			case <-next.C:
+				round()
+			case <-watch.C:
+				if s.watchCurrent() {
+					// The config carrying traffic is confirmed dead: find
+					// its replacement now, not at the next scheduled round.
+					round()
+				}
 			}
 		}
 	}()
@@ -301,6 +346,41 @@ func (s *Selector) Stop() {
 		s.stopped = true
 		close(s.stop)
 	}
+}
+
+// watchCurrent checks the config carrying traffic through the tunnel (see
+// SetCurrentCheck) and reports whether it is now confirmed dead.
+func (s *Selector) watchCurrent() bool {
+	s.mu.Lock()
+	check := s.currentCheck
+	cur := s.findLocked(s.currentID)
+	var c Candidate
+	if cur != nil {
+		c = cur.Candidate
+	}
+	s.mu.Unlock()
+	if check == nil || cur == nil {
+		return false
+	}
+	ok, err := check(c)
+	if !ok {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.currentID != c.ID {
+		return false // switched while the check ran
+	}
+	cur.probed = true
+	if err != nil {
+		cur.alive = false
+		cur.fails++
+		diag.Event(diag.CatRoute, "currentCheckFail", "current", shortID(c.ID), "fails", cur.fails, "err", err.Error())
+		return cur.fails >= failsBeforeDrop
+	}
+	cur.alive = true
+	cur.fails = 0
+	return false
 }
 
 // Probe measures every candidate once and re-evaluates the selection. Exposed
@@ -319,6 +399,7 @@ func (s *Selector) Probe() {
 	for i, st := range states {
 		yamls[i] = st.YAML
 	}
+	check, currentID := s.currentCheck, s.currentID
 	s.mu.Unlock()
 
 	// Probed concurrently: with several configs, doing this serially would
@@ -328,13 +409,25 @@ func (s *Selector) Probe() {
 	results := make([]struct {
 		latency int64
 		err     error
+		// Checked through the tunnel: alive or not, but no handshake
+		// latency - the last probed one stands.
+		inTunnel bool
 	}, len(states))
 	for i := range states {
 		wg.Add(1)
-		go func(i int, yaml string) {
+		go func(i int, c Candidate) {
 			defer wg.Done()
-			results[i].latency, results[i].err = s.probe(yaml)
-		}(i, yamls[i])
+			if check != nil && c.ID == currentID {
+				// The server carrying traffic is checked through the
+				// connection already open to it - one handshake fewer per
+				// round, to the server that matters most.
+				if ok, err := check(c); ok {
+					results[i].err, results[i].inTunnel = err, true
+					return
+				}
+			}
+			results[i].latency, results[i].err = s.probe(c.YAML)
+		}(i, Candidate{ID: states[i].ID, YAML: yamls[i]})
 	}
 	wg.Wait()
 
@@ -354,8 +447,12 @@ func (s *Selector) Probe() {
 		}
 		st.alive = true
 		st.fails = 0
-		st.latencyMs = results[i].latency
 		alive++
+		if results[i].inTunnel {
+			fmt.Fprintf(&probeLog, "%s:tunnelOK", shortID(st.ID))
+			continue
+		}
+		st.latencyMs = results[i].latency
 		fmt.Fprintf(&probeLog, "%s:%dms", shortID(st.ID), st.latencyMs)
 	}
 	previous := s.currentID

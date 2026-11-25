@@ -15,7 +15,8 @@
 #   PHANTOM_KEY_FILE  already have a certificate for this domain (e.g. from certbot, on a box
 #                     where something else already owns port 80)? Set both to use it directly
 #                     instead of Phantom's own ACME - prompted if unset and a TTY is available.
-#   PHANTOM_PORT      port the VPN listens on (default 8443)
+#   PHANTOM_PORT      port the VPN listens on (default 443, like any site;
+#                     8443 when 443 is already taken on this server)
 #   PHANTOM_VERSION   install this release tag (e.g. v2.3.0-beta.2) instead of the latest
 #                     stable one - for trying a beta server on one machine first
 #   PHANTOM_NO_TUNE=1 leave the kernel's TCP settings alone (see tune_network)
@@ -180,7 +181,16 @@ if ! command -v curl >/dev/null 2>&1; then
 fi
 command -v systemctl >/dev/null 2>&1 || die "systemd is required (systemctl not found)" no_systemd
 
-PORT="${PHANTOM_PORT:-8443}"
+# 443 by default: an ordinary site is on 443, and a TLS server on 8443 is one
+# more cheap sign for a classifier. Only when the port was left to us do we
+# fall back to 8443 if something else already holds 443 (see the port check).
+PORT_CHOSEN=0
+if [ -n "${PHANTOM_PORT:-}" ]; then
+    PORT="$PHANTOM_PORT"
+    PORT_CHOSEN=1
+else
+    PORT=443
+fi
 case "$PORT" in
     ''|*[!0-9]*) die "PHANTOM_PORT must be a number, got '$PORT'" bad_port ;;
 esac
@@ -300,6 +310,10 @@ fi
 # Ports: taken by something else, the service would start and then fail to
 # bind, or never get its certificate - say so now, by name.
 if command -v ss >/dev/null 2>&1; then
+    if [ "$PORT_CHOSEN" = 0 ] && [ -n "$(ss -ltnH "sport = :$PORT" 2>/dev/null)" ]; then
+        log "Port $PORT is taken by something else on this server - using 8443 instead."
+        PORT=8443
+    fi
     if [ -n "$(ss -ltnH "sport = :$PORT" 2>/dev/null)" ]; then
         die "port $PORT is already in use on this server - pick another PHANTOM_PORT" port_busy
     fi

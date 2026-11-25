@@ -179,7 +179,7 @@ fun ServerSetupDialog(onDismiss: () -> Unit, onConfig: (String) -> Boolean) {
                 result = true to I18n.t(key).replace("{ms}", ms.toString())
             } else {
                 lastCode = reply.optString("code")
-                result = false to provisionErrorText(lastCode, reply.optString("detail"), req.optInt("port").takeIf { it > 0 } ?: 8443)
+                result = false to provisionErrorText(lastCode, reply.optString("detail"), req.optInt("port").takeIf { it > 0 } ?: 443)
             }
         }
     }
@@ -226,7 +226,7 @@ fun ServerSetupDialog(onDismiss: () -> Unit, onConfig: (String) -> Boolean) {
                     SetupField(I18n.t("server_domain"), domain, { domain = it }, "vpn.example.com", KeyboardType.Uri)
                     Text(I18n.t("server_domain_hint"), color = TextMuted, fontSize = 12.sp, lineHeight = 17.sp)
                     Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                        SetupField(I18n.t("server_port"), port, { port = it.filter(Char::isDigit) }, "8443", KeyboardType.Number, Modifier.weight(1f))
+                        SetupField(I18n.t("server_port"), port, { port = it.filter(Char::isDigit) }, "443", KeyboardType.Number, Modifier.weight(1f))
                         SetupField(I18n.t("server_ssh_port"), sshPort, { sshPort = it.filter(Char::isDigit) }, "22", KeyboardType.Number, Modifier.weight(1f))
                     }
                     formError?.let { ErrorBox(it) }

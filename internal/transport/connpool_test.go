@@ -130,7 +130,52 @@ func waitFor(t *testing.T, what string, cond func() bool) {
 
 // Once the first connection is up, picking a connection for a stream brings
 // up a second one in the background - and never a third.
+// growEagerly makes the pool open its second connection on the first Pick,
+// for tests about what happens once there are two.
+func growEagerly(t *testing.T) {
+	old := growAtStreams
+	growAtStreams = 0
+	t.Cleanup(func() { growAtStreams = old })
+}
+
+// An idle tunnel stays on one connection: no second handshake right after
+// the first.
+func TestPickStaysOnOneConnectionWhenIdle(t *testing.T) {
+	dial, dials := pipeDialer(t)
+	pool := NewConnPool(4, dial)
+	defer pool.Close()
+	if _, err := pool.Get(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 5; i++ {
+		pool.Pick()
+	}
+	time.Sleep(50 * time.Millisecond)
+	if n := dials.Load(); n != 1 {
+		t.Fatalf("%d dials on an idle pool, want 1", n)
+	}
+}
+
+// Real parallel load brings the second connection.
+func TestPickGrowsUnderLoad(t *testing.T) {
+	dial, _ := pipeDialer(t)
+	pool := NewConnPool(4, dial)
+	defer pool.Close()
+	first, err := pool.Get(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < growAtStreams; i++ {
+		if _, err := first.Open("example.org:443"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	pool.Pick()
+	waitFor(t, "a second connection", func() bool { return healthyConns(pool) == 2 })
+}
+
 func TestPickGrowsToTwoConnections(t *testing.T) {
+	growEagerly(t)
 	dial, dials := pipeDialer(t)
 	pool := NewConnPool(4, dial)
 	defer pool.Close()
@@ -172,6 +217,7 @@ func TestPickRespectsAPoolOfOne(t *testing.T) {
 
 // New streams go to whichever connection carries fewer.
 func TestPickBalancesStreams(t *testing.T) {
+	growEagerly(t)
 	dial, _ := pipeDialer(t)
 	pool := NewConnPool(4, dial)
 	defer pool.Close()

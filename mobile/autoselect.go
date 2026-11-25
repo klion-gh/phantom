@@ -90,6 +90,9 @@ func NewAutoSelector(listener SwitchListener) *AutoSelector {
 			}
 		},
 	)
+	// The server carrying traffic is checked through the tunnel already up
+	// to it - no fresh handshake every round. See activetunnel.go.
+	a.inner.SetCurrentCheck(checkCurrentInTunnel)
 	return a
 }
 

@@ -1,10 +1,10 @@
-server: "your-domain.example:8443"
+server: "your-domain.example:443"
 # Optional failover list: additional address:port endpoints, all serving the
 # same domain/cert/psk (e.g. several VPS IPs, or the same host on alternate
 # ports). Tried in order with last-good memory, so blocking one IP/port doesn't
 # take the tunnel down. If set, takes precedence over the single "server" above.
 # servers:
-#   - "203.0.113.10:8443"
+#   - "203.0.113.10:443"
 #   - "198.51.100.20:443"
 domain: "your-domain.example"
 fingerprint: "auto"         # auto (Firefox) / firefox / edge / 360 / qq / chrome133 / safari16 - see internal/transport/fingerprint.go

@@ -704,7 +704,7 @@ function setServerActions(state) {
 function provisionErrorText(res, req) {
   const fields = { host: t('server_host'), user: t('server_user'), password: t('server_password'), domain: t('server_domain'), port: t('server_port'), sshPort: t('server_ssh_port') };
   const key = 'prov_err_' + res.code;
-  const text = t(key, { detail: res.detail || '', port: req.port || 8443, field: fields[res.detail] || res.detail || '' });
+  const text = t(key, { detail: res.detail || '', port: req.port || 443, field: fields[res.detail] || res.detail || '' });
   return text === key ? t('prov_err_failed') : text;
 }
 

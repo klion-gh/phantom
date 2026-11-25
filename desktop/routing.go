@@ -50,6 +50,9 @@ var (
 	selector   *routing.Selector
 	// Set by the App so the selector can ask the UI layer to reconnect.
 	onSelectorSwitch func(configID string)
+	// Checks the config carrying traffic through the tunnel up to it - see
+	// routing.Selector.SetCurrentCheck. Set by the App.
+	selectorCurrentCheck routing.CurrentCheckFunc
 )
 
 // --- persistence -----------------------------------------------------------
@@ -232,6 +235,9 @@ func syncSelector() {
 				}
 			},
 		)
+		if selectorCurrentCheck != nil {
+			selector.SetCurrentCheck(selectorCurrentCheck)
+		}
 		selector.SetCandidates(candidates)
 		selector.Start()
 		return

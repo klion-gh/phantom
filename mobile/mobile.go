@@ -181,6 +181,7 @@ func Start(configYAML string, tunFD int, mtu int, protector Protector) (*Tunnel,
 		t, err := startConfig(y, tunFD, mtu, protector)
 		if err == nil {
 			relaypath.Report(configYAML, y)
+			setActiveTunnel(t, configYAML)
 			return t, nil
 		}
 		lastErr = err
@@ -388,6 +389,7 @@ func (t *Tunnel) SetDirectDNS(servers string) {
 // fresh TLS handshake in the middle of a disconnect, for a tunnel that was
 // going away.
 func (t *Tunnel) Stop() {
+	clearActiveTunnel(t)
 	if t.cancel != nil {
 		t.cancel()
 	}

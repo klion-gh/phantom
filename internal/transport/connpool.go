@@ -34,6 +34,15 @@ const stallAfter = 8 * time.Second
 // (waitHandshakeTurn) keeps the two at least half a second apart.
 const activeConns = 2
 
+// growAtStreams is how many streams the one connection must be carrying at
+// once before the second is opened. The second used to follow the first
+// half a second after every connect, idle or not - two handshakes back to
+// back on every (re)connect, network change and pool rotation, which is
+// exactly the burst a censor counts. Now it comes only with real parallel
+// load: a page pulling several resources, a download beside browsing. An
+// idle or lightly used tunnel stays on one connection, like one open site.
+var growAtStreams = 4
+
 // growRetry is how long the pool waits after a failed second dial before
 // trying again: one connection still works, and a server that refused the
 // second shouldn't be asked again on every new stream.
@@ -62,8 +71,13 @@ type poolConn struct {
 	mux     *tunnel.Multiplexer
 	healthy bool
 	retired bool // closed on purpose as surplus - see retire
-	mu      sync.Mutex
-	id      int64
+	// Past its age or volume: carries the streams it has, gets no new ones,
+	// closes once they end - see rotate.go.
+	draining bool
+	maxAge   time.Duration
+	maxBytes int64
+	mu       sync.Mutex
+	id       int64
 }
 
 func NewConnPool(maxConns int, dialFunc func(ctx context.Context) (net.Conn, *protocol.SessionCrypto, error)) *ConnPool {
@@ -89,10 +103,7 @@ func (p *ConnPool) Get(ctx context.Context) (*tunnel.Multiplexer, error) {
 	// and what refreshers call when theirs died. Spreading streams over the
 	// connections is Pick's job.
 	for _, pc := range p.conns {
-		pc.mu.Lock()
-		healthy := pc.healthy
-		pc.mu.Unlock()
-		if healthy {
+		if pc.isHealthy() {
 			return pc.mux, nil
 		}
 	}
@@ -137,7 +148,11 @@ func (p *ConnPool) Pick() *tunnel.Multiplexer {
 			best, bestStreams = pc, n
 		}
 	}
-	p.growLocked(healthy)
+	// bestStreams is the least loaded connection's count: with one up, its
+	// own load - see growAtStreams.
+	if bestStreams >= growAtStreams {
+		p.growLocked(healthy)
+	}
 	if best == nil {
 		return nil
 	}
@@ -187,11 +202,15 @@ func (p *ConnPool) growLocked(healthy int) {
 	}()
 }
 
+// isHealthy: up and taking new streams (a draining connection is up but
+// doesn't count - see rotate.go).
 func (pc *poolConn) isHealthy() bool {
 	pc.mu.Lock()
 	defer pc.mu.Unlock()
-	return pc.healthy
+	return pc.healthy && !pc.draining
 }
+
+func (p *ConnPool) isClosed() bool { return atomic.LoadInt32(&p.closed) == 1 }
 
 // retire closes a connection the pool decided not to keep. Its death must
 // not be mistaken for a lost connection that needs replacing.
@@ -220,16 +239,20 @@ func (p *ConnPool) newConn(ctx context.Context) (*poolConn, error) {
 
 	mux := tunnel.NewMultiplexer(conn, crypto)
 
+	maxAge, maxBytes := rotationLimits()
 	pc := &poolConn{
-		conn:    conn,
-		crypto:  crypto,
-		mux:     mux,
-		healthy: true,
-		id:      id,
+		conn:     conn,
+		crypto:   crypto,
+		mux:      mux,
+		healthy:  true,
+		maxAge:   maxAge,
+		maxBytes: maxBytes,
+		id:       id,
 	}
 
 	go p.monitorConn(pc)
 	go watchStall(pc)
+	go p.watchAge(pc)
 
 	return pc, nil
 }
@@ -291,9 +314,14 @@ func (p *ConnPool) monitorConn(pc *poolConn) {
 		"err", errOrClosed(pc.mux.Err()))
 	pc.mu.Lock()
 	pc.healthy = false
-	retired := pc.retired
+	retired, draining := pc.retired, pc.draining
 	pc.mu.Unlock()
 	if retired {
+		return
+	}
+	if draining {
+		// Already replaced when it started draining - see rotate.go.
+		p.forget(pc)
 		return
 	}
 	p.rotateConn(pc)

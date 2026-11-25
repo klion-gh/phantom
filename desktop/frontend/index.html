@@ -253,7 +253,7 @@
                 <span class="field-hint" data-i18n="server_domain_hint">Домен должен указывать на IP сервера (A-запись в DNS). Сертификат для него Phantom получит сам.</span></label>
               <div class="field-row">
                 <label class="field"><span class="label" data-i18n="server_port">Порт Phantom</span>
-                  <input id="srv-port" class="text-input" placeholder="8443" inputmode="numeric" autocomplete="off"></label>
+                  <input id="srv-port" class="text-input" placeholder="443" inputmode="numeric" autocomplete="off"></label>
                 <label class="field"><span class="label" data-i18n="server_ssh_port">Порт SSH</span>
                   <input id="srv-ssh-port" class="text-input" placeholder="22" inputmode="numeric" autocomplete="off"></label>
               </div>
@@ -292,7 +292,7 @@
           <div class="dialog-scroll">
           <div class="form-inner">
             <div class="label" data-i18n="paste_yaml">Вставьте содержимое client.yaml целиком:</div>
-            <textarea id="config-textarea" placeholder='server: "1.2.3.4:8443"&#10;domain: "your-domain.example"&#10;...'></textarea>
+            <textarea id="config-textarea" placeholder='server: "1.2.3.4:443"&#10;domain: "your-domain.example"&#10;...'></textarea>
             <!-- Writes the config's own `fingerprint:` line - see
                  setFingerprint in main.js for why it lives in the YAML. -->
             <div class="fingerprint-picker">
