@@ -37,8 +37,7 @@ func NewDecoySite(dir string) *DecoySite {
 // answered like an ordinary homepage visit without spending an auth attempt on
 // it, so the request bytes are never parsed in the first place.
 func (d *DecoySite) ServeDefault(w io.Writer) {
-	body, contentType, status := d.resolve("/")
-	d.write(w, body, contentType, status)
+	d.write(w, d.resolve("/"), false)
 }
 
 // Serve writes a complete HTTP response for req directly to w. req is the
@@ -46,8 +45,7 @@ func (d *DecoySite) ServeDefault(w io.Writer) {
 // connection - this does not go through Go's http.Server machinery since the
 // request has already been consumed from the socket.
 func (d *DecoySite) Serve(w io.Writer, req *http.Request) {
-	body, contentType, status := d.resolve(req.URL.Path)
-	d.write(w, body, contentType, status)
+	d.write(w, d.resolve(req.URL.Path), req.Method == http.MethodHead)
 }
 
 // ServeHTTP answers a request that arrived over HTTP/2, through Go's HTTP/2
@@ -55,16 +53,32 @@ func (d *DecoySite) Serve(w io.Writer, req *http.Request) {
 // that spoke HTTP/1.1. Date is added by the server; no Server header, for the
 // reason given in write.
 func (d *DecoySite) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	body, contentType, status := d.resolve(r.URL.Path)
-	w.Header().Set("Content-Type", contentType)
-	w.Header().Set("Content-Length", fmt.Sprint(len(body)))
-	w.WriteHeader(status)
+	res := d.resolve(r.URL.Path)
+	w.Header().Set("Content-Type", res.contentType)
+	w.Header().Set("Content-Length", fmt.Sprint(len(res.body)))
+	if !res.modified.IsZero() {
+		w.Header().Set("Last-Modified", res.modified.UTC().Format(http.TimeFormat))
+	}
+	w.WriteHeader(res.status)
 	if r.Method != http.MethodHead {
-		w.Write(body)
+		w.Write(res.body)
 	}
 }
 
-func (d *DecoySite) write(w io.Writer, body []byte, contentType string, status int) {
+// decoyResponse is one resolved answer: what to send, and for a file from
+// the site directory, when it last changed (Last-Modified, as any static file
+// server sends).
+type decoyResponse struct {
+	body        []byte
+	contentType string
+	status      int
+	modified    time.Time
+}
+
+// write sends res; head leaves the body out (a HEAD request gets the headers
+// a GET would, with no body - RFC 9110 §9.3.2).
+func (d *DecoySite) write(w io.Writer, res decoyResponse, head bool) {
+	body, contentType, status := res.body, res.contentType, res.status
 	// Date is mandatory for an origin server per RFC 9110 §6.6.1, and every real
 	// web server sends it. Omitting it was a free, entirely passive distinguisher
 	// available to any prober that bothered to read the response headers - which
@@ -74,19 +88,27 @@ func (d *DecoySite) write(w io.Writer, body []byte, contentType string, status i
 	// prober to check that claim against behaviour this isn't (HTTP/2 support,
 	// error page shapes, header ordering), and a missing Server header is
 	// unremarkable on its own - plenty of real deployments strip it.
+	lastModified := ""
+	if !res.modified.IsZero() {
+		lastModified = "Last-Modified: " + res.modified.UTC().Format(http.TimeFormat) + "\r\n"
+	}
 	resp := fmt.Sprintf(
 		"HTTP/1.1 %d %s\r\n"+
 			"Date: %s\r\n"+
 			"Content-Type: %s\r\n"+
 			"Content-Length: %d\r\n"+
+			"%s"+
 			"Connection: close\r\n"+
 			"\r\n",
 		status, http.StatusText(status),
 		time.Now().UTC().Format(http.TimeFormat),
-		contentType, len(body),
+		contentType, len(body), lastModified,
 	)
 	if _, err := w.Write([]byte(resp)); err != nil {
 		log.Printf("[decoy] write response failed: %v", err)
+		return
+	}
+	if head {
 		return
 	}
 	if _, err := w.Write(body); err != nil {
@@ -94,44 +116,71 @@ func (d *DecoySite) write(w io.Writer, body []byte, contentType string, status i
 	}
 }
 
-func (d *DecoySite) resolve(reqPath string) (body []byte, contentType string, status int) {
+func (d *DecoySite) resolve(reqPath string) decoyResponse {
 	if d.dir != "" {
-		if data, ct, ok := d.readStatic(reqPath); ok {
-			return data, ct, http.StatusOK
+		if res, ok := d.readStatic(reqPath); ok {
+			return res
+		}
+		// A site of its own answers a missing page with its own 404 page,
+		// in its own design, as a real site does - not with the built-in
+		// one, which would give away that the site is a thin layer over
+		// something else.
+		if res, ok := d.readFile("/404.html"); ok {
+			res.status = http.StatusNotFound
+			return res
 		}
 	}
 
 	if reqPath == "/" || reqPath == "" {
-		return []byte(defaultDecoyHTML), "text/html; charset=utf-8", http.StatusOK
+		return decoyResponse{body: []byte(defaultDecoyHTML), contentType: "text/html; charset=utf-8", status: http.StatusOK}
 	}
 	if reqPath == "/robots.txt" {
-		return []byte("User-agent: *\nDisallow:\n"), "text/plain; charset=utf-8", http.StatusOK
+		return decoyResponse{body: []byte("User-agent: *\nDisallow:\n"), contentType: "text/plain; charset=utf-8", status: http.StatusOK}
 	}
-	return []byte(defaultDecoy404HTML), "text/html; charset=utf-8", http.StatusNotFound
+	return decoyResponse{body: []byte(defaultDecoy404HTML), contentType: "text/html; charset=utf-8", status: http.StatusNotFound}
 }
 
-func (d *DecoySite) readStatic(reqPath string) (data []byte, contentType string, ok bool) {
-	clean := filepath.Clean(reqPath)
-	if clean == "/" || clean == "." || clean == "" {
-		clean = "/index.html"
+// readStatic finds reqPath in the site directory the way a static web server
+// does: "/" and "/dir/" serve their index.html, and "/page" without an
+// extension serves page.html - so the site can link pages without ".html".
+func (d *DecoySite) readStatic(reqPath string) (decoyResponse, bool) {
+	clean := filepath.ToSlash(filepath.Clean("/" + reqPath))
+	candidates := []string{clean}
+	switch {
+	case clean == "/":
+		candidates = []string{"/index.html"}
+	case strings.HasSuffix(reqPath, "/"):
+		candidates = []string{clean + "/index.html"}
+	case filepath.Ext(clean) == "":
+		candidates = append(candidates, clean+".html", clean+"/index.html")
 	}
+	for _, c := range candidates {
+		if res, ok := d.readFile(c); ok {
+			return res, true
+		}
+	}
+	return decoyResponse{}, false
+}
 
-	full := filepath.Join(d.dir, clean)
+func (d *DecoySite) readFile(clean string) (decoyResponse, bool) {
+	full := filepath.Join(d.dir, filepath.FromSlash(clean))
 	rel, err := filepath.Rel(d.dir, full)
 	if err != nil || strings.HasPrefix(rel, "..") {
-		return nil, "", false // path traversal attempt - refuse
+		return decoyResponse{}, false // path traversal attempt - refuse
 	}
-
+	info, err := os.Stat(full)
+	if err != nil || info.IsDir() {
+		return decoyResponse{}, false
+	}
 	raw, err := os.ReadFile(full)
 	if err != nil {
-		return nil, "", false
+		return decoyResponse{}, false
 	}
-
 	ct := mime.TypeByExtension(filepath.Ext(full))
 	if ct == "" {
 		ct = "application/octet-stream"
 	}
-	return raw, ct, true
+	return decoyResponse{body: raw, contentType: ct, status: http.StatusOK, modified: info.ModTime()}, true
 }
 
 const defaultDecoyHTML = `<!DOCTYPE html>
